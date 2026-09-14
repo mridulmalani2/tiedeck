@@ -1086,9 +1086,17 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
                         point_count=count)
         )
 
+    # Take the category labels from the first series only. Every series repeats
+    # the same category list, so collecting them all reports a five-category
+    # chart with two series as having ten categories.
+    first_series = root.find(".//c:ser", _CHART_NS)
     categories = tuple(
         node.text or ""
-        for node in root.findall(".//c:cat//c:pt/c:v", _CHART_NS)
+        for node in (
+            first_series.findall(".//c:cat//c:pt/c:v", _CHART_NS)
+            if first_series is not None
+            else []
+        )
         if node.text
     )
 
@@ -1101,6 +1109,14 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
                 if text:
                     axis_titles.append(text)
 
+    # A chart's text properties are almost always expressed as ``a:defRPr``
+    # inside ``c:txPr`` rather than as ``a:rPr`` on a run, because chart text is
+    # generated rather than typed. Collecting only ``a:rPr`` finds nothing at all
+    # on a normal chart, and the chart_label font role is then never learned.
+    font_sources = [
+        *root.findall(".//a:rPr", NS),
+        *root.findall(".//a:defRPr", NS),
+    ]
     fonts = tuple(
         context.resolve_font(
             run_rpr=rpr,
@@ -1111,14 +1127,10 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
             ph_idx=None,
             is_text_box=True,
         )
-        for rpr in root.findall(".//a:rPr", NS)
+        for rpr in font_sources
     )
 
-    text_strings = tuple(
-        node.text.strip()
-        for node in root.iter(qn("a:t"))
-        if node.text and node.text.strip()
-    )
+    text_strings = _chart_text_strings(root, title_text, series, categories, axis_titles)
 
     return ChartModel(
         chart_type=chart_type,
@@ -1132,6 +1144,36 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
         fonts=fonts,
         text_strings=text_strings,
     )
+
+
+def _chart_text_strings(
+    root: etree._Element,
+    title_text: str | None,
+    series: list[ChartSeries],
+    categories: tuple[str, ...],
+    axis_titles: list[str],
+) -> tuple[str, ...]:
+    """Every human-authored string in the chart part.
+
+    Series names, category labels, the title and axis titles, plus any rich text
+    run. Numeric values are excluded: they are data, and scanning them for
+    placeholder markers or terminology variants produces only noise.
+    """
+    parts: list[str] = []
+    if title_text:
+        parts.append(title_text)
+    parts.extend(name for name in (s.name for s in series) if name)
+    parts.extend(label for label in categories if label.strip())
+    parts.extend(axis_titles)
+    parts.extend(
+        node.text.strip()
+        for node in root.iter(qn("a:t"))
+        if node.text and node.text.strip()
+    )
+    seen: dict[str, None] = {}
+    for part in parts:
+        seen.setdefault(part, None)
+    return tuple(seen)
 
 
 def _chart_shows_values(root: etree._Element) -> bool:

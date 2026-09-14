@@ -621,7 +621,12 @@ class _DeckBuilder:
             frame = box.text_frame
             frame.word_wrap = True
             size = self.brand.body_sizes_pt[1]
-            if column_count >= 3 and position == 0:
+            if column_count == 4:
+                # A four-column row is tighter, so the house style drops a point.
+                # This also gives the body role four distinct observed sizes, which
+                # is what makes the learner emit a band rather than an exact set.
+                size = self.brand.body_sizes_pt[0]
+            elif column_count == 3 and position == 0:
                 size = self.brand.body_sizes_pt[2]
             if self.defect_on("LO-007", slide_spec.index) and position == 0:
                 size = 18.0
