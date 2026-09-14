@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from tieout.fixtures.generator import BuildResult, build_all, _logo_png
+from tieout.fixtures.generator import BuildResult, _logo_png, build_all
 from tieout.fixtures.spec import ReferenceSpec, default_spec
 from tieout.model.archetype import CONTENT_ARCHETYPES
 from tieout.model.deck import DeckModel
@@ -31,9 +31,9 @@ from tieout.profile.schema import (
     BoilerplateEntry,
     Box,
     BrandProfile,
-    FooterProfile,
     FontRole,
     FontsProfile,
+    FooterProfile,
     GridProfile,
     HygieneProfile,
     LayoutProfile,

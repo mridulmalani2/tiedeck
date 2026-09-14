@@ -35,6 +35,7 @@ dev = [
   "pytest-cov>=5.0",
   "ruff>=0.6",
   "mypy>=1.11",
+  "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -67,6 +68,13 @@ ignore = [
   "ANN401",  # Any is legitimate at the OOXML boundary
   "B008",    # typer uses function calls in argument defaults by design
   "SIM108",  # ternary is not always clearer
+  # Detecting curly quotes, en dashes and non-breaking spaces is what this tool
+  # is for, so those characters have to appear literally in patterns, test data
+  # and messages. Escaping every one of them would make the typography code
+  # unreadable to hide a warning that is always a false positive here.
+  "RUF001",
+  "RUF002",
+  "RUF003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -82,6 +90,10 @@ warn_unreachable = true
 disallow_any_generics = true
 show_error_codes = true
 files = ["tieout", "tests"]
+# tests/ has no __init__.py, so without this mypy resolves conftest.py under two
+# module names and refuses to check anything.
+explicit_package_bases = true
+mypy_path = "."
 
 [[tool.mypy.overrides]]
 module = ["pptx.*", "ruamel.*", "lxml.*"]
@@ -89,7 +101,11 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"
+# Test helpers are deliberately untyped: a fixture signature spelled out in full
+# obscures what the test is asserting, and the tests are not a public interface.
 disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"

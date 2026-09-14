@@ -502,9 +502,16 @@ class SlideModel:
         return (left, top, right - left, bottom - top)
 
 
-@dataclass
+@dataclass(eq=False)
 class DeckModel:
-    """A whole deck, plus the package-level facts the hygiene rules need."""
+    """A whole deck, plus the package-level facts the hygiene rules need.
+
+    ``eq=False`` so the model keeps identity semantics and stays hashable. Two
+    separately loaded copies of the same file are different decks -- they carry
+    their own mutable archetype assignments -- and value equality over several
+    thousand shapes would be both wrong and ruinously slow. Being hashable also
+    lets the rule engine memoise per-deck work in a weak-keyed cache.
+    """
 
     path: Path
     slides: tuple[SlideModel, ...]

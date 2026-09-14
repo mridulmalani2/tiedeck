@@ -88,7 +88,7 @@ def load_deck(path: str | Path, *, classify: bool = True) -> DeckModel:
     package = load_package(path)
     try:
         presentation = Presentation(str(path))
-    except Exception as exc:  # noqa: BLE001 - python-pptx raises a wide variety
+    except Exception as exc:
         raise DeckLoadError(f"cannot open {path.name} as a PowerPoint package: {exc}") from exc
 
     width_pt = emu_to_pt(presentation.slide_width) or 0.0
@@ -217,7 +217,8 @@ def _safe_name(part_like: Any) -> str | None:
     with contextlib.suppress(AttributeError, KeyError):
         node = part_like.element.find("p:cSld", NS)
         if node is not None:
-            return node.get("name")
+            name = node.get("name")
+            return str(name) if name is not None else None
     return None
 
 
@@ -284,7 +285,7 @@ def _load_shape(
     z_order: int,
     transform: _Transform | None,
 ) -> ShapeModel | None:
-    element = shape._element  # noqa: SLF001 - the model layer owns this boundary
+    element = shape._element
     name = _shape_name(shape, element)
     shape_id = _shape_id(shape, element)
     ref = ShapeRef(
@@ -793,7 +794,8 @@ def _hyperlink(run_node: etree._Element) -> str | None:
     link = rpr.find("a:hlinkClick", NS)
     if link is None:
         return None
-    return link.get(f"{{{NS['r']}}}id")
+    rel_id = link.get(f"{{{NS['r']}}}id")
+    return str(rel_id) if rel_id is not None else None
 
 
 def _alignment(ppr: etree._Element | None) -> str | None:
@@ -802,7 +804,7 @@ def _alignment(ppr: etree._Element | None) -> str | None:
     raw = ppr.get("algn")
     if raw is None:
         return None
-    return _ALIGNMENT_MAP.get(raw, raw)
+    return _ALIGNMENT_MAP.get(raw, str(raw))
 
 
 def _opt_int(element: etree._Element, name: str) -> int | None:
@@ -881,7 +883,7 @@ def _word_wrap(body_pr: etree._Element | None) -> bool | None:
     raw = body_pr.get("wrap")
     if raw is None:
         return None
-    return raw == "square"
+    return bool(raw == "square")
 
 
 def _insets(body_pr: etree._Element | None) -> tuple[float, float, float, float]:
@@ -910,6 +912,10 @@ def _insets(body_pr: etree._Element | None) -> tuple[float, float, float, float]
     )
 
 
+#: The identity of a resolved font, for character-weighted dominance.
+_FontKey = tuple[str | None, float | None, bool | None, bool | None, str | None]
+
+
 def _shape_effective_font(
     paragraphs: tuple[TextParagraph, ...], table: TableModel | None
 ) -> ResolvedFont | None:
@@ -919,8 +925,8 @@ def _shape_effective_font(
     Character-weighted dominance is the honest one: it is what a reader perceives
     as the shape's typeface.
     """
-    weights: dict[tuple[str | None, float | None, bool | None, bool | None, str | None], int] = {}
-    fonts: dict[tuple[str | None, float | None, bool | None, bool | None, str | None], ResolvedFont] = {}
+    weights: dict[_FontKey, int] = {}
+    fonts: dict[_FontKey, ResolvedFont] = {}
     sources = list(paragraphs)
     if table is not None:
         sources.extend(table.all_paragraphs)
@@ -1057,7 +1063,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
     """Read a chart part at the depth TieOut can measure without rendering."""
     root: etree._Element | None = None
     with contextlib.suppress(AttributeError, KeyError, ValueError):
-        root = shape.chart._chartSpace  # noqa: SLF001 - model layer boundary
+        root = shape.chart._chartSpace
     if root is None:
         return None
 

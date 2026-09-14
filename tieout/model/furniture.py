@@ -187,7 +187,7 @@ def _logo_hashes(
         declared = tuple(profile.brand.logo.image_sha1)
         return declared, {sha: support.get(sha, 0) for sha in declared}
 
-    threshold = max(1, int(round(LOGO_SUPPORT_SHARE * deck.slide_count)))
+    threshold = max(1, round(LOGO_SUPPORT_SHARE * deck.slide_count))
     candidates = [sha for sha, count in support.items() if count >= threshold]
     candidates.sort(key=lambda sha: (-support[sha], sha))
     return tuple(candidates), support
@@ -283,7 +283,7 @@ def _boilerplate(
                 continue
             counts.setdefault(normalise_text(text), set()).add(slide.index)
 
-    threshold = max(2, int(round(BOILERPLATE_SUPPORT_SHARE * deck.slide_count)))
+    threshold = max(2, round(BOILERPLATE_SUPPORT_SHARE * deck.slide_count))
     return {
         key: tuple(sorted(slides))
         for key, slides in counts.items()

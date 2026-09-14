@@ -38,7 +38,7 @@ def pt_to_emu(pt: float | None) -> int | None:
     """Convert points to EMU, rounded to the nearest integer EMU."""
     if pt is None:
         return None
-    return int(round(float(pt) * EMU_PER_POINT))
+    return round(float(pt) * EMU_PER_POINT)
 
 
 def emu_to_inches(emu: int | float | None) -> float | None:
@@ -50,7 +50,7 @@ def emu_to_inches(emu: int | float | None) -> float | None:
 def inches_to_emu(inches: float | None) -> int | None:
     if inches is None:
         return None
-    return int(round(float(inches) * EMU_PER_INCH))
+    return round(float(inches) * EMU_PER_INCH)
 
 
 def pt_to_inches(pt: float | None) -> float | None:
@@ -81,7 +81,7 @@ def hundredths_to_pt(sz: int | str | None) -> float | None:
 def pt_to_hundredths(pt: float | None) -> int | None:
     if pt is None:
         return None
-    return int(round(float(pt) * HUNDREDTHS_PER_POINT))
+    return round(float(pt) * HUNDREDTHS_PER_POINT)
 
 
 def ooxml_angle_to_degrees(rot: int | str | None) -> float:
@@ -95,7 +95,7 @@ def ooxml_angle_to_degrees(rot: int | str | None) -> float:
 
 
 def degrees_to_ooxml_angle(degrees: float) -> int:
-    return int(round(degrees * SIXTY_THOUSANDTHS_PER_DEGREE))
+    return round(degrees * SIXTY_THOUSANDTHS_PER_DEGREE)
 
 
 def round_pt(value: float | None, ndigits: int = _DEFAULT_ROUND) -> float | None:

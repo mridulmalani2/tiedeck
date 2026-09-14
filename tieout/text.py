@@ -10,10 +10,12 @@ All of it is pure: strings in, measurements out, no deck knowledge.
 
 from __future__ import annotations
 
+import gzip
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Final
 
 # --------------------------------------------------------------------------------------
@@ -383,7 +385,7 @@ def find_dates(text: str) -> list[DateReading]:
         candidate = match.group(1).strip()
         for pattern in DATE_FORMATS:
             try:
-                datetime.strptime(candidate, pattern)  # noqa: DTZ007 - format probe
+                datetime.strptime(candidate, pattern)
             except ValueError:
                 continue
             out.append(DateReading(raw=candidate, format=pattern))
@@ -397,6 +399,9 @@ def find_dates(text: str) -> list[DateReading]:
 
 _TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z'’&.-]*")
 _SENTENCE_SPLIT: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+|\n+")
+
+#: What may sit between two capitalised words without breaking the phrase.
+_JOINABLE: Final[re.Pattern[str]] = re.compile(r"[ \u00a0-]*")
 
 
 def capitalised_ngrams(
@@ -418,12 +423,22 @@ def capitalised_ngrams(
             continue
         first_position = tokens[0][1]
         run: list[tuple[str, int]] = []
+        previous_end = -1
         for token, position in tokens:
-            if token[:1].isupper():
-                run.append((token, position))
+            if not token[:1].isupper():
+                _emit_runs(run, first_position, max_length, out)
+                run = []
+                previous_end = position + len(token)
                 continue
-            _emit_runs(run, first_position, max_length, out)
-            run = []
+            # Two capitalised words only form a phrase when nothing but spacing
+            # separates them. Without this, "Source: Company management" yields
+            # the phantom term "Source Company", and a deck whose every footnote
+            # begins "Source:" acquires a canon entry for it.
+            if run and not _JOINABLE.fullmatch(sentence[previous_end:position]):
+                _emit_runs(run, first_position, max_length, out)
+                run = []
+            run.append((token, position))
+            previous_end = position + len(token)
         _emit_runs(run, first_position, max_length, out)
     return out
 
@@ -444,13 +459,34 @@ def _emit_runs(
             out.append((phrase, sentence_initial))
 
 
+def clean_term(phrase: str) -> str:
+    """Trim a captured phrase to the term itself.
+
+    The token pattern deliberately admits internal hyphens, apostrophes and full
+    stops so that "U.S.", "Coca-Cola" and "Moody's" survive intact. The cost is
+    that a date such as "14-September-2026" yields the fragment "September-", and
+    a possessive yields "Board's" as if it were a distinct term. Both are trimmed
+    here rather than in the token pattern, which would break the forms above.
+    """
+    words: list[str] = []
+    for word in phrase.split():
+        word = word.strip("-.\u2013\u2014")
+        for suffix in ("'s", "\u2019s", "'", "\u2019"):
+            if word.endswith(suffix) and len(word) > len(suffix) + 1:
+                word = word[: -len(suffix)]
+                break
+        if word:
+            words.append(word)
+    return " ".join(words)
+
+
 def canon_key(phrase: str) -> str:
     """The normalisation key that groups surface forms of the same term.
 
     Lower case, punctuation stripped, whitespace collapsed. ``Toyota GAZOO
     Racing`` and ``Toyota Gazoo Racing`` share a key; ``Toyota Racing`` does not.
     """
-    folded = unicodedata.normalize("NFKD", phrase).casefold()
+    folded = unicodedata.normalize("NFKD", clean_term(phrase)).casefold()
     folded = re.sub(r"[^\w\s]", "", folded)
     return re.sub(r"\s+", " ", folded).strip()
 
@@ -498,3 +534,38 @@ def spell_variants(token: str) -> tuple[str, ...]:
     if lowered.endswith("'"):
         forms.add(lowered[:-1])
     return tuple(sorted(forms))
+
+
+# --------------------------------------------------------------------------------------
+# Bundled dictionary
+# --------------------------------------------------------------------------------------
+
+_WORDLIST_PATH: Final[Path] = Path(__file__).with_name("data") / "wordlist.txt.gz"
+_WORDLIST_CACHE: frozenset[str] | None = None
+
+
+def load_wordlist() -> frozenset[str]:
+    """The bundled English and corporate-finance dictionary, lowercased.
+
+    Cached at module level: it is roughly 38,000 words, and re-reading it per
+    shape would dominate the runtime of a spell check over a long deck.
+
+    Shared by TY-009 and by the terminology deriver, which uses it for the
+    opposite purpose -- deciding that a capitalised word is ordinary English and
+    therefore *not* a client term worth a canon entry.
+    """
+    global _WORDLIST_CACHE
+    if _WORDLIST_CACHE is None:
+        try:
+            with gzip.open(_WORDLIST_PATH, "rt", encoding="utf-8") as handle:
+                _WORDLIST_CACHE = frozenset(
+                    line.strip().casefold() for line in handle if line.strip()
+                )
+        except OSError:
+            _WORDLIST_CACHE = frozenset()
+    return _WORDLIST_CACHE
+
+
+def is_common_word(word: str) -> bool:
+    """Whether a word is ordinary English rather than a name or a coinage."""
+    return word.casefold().strip("'\u2019") in load_wordlist()

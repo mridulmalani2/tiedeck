@@ -38,7 +38,6 @@ from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.text import PP_ALIGN
-from pptx.oxml.ns import qn as pptx_qn
 from pptx.util import Emu, Pt
 
 from tieout.fixtures.spec import (
@@ -49,8 +48,6 @@ from tieout.fixtures.spec import (
     COLUMNS_4_PT,
     CONTENT_LEFT_PT,
     CONTENT_WIDTH_PT,
-    FOOTER_HEIGHT_PT,
-    FOOTER_TOP_PT,
     FOOTNOTE_RULE_TOP_PT,
     FOOTNOTE_TOP_PT,
     TITLE_HEIGHT_PT,
@@ -261,7 +258,7 @@ def _restyle_theme(presentation: Any, brand: BrandSpec) -> None:
             srgb = etree.SubElement(slot_node, f"{{{A}}}srgbClr")
             srgb.set("val", hex_value.lstrip("#").upper())
 
-        theme_part._blob = etree.tostring(  # noqa: SLF001 - fixture builder only
+        theme_part._blob = etree.tostring(
             root, xml_declaration=True, encoding="UTF-8", standalone=True
         )
 
@@ -304,7 +301,7 @@ def _write_def_rpr(
     if existing is not None:
         lvl_ppr.remove(existing)
     def_rpr = etree.SubElement(lvl_ppr, f"{{{A}}}defRPr")
-    def_rpr.set("sz", str(int(round(size_pt * 100))))
+    def_rpr.set("sz", str(round(size_pt * 100)))
     def_rpr.set("b", "1" if bold else "0")
     solid = etree.SubElement(def_rpr, f"{{{A}}}solidFill")
     srgb = etree.SubElement(solid, f"{{{A}}}srgbClr")
@@ -754,9 +751,9 @@ class _DeckBuilder:
             table.columns[index].width = Emu(
                 int((first_width if index == 0 else rest) * 12700)
             )
-        table.rows[0].height = Emu(int(24 * 12700))
+        table.rows[0].height = Emu(24 * 12700)
         for index in range(1, row_count):
-            table.rows[index].height = Emu(int(24 * 12700))
+            table.rows[index].height = Emu(24 * 12700)
 
         for column_index, heading in enumerate(columns):
             cell = table.cell(0, column_index)
@@ -789,7 +786,7 @@ class _DeckBuilder:
 
     def _build_chart(self, slide: Any, slide_spec: SlideSpec) -> None:
         self._title_block(slide, slide_spec)
-        data = CategoryChartData()
+        data: Any = CategoryChartData()  # type: ignore[no-untyped-call]
         data.categories = list(slide_spec.payload.get("categories", []))
         for name, values in slide_spec.payload.get("series", []):
             data.add_series(name, tuple(values))
@@ -899,7 +896,7 @@ class _DeckBuilder:
 
     def _add_empty_placeholder(self, slide: Any) -> None:
         """Copy an empty body placeholder onto the slide, for HY-006."""
-        tree = slide.shapes._spTree  # noqa: SLF001 - fixture builder only
+        tree = slide.shapes._spTree
         sp = etree.SubElement(tree, f"{{{P}}}sp")
         nv_sp_pr = etree.SubElement(sp, f"{{{P}}}nvSpPr")
         c_nv_pr = etree.SubElement(nv_sp_pr, f"{{{P}}}cNvPr")
@@ -913,11 +910,11 @@ class _DeckBuilder:
         sp_pr = etree.SubElement(sp, f"{{{P}}}spPr")
         xfrm = etree.SubElement(sp_pr, f"{{{A}}}xfrm")
         off = etree.SubElement(xfrm, f"{{{A}}}off")
-        off.set("x", str(int(720 * 12700)))
-        off.set("y", str(int(324 * 12700)))
+        off.set("x", str(720 * 12700))
+        off.set("y", str(324 * 12700))
         ext = etree.SubElement(xfrm, f"{{{A}}}ext")
-        ext.set("cx", str(int(204 * 12700)))
-        ext.set("cy", str(int(48 * 12700)))
+        ext.set("cx", str(204 * 12700))
+        ext.set("cy", str(48 * 12700))
         tx_body = etree.SubElement(sp, f"{{{P}}}txBody")
         etree.SubElement(tx_body, f"{{{A}}}bodyPr")
         etree.SubElement(tx_body, f"{{{A}}}p")
@@ -1018,7 +1015,7 @@ class _DeckBuilder:
         run = paragraph.add_run()
         run.text = text
         self._apply_font(run.font, font)
-        ppr = paragraph._pPr if paragraph._pPr is not None else paragraph._p.get_or_add_pPr()  # noqa: SLF001
+        ppr = paragraph._pPr if paragraph._pPr is not None else paragraph._p.get_or_add_pPr()
         for tag in ("buNone", "buChar", "buAutoNum"):
             existing = ppr.find(f"{{{A}}}{tag}")
             if existing is not None:
@@ -1026,8 +1023,8 @@ class _DeckBuilder:
         if no_bullet or bullet_char is None:
             etree.SubElement(ppr, f"{{{A}}}buNone")
         else:
-            ppr.set("marL", str(int(12 * 12700)))
-            ppr.set("indent", str(int(-12 * 12700)))
+            ppr.set("marL", str(12 * 12700))
+            ppr.set("indent", str(-12 * 12700))
             node = etree.SubElement(ppr, f"{{{A}}}buChar")
             node.set("char", bullet_char)
         _write_run_props(ppr, font)
@@ -1059,7 +1056,7 @@ class _DeckBuilder:
     def _plain_table_style(self, table: Any) -> None:
         """Strip the built-in table style so the fixture's palette is exactly the
         five colours the spec declares."""
-        tbl_pr = table._tbl.find(f"{{{A}}}tblPr")  # noqa: SLF001
+        tbl_pr = table._tbl.find(f"{{{A}}}tblPr")
         if tbl_pr is None:
             return
         tbl_pr.set("firstRow", "0")
@@ -1096,7 +1093,7 @@ def _write_run_props(ppr: etree._Element, font: FontSpec) -> None:
     if existing is not None:
         ppr.remove(existing)
     def_rpr = etree.SubElement(ppr, f"{{{A}}}defRPr")
-    def_rpr.set("sz", str(int(round(font.size_pt * 100))))
+    def_rpr.set("sz", str(round(font.size_pt * 100)))
     def_rpr.set("b", "1" if font.bold else "0")
     def_rpr.set("i", "1" if font.italic else "0")
     solid = etree.SubElement(def_rpr, f"{{{A}}}solidFill")
@@ -1109,7 +1106,9 @@ def _write_run_props(ppr: etree._Element, font: FontSpec) -> None:
 def _rgb(hex_value: str) -> Any:
     from pptx.dml.color import RGBColor
 
-    return RGBColor.from_string(hex_value.lstrip("#").upper())
+    return RGBColor.from_string(  # type: ignore[no-untyped-call]
+        hex_value.lstrip("#").upper()
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -1171,7 +1170,7 @@ def _core_xml(spec: ReferenceSpec, *, populated: bool) -> bytes:
         f"<cp:category>{category}</cp:category>"
         "<cp:revision>1</cp:revision>"
         "</cp:coreProperties>"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _app_xml(original: bytes, *, populated: bool) -> bytes:
@@ -1185,7 +1184,10 @@ def _app_xml(original: bytes, *, populated: bool) -> bytes:
         if node is None:
             node = etree.SubElement(root, f"{{{ep}}}{tag}")
         node.text = value
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    serialised: bytes = etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+    return serialised
 
 
 def _add_external_rel(original: bytes, filename: str) -> bytes:
@@ -1205,7 +1207,10 @@ def _add_external_rel(original: bytes, filename: str) -> bytes:
     )
     node.set("Target", "file:///C:/Users/analyst/Desktop/meridian_chart.png")
     node.set("TargetMode", "External")
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    serialised: bytes = etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+    return serialised
 
 
 def _write_comment_parts(target: zipfile.ZipFile, existing: set[str]) -> None:

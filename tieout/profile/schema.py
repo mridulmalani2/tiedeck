@@ -417,10 +417,10 @@ class Profile(_Model):
 
     def is_locked(self, field_path: str) -> bool:
         """Whether a field, or any ancestor of it, is locked."""
-        for lock in self.locks:
-            if field_path == lock or field_path.startswith(f"{lock}."):
-                return True
-        return False
+        return any(
+            field_path == lock or field_path.startswith(f"{lock}.")
+            for lock in self.locks
+        )
 
     def archetype_of(self, slide_index: int) -> str | None:
         for name, indices in self.archetypes.items():

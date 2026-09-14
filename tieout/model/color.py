@@ -98,30 +98,34 @@ def linear_to_srgb(channel: float) -> float:
 def _srgb_to_linear(channel: float) -> float:
     if channel <= 0.04045:
         return channel / 12.92
-    return ((channel + 0.055) / 1.055) ** 2.4
+    return float(((channel + 0.055) / 1.055) ** 2.4)
 
 
 def _linear_to_srgb(channel: float) -> float:
     if channel <= 0.0031308:
         return channel * 12.92
-    return 1.055 * (channel ** (1.0 / 2.4)) - 0.055
+    return float(1.055 * (channel ** (1.0 / 2.4)) - 0.055)
 
 
 def rgb_to_lab(rgb: Rgb) -> Lab:
     """Convert sRGB to CIE Lab via XYZ under a D65 illuminant."""
-    lr, lg, lb = (_srgb_to_linear(c / 255.0) for c in (rgb.r, rgb.g, rgb.b))
+    lr = _srgb_to_linear(rgb.r / 255.0)
+    lg = _srgb_to_linear(rgb.g / 255.0)
+    lb = _srgb_to_linear(rgb.b / 255.0)
 
     x = (0.4124564 * lr + 0.3575761 * lg + 0.1804375 * lb) * 100.0
     y = (0.2126729 * lr + 0.7151522 * lg + 0.0721750 * lb) * 100.0
     z = (0.0193339 * lr + 0.1191920 * lg + 0.9503041 * lb) * 100.0
 
-    fx, fy, fz = (_lab_f(v / w) for v, w in ((x, _WHITE_X), (y, _WHITE_Y), (z, _WHITE_Z)))
+    fx = _lab_f(x / _WHITE_X)
+    fy = _lab_f(y / _WHITE_Y)
+    fz = _lab_f(z / _WHITE_Z)
     return Lab(116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
 
 
 def _lab_f(ratio: float) -> float:
     if ratio > _LAB_EPSILON:
-        return ratio ** (1.0 / 3.0)
+        return float(ratio ** (1.0 / 3.0))
     return (_LAB_KAPPA * ratio + 16.0) / 116.0
 
 
@@ -133,11 +137,14 @@ def delta_e_76(a: Rgb | Lab, b: Rgb | Lab) -> float:
     """
     lab_a = a if isinstance(a, Lab) else rgb_to_lab(a)
     lab_b = b if isinstance(b, Lab) else rgb_to_lab(b)
-    return (
-        (lab_a.lightness - lab_b.lightness) ** 2
-        + (lab_a.a - lab_b.a) ** 2
-        + (lab_a.b - lab_b.b) ** 2
-    ) ** 0.5
+    return float(
+        (
+            (lab_a.lightness - lab_b.lightness) ** 2
+            + (lab_a.a - lab_b.a) ** 2
+            + (lab_a.b - lab_b.b) ** 2
+        )
+        ** 0.5
+    )
 
 
 def nearest(
@@ -244,13 +251,18 @@ def _clamp01(value: float) -> float:
 
 
 def _to_hls(rgb: Rgb) -> tuple[float, float, float]:
-    return colorsys.rgb_to_hls(rgb.r / 255.0, rgb.g / 255.0, rgb.b / 255.0)
+    hue, lum, sat = colorsys.rgb_to_hls(rgb.r / 255.0, rgb.g / 255.0, rgb.b / 255.0)
+    return (hue, lum, sat)
 
 
 def _from_hls(hue: float, lum: float, sat: float) -> Rgb:
-    return _from_unit(list(colorsys.hls_to_rgb(hue, lum, sat)))
+    red, green, blue = colorsys.hls_to_rgb(hue, lum, sat)
+    return _from_unit([red, green, blue])
 
 
 def _from_unit(channels: list[float]) -> Rgb:
-    r, g, b = (int(round(_clamp01(c) * 255.0)) for c in channels)
-    return Rgb(r, g, b)
+    return Rgb(
+        round(_clamp01(channels[0]) * 255.0),
+        round(_clamp01(channels[1]) * 255.0),
+        round(_clamp01(channels[2]) * 255.0),
+    )

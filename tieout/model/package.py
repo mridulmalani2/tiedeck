@@ -244,6 +244,10 @@ class PackageInfo:
                 return part
         return None
 
+    def resolve(self, rel: Relationship) -> str | None:
+        """The part name a relationship points at, or None when it is external."""
+        return resolve_target(rel.source_part, rel.target)
+
     def suspect_relationships(self) -> list[Relationship]:
         return [
             rel
@@ -258,7 +262,7 @@ class PackageInfo:
         for rel in self.relationships:
             if rel.is_external:
                 continue
-            resolved = _resolve_part(rel.source_part, rel.target)
+            resolved = resolve_target(rel.source_part, rel.target)
             if resolved and resolved not in known:
                 broken.append(rel)
         return broken
@@ -354,23 +358,39 @@ def _read_relationships(
 
 
 def _source_part_for_rels(rels_name: str) -> str:
-    """``ppt/slides/_rels/slide1.xml.rels`` -> ``ppt/slides/slide1.xml``."""
+    """``ppt/slides/_rels/slide1.xml.rels`` -> ``ppt/slides/slide1.xml``.
+
+    The package's own root relationships live in ``_rels/.rels``, whose stem is
+    empty. That case returns the empty string, meaning "the package root", so
+    targets in it resolve relative to the archive root rather than to a
+    directory called ``/``.
+    """
     directory, filename = posixpath.split(rels_name)
     parent = posixpath.dirname(directory)
     stem = filename[: -len(".rels")]
     if not stem:
-        return parent or "/"
+        return parent
     return posixpath.join(parent, stem) if parent else stem
 
 
-def _resolve_part(source_part: str, target: str) -> str | None:
-    """Resolve a relationship target relative to its source part."""
+def resolve_target(source_part: str, target: str) -> str | None:
+    """Resolve a relationship target to a part name, or None if it is not internal.
+
+    Returns a package-relative name with no leading slash, which is the form
+    ``ZipFile.namelist`` uses, so the result can be compared against
+    :attr:`PackageInfo.part_names` directly.
+    """
     if not target or target.startswith(("http://", "https://", "mailto:", "file:")):
         return None
     if target.startswith("/"):
-        return target.lstrip("/")
+        return posixpath.normpath(target.lstrip("/"))
     base = posixpath.dirname(source_part)
-    return posixpath.normpath(posixpath.join(base, target)) if base else target
+    resolved = posixpath.join(base, target) if base else target
+    return posixpath.normpath(resolved).lstrip("/")
+
+
+#: Retained under the old private name for internal callers.
+_resolve_part = resolve_target
 
 
 def _read_media(archive: zipfile.ZipFile, names: tuple[str, ...]) -> dict[str, MediaPart]:

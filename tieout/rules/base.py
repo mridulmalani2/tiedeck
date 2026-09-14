@@ -19,6 +19,7 @@ stylistic:
 from __future__ import annotations
 
 import fnmatch
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -291,21 +292,30 @@ def select_rules(
 # Furniture memoisation
 # --------------------------------------------------------------------------------------
 
-_FURNITURE_CACHE: dict[tuple[int, int], Furniture] = {}
+#: Deck -> (profile, furniture). The deck is held weakly so a long-running
+#: process does not retain every deck it has ever audited; the profile is held
+#: strongly, which is what makes the identity check below sound.
+#:
+#: Keying on ``id()`` would be a real bug rather than a theoretical one: CPython
+#: recycles object addresses, so a short-lived profile can be allocated at the
+#: address of a collected one and silently inherit its furniture.
+_FURNITURE_CACHE: weakref.WeakKeyDictionary[DeckModel, tuple[Profile, Furniture]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def furniture_for(deck: DeckModel, profile: Profile) -> Furniture:
-    key = (id(deck), id(profile))
-    cached = _FURNITURE_CACHE.get(key)
-    if cached is None:
-        cached = detect_furniture(deck, profile)
-        _FURNITURE_CACHE[key] = cached
-    return cached
+    """Logo, page-number and boilerplate identification, memoised per deck."""
+    cached = _FURNITURE_CACHE.get(deck)
+    if cached is not None and cached[0] is profile:
+        return cached[1]
+    furniture = detect_furniture(deck, profile)
+    _FURNITURE_CACHE[deck] = (profile, furniture)
+    return furniture
 
 
 def clear_caches() -> None:
-    """Drop memoised state. Called between decks so a long-running process does
-    not hold every deck it has ever audited."""
+    """Drop memoised state, for tests and for a process auditing many decks."""
     _FURNITURE_CACHE.clear()
 
 
@@ -400,7 +410,7 @@ def run_rules(
         rule = rule_cls()
         try:
             findings = rule.run(deck, profile)
-        except Exception as exc:  # noqa: BLE001 - one bad rule must not abort the audit
+        except Exception as exc:
             result.rules_skipped.append(
                 RuleSkipped(rule_cls.id, f"raised {type(exc).__name__}: {exc}")
             )

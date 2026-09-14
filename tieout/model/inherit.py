@@ -153,7 +153,7 @@ class Theme:
         root = (
             theme_xml
             if isinstance(theme_xml, etree._Element)
-            else etree.fromstring(theme_xml)  # noqa: S320 - local package bytes only
+            else etree.fromstring(theme_xml)
         )
         scheme: dict[str, etree._Element] = {}
         for slot in _THEME_SLOTS:
@@ -1021,11 +1021,11 @@ def _hsl_attr_to_rgb(node: etree._Element) -> colour.Rgb | None:
         lum = int(node.get("lum") or 0) / 100000.0
     except ValueError:
         return None
-    r, g, b = colorsys.hls_to_rgb(hue, lum, sat)
+    red, green, blue = colorsys.hls_to_rgb(hue, lum, sat)
     return colour.Rgb(
-        int(round(max(0.0, min(1.0, r)) * 255)),
-        int(round(max(0.0, min(1.0, g)) * 255)),
-        int(round(max(0.0, min(1.0, b)) * 255)),
+        round(max(0.0, min(1.0, red)) * 255),
+        round(max(0.0, min(1.0, green)) * 255),
+        round(max(0.0, min(1.0, blue)) * 255),
     )
 
 
@@ -1038,7 +1038,11 @@ def _scrgb_attr_to_rgb(node: etree._Element) -> colour.Rgb | None:
     except ValueError:
         return None
     srgb = [colour.linear_to_srgb(max(0.0, min(1.0, c))) for c in channels]
-    return colour.Rgb(*(int(round(max(0.0, min(1.0, c)) * 255)) for c in srgb))
+    return colour.Rgb(
+        round(max(0.0, min(1.0, srgb[0])) * 255),
+        round(max(0.0, min(1.0, srgb[1])) * 255),
+        round(max(0.0, min(1.0, srgb[2])) * 255),
+    )
 
 
 #: ``a:sysClr`` values that appear in real decks, used only when ``lastClr`` is

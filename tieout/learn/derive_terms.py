@@ -1,0 +1,282 @@
+"""Deriving terminology canon candidates.
+
+Terminology cannot be derived outright, and pretending otherwise would be the
+most damaging kind of false confidence: a canon rule enforcing the wrong spelling
+of a client's own name across every future deck.
+
+So this deriver does not decide anything. It finds groups of capitalised phrases
+that normalise to the same key but appear in more than one surface form, proposes
+the most frequent as canonical, and hands the decision to the interview. When the
+variants are explained by sentence-initial capitalisation it does not even ask,
+because "Revenue growth" at the start of a sentence and "revenue growth" in the
+middle of one is not a terminology question and offering it as one is how a
+twelve-question budget gets spent on nothing.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Final
+
+from tieout.learn.classify import Derivation, QuestionDraft
+from tieout.learn.observe import iter_runs, learnable_slides
+from tieout.model.deck import DeckModel
+from tieout.model.furniture import Furniture
+from tieout.text import canon_key, capitalised_ngrams, clean_term, is_common_word
+
+#: A phrase must occur at least this often to be worth considering.
+MIN_OCCURRENCES: Final[int] = 3
+
+#: Longest phrase considered, per section 8.3.
+MAX_NGRAM: Final[int] = 4
+
+
+@dataclass
+class SurfaceForm:
+    """One spelling of a term, and where it appears."""
+
+    text: str
+    count: int = 0
+    slides: set[int] = field(default_factory=set)
+    #: True when every occurrence begins a sentence, where capitalisation is
+    #: forced and therefore says nothing about the house convention.
+    always_sentence_initial: bool = True
+
+
+@dataclass
+class CanonCandidate:
+    """A normalised term with more than one observed spelling."""
+
+    key: str
+    forms: list[SurfaceForm]
+
+    @property
+    def canonical(self) -> SurfaceForm:
+        """The most frequent spelling, ties broken alphabetically for determinism."""
+        return max(self.forms, key=lambda f: (f.count, f.text))
+
+    @property
+    def variants(self) -> list[SurfaceForm]:
+        canonical = self.canonical
+        return [f for f in self.forms if f.text != canonical.text]
+
+    @property
+    def total(self) -> int:
+        return sum(f.count for f in self.forms)
+
+    @property
+    def explained_by_sentence_position(self) -> bool:
+        """Whether the variation is only sentence-initial capitalisation.
+
+        True when the spellings differ solely in case and every occurrence of at
+        least one of them starts a sentence.
+        """
+        spellings = {f.text for f in self.forms}
+        if len({s.casefold() for s in spellings}) > 1:
+            return False
+        return any(f.always_sentence_initial for f in self.forms)
+
+
+@dataclass
+class TermsDerivation:
+    """Proposed canon entries and the questions needed to confirm them."""
+
+    #: Canonical form -> variants. Empty values mean "canonical, no variants seen",
+    #: which still earns an entry so TY-005 can catch a future misspelling.
+    canon_terms: dict[str, list[str]] = field(default_factory=dict)
+    candidates: list[CanonCandidate] = field(default_factory=list)
+    derivation: Derivation = field(default_factory=Derivation)
+
+
+def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
+    """Find terminology variants and draft the questions to resolve them."""
+    result = TermsDerivation()
+    groups = collect_phrases(deck, furniture)
+
+    frequent = {
+        key: forms
+        for key, forms in groups.items()
+        if sum(f.count for f in forms.values()) >= MIN_OCCURRENCES
+    }
+
+    for key, forms in sorted(frequent.items()):
+        candidate = CanonCandidate(key=key, forms=sorted(forms.values(), key=lambda f: f.text))
+        if len(candidate.forms) == 1:
+            # One consistent spelling that recurs is worth recording even with no
+            # variants: it gives TY-005 something to check a future deck against,
+            # which is the whole point of a canon.
+            only = candidate.forms[0]
+            if only.count >= MIN_OCCURRENCES and _is_distinctive(only.text):
+                result.canon_terms.setdefault(only.text, [])
+                result.derivation.note(
+                    f"typography.canon_terms.{only.text}",
+                    f"one consistent spelling, {only.count} occurrences across "
+                    f"{len(only.slides)} slides",
+                    "high",
+                )
+            continue
+
+        if not _is_distinctive(candidate.canonical.text):
+            continue
+
+        result.candidates.append(candidate)
+        if candidate.explained_by_sentence_position:
+            result.derivation.note(
+                f"typography.canon_terms.{candidate.canonical.text}",
+                "spellings differ only by sentence-initial capitalisation, which is "
+                "not a terminology choice; not queued as a question",
+                "high",
+            )
+            result.canon_terms.setdefault(candidate.canonical.text, [])
+            continue
+
+        result.derivation.ask(_canon_question(candidate))
+
+    result.canon_terms = _drop_subsumed(result.canon_terms, groups)
+
+    if not result.canon_terms and not result.candidates:
+        result.derivation.unlearned(
+            "typography.canon_terms",
+            f"no capitalised phrase occurs at least {MIN_OCCURRENCES} times",
+        )
+    return result
+
+
+def _drop_subsumed(
+    canon: dict[str, list[str]], groups: dict[str, dict[str, SurfaceForm]]
+) -> dict[str, list[str]]:
+    """Remove a term that only ever occurs inside a longer term.
+
+    "Ashcombe" and "Ashcombe Partners" both clear the frequency and
+    distinctiveness bars, but they are one term, and emitting both would have
+    TY-005 report the same text twice. The longer form wins when it accounts for
+    every occurrence of the shorter.
+    """
+    counts = {
+        term: sum(form.count for form in groups.get(canon_key(term), {}).values())
+        for term in canon
+    }
+    out: dict[str, list[str]] = {}
+    for term, variants in canon.items():
+        words = term.split()
+        subsumed = any(
+            other != term
+            and len(other.split()) > len(words)
+            and _is_subsequence(words, other.split())
+            and counts.get(other, 0) >= counts.get(term, 0)
+            for other in canon
+        )
+        if not subsumed:
+            out[term] = variants
+    return out
+
+
+def _is_subsequence(needle: list[str], haystack: list[str]) -> bool:
+    """Whether ``needle`` appears as a contiguous run inside ``haystack``."""
+    if not needle or len(needle) > len(haystack):
+        return False
+    return any(
+        haystack[start : start + len(needle)] == needle
+        for start in range(len(haystack) - len(needle) + 1)
+    )
+
+
+def collect_phrases(
+    deck: DeckModel, furniture: Furniture
+) -> dict[str, dict[str, SurfaceForm]]:
+    """Normalisation key -> surface form -> occurrences.
+
+    Furniture is excluded. The confidentiality line is on every slide, and
+    admitting it would make "Strictly Private And Confidential" the deck's most
+    frequent term by an order of magnitude while telling us nothing.
+    """
+    groups: dict[str, dict[str, SurfaceForm]] = {}
+
+    def ingest(text: str, slide_index: int) -> None:
+        for raw, sentence_initial in capitalised_ngrams(text, MAX_NGRAM):
+            phrase = clean_term(raw)
+            key = canon_key(phrase)
+            if not key or not phrase:
+                continue
+            forms = groups.setdefault(key, {})
+            form = forms.get(phrase)
+            if form is None:
+                form = SurfaceForm(text=phrase)
+                forms[phrase] = form
+            form.count += 1
+            form.slides.add(slide_index)
+            if not sentence_initial:
+                form.always_sentence_initial = False
+
+    for context in iter_runs(deck, furniture):
+        ingest(context.run.text, context.slide.index)
+
+    for slide in learnable_slides(deck):
+        for shape in slide.charts:
+            if shape.chart is None:
+                continue
+            for text in shape.chart.text_strings:
+                ingest(text, slide.index)
+
+    return groups
+
+
+def _is_distinctive(phrase: str) -> bool:
+    """Whether a phrase is specific enough to be worth a canon entry.
+
+    A term is distinctive when at least one of its words is not ordinary English:
+    a client name, a project codename, an invented product. "Ashcombe Partners"
+    qualifies; "Board of Directors", "Revenue" and "These" do not, however often
+    they recur.
+
+    This matters more than it looks. Without it the canon fills with two dozen
+    ordinary capitalised words, and since every one of them is a potential
+    terminology question, the interview's twelve-question budget is spent before
+    it reaches anything the user actually needs to decide.
+    """
+    words = [word.strip("'\u2019") for word in phrase.split()]
+    words = [word for word in words if word]
+    if not words:
+        return False
+    if any(word.isupper() and len(word) > 2 for word in words):
+        # An acronym or a wordmark set in capitals is a term by construction.
+        return True
+    return any(len(word) > 3 and not is_common_word(word) for word in words)
+
+
+def _canon_question(candidate: CanonCandidate) -> QuestionDraft:
+    canonical = candidate.canonical
+    listing = ", ".join(
+        f"{form.text!r} ({form.count})"
+        for form in sorted(candidate.forms, key=lambda f: (-f.count, f.text))
+    )
+    slides = tuple(sorted({s for form in candidate.forms for s in form.slides}))
+    return QuestionDraft(
+        id=f"canon-{candidate.key.replace(' ', '-')}",
+        field_path="typography.canon_terms",
+        question=f"Both {listing} appear. Which is the canonical form?",
+        options=[form.text for form in sorted(candidate.forms, key=lambda f: -f.count)],
+        default=canonical.text,
+        impact=sum(form.count for form in candidate.variants),
+        kind="terminology",
+        slides=slides,
+    )
+
+
+def apply_canon_answers(
+    result: TermsDerivation, answers: dict[str, str]
+) -> dict[str, list[str]]:
+    """Fold interview answers into the canon map.
+
+    An answered question locks the canonical form and makes every other observed
+    spelling a variant TY-005 will report.
+    """
+    canon = dict(result.canon_terms)
+    for candidate in result.candidates:
+        question_id = f"canon-{candidate.key.replace(' ', '-')}"
+        chosen = answers.get(question_id, candidate.canonical.text)
+        variants = sorted(
+            form.text for form in candidate.forms if form.text != chosen
+        )
+        canon[chosen] = variants
+    return canon

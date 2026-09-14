@@ -21,7 +21,7 @@ Two design decisions that keep the round trip honest:
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import yaml
 
@@ -106,13 +106,14 @@ class BrandSpec:
 
     @property
     def palette_hex(self) -> tuple[str, ...]:
-        return (
-            self.ink,
-            self.paper,
-            self.house_navy,
-            self.rule_grey,
-            self.accent_red,
-        )
+        """The colours the deck actually uses.
+
+        ``accent_red`` is deliberately absent. It is defined so the theme has a
+        third accent slot, but no element of the reference deck is set in it, and
+        a palette entry with no supporting evidence is exactly what the learning
+        engine is supposed to refuse to emit.
+        """
+        return (self.ink, self.paper, self.house_navy, self.rule_grey)
 
     @property
     def fonts_allowed(self) -> tuple[str, ...]:
@@ -144,16 +145,23 @@ class BrandSpec:
 
 @dataclass(frozen=True)
 class TypographySpec:
-    """Conventions the deck obeys without exception, so they are learnable."""
+    """Conventions the deck obeys without exception, so they are learnable.
 
-    quotes: str = "curly"
-    title_case: str = "sentence"
-    bullet_terminal_punctuation: str = "none"
+    Typed with the same literals as :class:`~tieout.profile.schema.TypographyProfile`
+    so the fixture and the schema cannot drift apart without the type checker
+    saying so.
+    """
+
+    quotes: Literal["curly", "straight"] = "curly"
+    title_case: Literal["sentence", "title", "upper"] = "sentence"
+    bullet_terminal_punctuation: Literal["none", "period", "semicolon"] = "none"
     thousands_separator: str = ","
-    negative_style: str = "parentheses"
+    negative_style: Literal["parentheses", "minus"] = "parentheses"
     date_format: str = "%d-%B-%Y"
     currency_prefix: str = "US$"
-    decimal_places_by_column: str = "consistent_within_column"
+    decimal_places_by_column: Literal["consistent_within_column"] = (
+        "consistent_within_column"
+    )
 
 
 @dataclass(frozen=True)
@@ -332,7 +340,7 @@ def default_slides() -> tuple[SlideSpec, ...]:
                     "Management bandwidth is the binding constraint",
                 ],
             ],
-            footnote="Source: Company management, Ashcombe Partners analysis.",
+            footnote="Source: Company management as at 14-September-2026.",
         ),
         _content(
             5,
@@ -343,7 +351,7 @@ def default_slides() -> tuple[SlideSpec, ...]:
                 ["Capability", "Depot automation is not an in-house competence"],
                 ["Coverage", "No presence in the two fastest growing corridors"],
             ],
-            footnote="Source: Ashcombe Partners analysis.",
+            footnote="Source: Ashcombe Partners analysis as at 14-September-2026.",
         ),
         _table_slide(
             6,
@@ -427,7 +435,10 @@ def default_slides() -> tuple[SlideSpec, ...]:
             "Implied enterprise value by methodology",
             categories=["Trading comparables", "Precedent transactions", "Discounted cash flow"],
             series=[("Low", [3210, 3580, 3400]), ("High", [3760, 4480, 4100])],
-            footnote="Source: Ashcombe Partners analysis. Figures in US$ millions.",
+            footnote=(
+                "Source: Ashcombe Partners analysis as at 14-September-2026. "
+                "Figures in US$ millions."
+            ),
         ),
         _divider(14, "III", _SECTIONS[2][1]),
         _content(
@@ -487,7 +498,10 @@ def default_slides() -> tuple[SlideSpec, ...]:
                 ["Execution risk", "Low", "Moderate", "High", "High"],
                 ["Time to close", "n.a.", "4 months", "6 months", "9 months"],
             ],
-            footnote="Source: Ashcombe Partners analysis. Capital in US$ millions.",
+            footnote=(
+                "Source: Ashcombe Partners analysis as at 14-September-2026. "
+                "Capital in US$ millions."
+            ),
         ),
         _divider(19, "IV", _SECTIONS[3][1]),
         _content(
@@ -627,7 +641,9 @@ def default_defects() -> tuple[SeededDefect, ...]:
         SeededDefect("HY-004", "creator and company metadata left populated", None, "metadata"),
         SeededDefect("HY-005", "a PowerPoint comment left in the package", None, "comments"),
         SeededDefect("HY-006", "an empty body placeholder left visible", 10),
-        SeededDefect("HY-007", "an external relationship to a local drive path", None, "external_rel"),
+        SeededDefect(
+            "HY-007", "an external relationship to a local drive path", None, "external_rel"
+        ),
         SeededDefect("HY-008", "a low resolution image below 150 effective DPI", 11),
         SeededDefect("HY-009", "a non-standard, non-embedded typeface", 16),
     )
