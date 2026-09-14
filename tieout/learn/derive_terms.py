@@ -85,6 +85,10 @@ class TermsDerivation:
     #: which still earns an entry so TY-005 can catch a future misspelling.
     canon_terms: dict[str, list[str]] = field(default_factory=dict)
     candidates: list[CanonCandidate] = field(default_factory=list)
+    #: Words from the reference deck that a general dictionary rejects, offered
+    #: to ``hygiene.dictionary`` so the spell check does not report the client's
+    #: own vocabulary.
+    vocabulary: list[str] = field(default_factory=list)
     derivation: Derivation = field(default_factory=Derivation)
 
 
@@ -133,6 +137,17 @@ def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
         result.derivation.ask(_canon_question(candidate))
 
     result.canon_terms = _drop_subsumed(result.canon_terms, groups)
+    result.vocabulary = _client_vocabulary(groups)
+    if result.vocabulary:
+        result.derivation.note(
+            "hygiene.dictionary",
+            f"{len(result.vocabulary)} word(s) used in the reference deck that a "
+            f"general dictionary rejects, so the spell check does not report the "
+            f"client's own names: "
+            + ", ".join(result.vocabulary[:8])
+            + ("..." if len(result.vocabulary) > 8 else ""),
+            "high",
+        )
 
     if not result.canon_terms and not result.candidates:
         result.derivation.unlearned(
@@ -140,6 +155,33 @@ def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
             f"no capitalised phrase occurs at least {MIN_OCCURRENCES} times",
         )
     return result
+
+
+def _client_vocabulary(
+    groups: dict[str, dict[str, SurfaceForm]],
+) -> list[str]:
+    """Words the reference deck uses that a general dictionary does not contain.
+
+    Project codenames, client names, counterparty names. Seeding these from the
+    deck is what makes TY-009 usable at all: without it the rule's first run on
+    any real deck is a list of the client's own proper nouns, and a spell checker
+    that cries wolf once gets switched off for good.
+
+    The cost, stated in the README's limitations: a proper noun that is actually
+    misspelled in the reference deck is learned as correct. That is the same
+    trade the whole tool makes -- the reference deck is treated as ground truth --
+    and TY-009 ships disabled in any case.
+    """
+    words: set[str] = set()
+    for forms in groups.values():
+        for form in forms.values():
+            for word in form.text.split():
+                cleaned = clean_term(word)
+                if len(cleaned) < 3 or cleaned.isupper():
+                    continue
+                if not is_common_word(cleaned):
+                    words.add(cleaned)
+    return sorted(words)
 
 
 def _drop_subsumed(

@@ -161,7 +161,7 @@ def _derive_one(
         brand=brand.profile,
         layout=layout.profile,
         typography=typography.profile,
-        hygiene=HygieneProfile(),
+        hygiene=HygieneProfile(dictionary=list(terms.vocabulary)),
         rules=RulesProfile(disabled=list(DEFAULT_DISABLED_RULES)),
     )
 

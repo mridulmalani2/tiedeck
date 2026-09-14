@@ -254,10 +254,17 @@ def _widen_role(current: FontRole, incoming: FontRole) -> FontRole | None:
     Only ever widens. A band that shrank because the second deck happened not to
     use the extremes would fail the first deck, which is exactly the silent
     narrowing section 8.6 forbids.
+
+    The test is whether the current role already *permits* the incoming sizes,
+    not whether the two endpoint sets overlap. A band stores its endpoints rather
+    than its members, so comparing sets reports a 10-14pt band as needing to
+    widen for an 11-12pt one and records a change that changes nothing.
     """
     current_values = _role_values(current)
     incoming_values = _role_values(incoming)
-    if not incoming_values or incoming_values <= current_values:
+    if not incoming_values:
+        return None
+    if all(current.permits(value) for value in incoming_values):
         return None
     union = sorted(current_values | incoming_values)
 

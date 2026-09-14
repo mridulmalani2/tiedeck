@@ -7,6 +7,10 @@ breaks somebody's script, so the key set is fixed and additive.
 ``unchecked`` and ``rules_skipped`` are top-level rather than buried, for the
 same reason they lead the console footer: a consumer must be able to tell a clean
 deck from an unexamined one.
+
+Findings are sorted here rather than relying on the caller. The engine already
+sorts, but a consumer parsing the document has only the document to go on, so the
+ordering the schema promises is made true at the point of serialisation.
 """
 
 from __future__ import annotations
@@ -32,7 +36,10 @@ def build(result: AuditResult) -> dict[str, Any]:
         "generated_at": result.generated_at,
         "slide_count": result.slide_count,
         "summary": result.summary,
-        "findings": [_finding(finding) for finding in result.findings],
+        "findings": [
+            _finding(finding)
+            for finding in sorted(result.findings, key=lambda f: f.sort_key)
+        ],
         "unchecked": [
             {
                 "rule_id": entry.rule_id,
@@ -47,7 +54,10 @@ def build(result: AuditResult) -> dict[str, Any]:
             for entry in result.rules_skipped
         ],
         "rules_run": list(result.rules_run),
-        "suppressed": [_finding(finding) for finding in result.suppressed],
+        "suppressed": [
+            _finding(finding)
+            for finding in sorted(result.suppressed, key=lambda f: f.sort_key)
+        ],
     }
 
 
