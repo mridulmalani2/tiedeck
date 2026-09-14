@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Generated fixtures and reports -- never commit binary .pptx
+*.pptx
+*.potx
+*.ppsx
+!tests/**/*.spec.yaml
+tieout-report.html
+tieout-report.json
+
+# Learned profiles are user data; the shipped default is force-added
+profiles/*.yaml
+profiles/*.suppress.yaml
+!profiles/default.yaml
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
