@@ -631,10 +631,13 @@ class _DeckBuilder:
                 paragraph = (
                     frame.paragraphs[0] if order == 0 else frame.add_paragraph()
                 )
-                body_text = text
+                # Curl the quotes first, then seed the defects. Seeding a straight
+                # apostrophe before the quote pass would have the generator curl
+                # its own defect away, which is exactly what happened.
+                body_text = self._curly(text)
                 emphasis = column_count >= 3 and order == 0
                 if self.defect_on("TY-001", slide_spec.index) and order == 0:
-                    body_text = body_text + " the company's position"
+                    body_text = body_text + " against the company's position"
                 if self.defect_on("TY-002", slide_spec.index) and order == 0:
                     body_text = body_text.replace(" ", "  ", 1) + " ."
                 if self.defect_on("TY-003", slide_spec.index) and order == 0:
@@ -657,7 +660,7 @@ class _DeckBuilder:
                 )
                 self._write_paragraph(
                     paragraph,
-                    self._curly(body_text),
+                    body_text,
                     font,
                     bullet_char=None if emphasis else "\u2013",
                 )

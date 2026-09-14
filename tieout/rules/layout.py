@@ -549,24 +549,48 @@ def _normalised_key(text: str) -> str:
 
 def _recurring_index(
     entries: list[RecurringElement],
-) -> dict[tuple[str, str], RecurringElement]:
-    """Index recurring entries by the kind of identity they carry.
+) -> dict[tuple[str, str, str], RecurringElement]:
+    """Index recurring entries by identity kind, name and archetype.
 
     The learning engine qualifies a key as ``name:footnote`` or
     ``placeholder:title``, because a shape called "Title" and a shape occupying
-    the title placeholder are different claims. An unqualified key is indexed
-    under both kinds so a hand-written profile still works.
+    the title placeholder are different claims.
+
+    The archetype has to be part of the key. A title sits at one position on
+    content slides and another on section dividers, so the profile carries
+    several entries under ``placeholder:title``; indexing on the name alone kept
+    whichever came last and left every other archetype's title silently
+    unchecked.
+
+    An entry with no archetypes is indexed under ``""`` and used as the fallback
+    for any archetype without a specific entry.
     """
-    out: dict[tuple[str, str], RecurringElement] = {}
+    out: dict[tuple[str, str, str], RecurringElement] = {}
     for entry in entries:
         kind, separator, rest = entry.key.partition(":")
+        kinds: tuple[tuple[str, str], ...]
         if separator and kind in ("name", "placeholder"):
-            out[(kind, _normalised_key(rest))] = entry
+            kinds = ((kind, _normalised_key(rest)),)
         else:
             normalised = _normalised_key(entry.key)
-            out.setdefault(("name", normalised), entry)
-            out.setdefault(("placeholder", normalised), entry)
+            kinds = (("name", normalised), ("placeholder", normalised))
+        archetypes = entry.archetypes or [""]
+        for identity_kind, name in kinds:
+            for archetype in archetypes:
+                out.setdefault((identity_kind, name, archetype), entry)
     return out
+
+
+def _lookup_recurring(
+    index: dict[tuple[str, str, str], RecurringElement],
+    kind: str,
+    name: str,
+    archetype: str,
+) -> RecurringElement | None:
+    """The entry for this archetype, else an archetype-agnostic one."""
+    return index.get((kind, _normalised_key(name), archetype)) or index.get(
+        (kind, _normalised_key(name), "")
+    )
 
 
 @register
@@ -595,19 +619,19 @@ class RecurringElementDisplaced(Rule):
     requires: ClassVar[tuple[str, ...]] = ("layout.recurring",)
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
-        by_key = _recurring_index(profile.layout.recurring)
+        index = _recurring_index(profile.layout.recurring)
         findings: list[Finding] = []
 
         for slide in deck.slides:
             for shape in slide.leaf_shapes():
-                entry = by_key.get(("name", _normalised_key(shape.ref.name)))
+                entry = _lookup_recurring(
+                    index, "name", shape.ref.name, slide.archetype
+                )
                 if entry is None and shape.placeholder_type:
-                    entry = by_key.get(
-                        ("placeholder", _normalised_key(shape.placeholder_type))
+                    entry = _lookup_recurring(
+                        index, "placeholder", shape.placeholder_type, slide.archetype
                     )
                 if entry is None:
-                    continue
-                if entry.archetypes and slide.archetype not in entry.archetypes:
                     continue
                 drift = _positional_drift(shape, entry.box_pt)
                 if drift is None:
