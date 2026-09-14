@@ -1,0 +1,63 @@
+name: CI
+
+# Runs the three commands the README documents as the local gate, so what a
+# contributor checks before pushing is exactly what CI checks after.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # LO-006 measures text overflow against the real font file and records the
+      # shape as unchecked when it cannot resolve one. Without Liberation
+      # installed the rule would pass by declining to measure anything, so the
+      # overflow path would be green in CI while never actually running.
+      - name: Install the metric-compatible fonts LO-006 measures with
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-liberation
+          fc-list | grep -qi liberation
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Types
+        run: python -m mypy
+
+      - name: Tests
+        run: python -m pytest -q --cov=tieout --cov-report=term-missing
+
+      # Section 12: fixtures are generated, never committed. A binary deck in
+      # the tree means a test is reading material nobody can review.
+      - name: No binary fixtures committed
+        run: |
+          if git ls-files -- '*.pptx' '*.potx' '*.ppsx' | grep .; then
+            echo "::error::binary PowerPoint fixtures are committed; they must be generated"
+            exit 1
+          fi

@@ -597,6 +597,12 @@ TieOut measures.
 
 All fixtures are generated; no binary `.pptx` is committed.
 
+CI runs exactly these three commands on Python 3.11 and 3.12, so what you check
+before pushing is what CI checks after. It also installs Liberation fonts — LO-006
+records a shape as `unchecked` when it cannot resolve the real font file, so
+without them the overflow path would be green in CI while never running — and
+fails the build if a binary `.pptx` is ever committed.
+
 ### The tests that matter
 
 - **`test_learn_roundtrip.py`** gates everything. It builds the reference deck
