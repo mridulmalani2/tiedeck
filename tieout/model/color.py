@@ -43,6 +43,10 @@ class Rgb:
     def hex(self) -> str:
         return f"#{self.r:02X}{self.g:02X}{self.b:02X}"
 
+    def as_tuple(self) -> tuple[int, int, int]:
+        """Channels as a plain tuple, for Pillow and other byte-oriented APIs."""
+        return (self.r, self.g, self.b)
+
     @property
     def relative_luminance(self) -> float:
         """WCAG relative luminance, used to decide whether a background is dark."""
