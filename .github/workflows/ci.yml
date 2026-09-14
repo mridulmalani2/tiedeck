@@ -41,6 +41,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends fonts-liberation
           fc-list | grep -qi liberation
 
+      # [dev] carries the SDK so mypy can check the review layer's transport
+      # against real types and so its tests can stub it out. Nothing in CI makes
+      # a request: there is no key, and tests/test_review_client.py patches the
+      # module out.
       - name: Install
         run: python -m pip install -e ".[dev]"
 
@@ -51,7 +55,22 @@ jobs:
         run: python -m mypy
 
       - name: Tests
-        run: python -m pytest -q --cov=tieout --cov-report=term-missing
+        run: python -m pytest -q --cov=tieout --cov=tieout_review --cov-report=term-missing
+
+      # The air-gap promise is structural, so it is worth asserting separately
+      # from the suite: a failure here is the one that must never be merged.
+      - name: The core cannot reach a network
+        run: python -m pytest -q tests/test_no_network.py tests/test_review_airgap.py
+
+      # No key is configured for CI. If a test ever starts needing one, that is
+      # a test that would make a paid request on every push, and it should fail
+      # loudly here rather than quietly start billing.
+      - name: No API key is present
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::CI must not hold an API key"
+            exit 1
+          fi
 
       # Section 12: fixtures are generated, never committed. A binary deck in
       # the tree means a test is reading material nobody can review.

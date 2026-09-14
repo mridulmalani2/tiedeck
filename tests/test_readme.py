@@ -27,6 +27,19 @@ def readme() -> str:
     return README.read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def catalogue(readme: str) -> str:
+    """Just the deterministic rule catalogue.
+
+    The optional semantic layer documents its own table of SE-nnn rules further
+    down, and those are not in the registry. Scoping keeps each table asserted
+    against the right source of truth instead of one test failing on the other's
+    rows.
+    """
+    after = readme.split("## The rule catalogue", 1)[1]
+    return after.split("## Optional: semantic review", 1)[0]
+
+
 def test_the_readme_exists_and_is_substantial(readme):
     assert len(readme) > 10_000, "section 14 asks for a genuinely documented tool"
 
@@ -42,8 +55,8 @@ def test_the_readme_covers_the_sections_section_14_requires(readme):
         assert heading in readme, f"missing {heading}"
 
 
-def test_every_rule_appears_in_the_rule_table(readme):
-    documented = set(re.findall(r"^\| \*\*([A-Z]{2}-\d{3})\*\*", readme, re.MULTILINE))
+def test_every_rule_appears_in_the_rule_table(catalogue):
+    documented = set(re.findall(r"^\| \*\*([A-Z]{2}-\d{3})\*\*", catalogue, re.MULTILINE))
     registered = set(load_all_rules())
     assert documented == registered, (
         f"undocumented: {sorted(registered - documented)}; "
@@ -51,11 +64,11 @@ def test_every_rule_appears_in_the_rule_table(readme):
     )
 
 
-def test_the_rule_table_states_each_severity_correctly(readme):
+def test_the_rule_table_states_each_severity_correctly(catalogue):
     rows = dict(
         re.findall(
             r"^\| \*\*([A-Z]{2}-\d{3})\*\* \| (blocker|major|minor|info) \|",
-            readme,
+            catalogue,
             re.MULTILINE,
         )
     )
@@ -68,11 +81,11 @@ def test_the_rule_table_states_each_severity_correctly(readme):
     assert not wrong, f"severity mismatches (documented, actual): {wrong}"
 
 
-def test_the_rule_table_marks_the_off_by_default_rules(readme):
+def test_the_rule_table_marks_the_off_by_default_rules(catalogue):
     rows = dict(
         re.findall(
             r"^\| \*\*([A-Z]{2}-\d{3})\*\* \| \w+ \| (\*\*off\*\*|on) \|",
-            readme,
+            catalogue,
             re.MULTILINE,
         )
     )
@@ -82,6 +95,38 @@ def test_the_rule_table_marks_the_off_by_default_rules(readme):
         assert documented == expected, (
             f"{rule_id} is documented as {documented} but ships {expected}"
         )
+
+
+def test_the_semantic_rules_are_documented_exactly_as_they_ship(readme):
+    """The optional layer's table has the same duty as the catalogue above it."""
+    from tieout_review.review import SEMANTIC_RULES
+
+    section = readme.split("## Optional: semantic review", 1)[1]
+    rows = dict(
+        re.findall(
+            r"^\| \*\*(SE-\d{3})\*\* \| (blocker|major|minor|info) \|",
+            section,
+            re.MULTILINE,
+        )
+    )
+    assert set(rows) == set(SEMANTIC_RULES), "the semantic table has drifted"
+    for rule_id, severity in rows.items():
+        assert severity == SEMANTIC_RULES[rule_id].severity, rule_id
+
+
+def test_the_readme_states_that_semantic_findings_do_not_gate(readme):
+    """The property someone adding this to a pipeline most needs to know."""
+    # Normalised, because the README is hard-wrapped and the phrase straddles a
+    # line break.
+    section = " ".join(readme.split("## Optional: semantic review", 1)[1].split())
+    assert "a semantic finding never drives the exit code" in section
+
+
+def test_the_air_gap_qualification_is_next_to_the_air_gap_promise(readme):
+    """A promise stated without its one exception is a promise that misleads."""
+    header = readme.split("## Contents", 1)[0]
+    assert "tieout-review" in header
+    assert "separate package installed separately" in header
 
 
 def test_the_rule_counts_per_category_are_stated_correctly(readme):

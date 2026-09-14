@@ -49,6 +49,10 @@ FORBIDDEN_MODULES = frozenset(
         "websockets",
         "paramiko",
         "pycurl",
+        # The optional review layer. It is a separate top-level package for
+        # exactly this reason: a core module importing it would make this walk a
+        # statement about an import guard rather than about the code.
+        "tieout_review",
     }
 )
 
@@ -145,27 +149,33 @@ def test_none_of_the_forbidden_modules_is_loaded_by_importing_the_package():
     """Belt and braces on the AST walk: importing everything must not pull in a
     network stack transitively through a dependency either.
 
-    ``ssl`` and ``http`` are excluded from this check because the standard
-    library loads them eagerly in some environments regardless of what the
-    package imports; the AST walk above is what proves TieOut does not use them.
+    Run in a fresh interpreter, which is the only way the assertion means what
+    it says: in this one, a sibling test has already imported the optional
+    review layer, and ``sys.modules`` would show it regardless of what ``tieout``
+    does.
+
+    ``ssl`` and ``http`` are excluded because the standard library loads them
+    eagerly in some environments regardless of what the package imports; the AST
+    walk above is what proves TieOut does not use them.
     """
+    import subprocess
     import sys
 
-    from tieout.rules.base import load_all_rules
-
-    load_all_rules()
-    import tieout.cli
-    import tieout.fixtures.generator
-    import tieout.learn
-    import tieout.report.html  # noqa: F401
-
     tolerated = {"ssl", "http", "socket", "urllib", "asyncio", "google"}
-    loaded = {
-        name
-        for name in FORBIDDEN_MODULES - tolerated
-        if name in sys.modules
-    }
-    assert not loaded, f"importing tieout loaded {sorted(loaded)}"
+    watched = sorted(FORBIDDEN_MODULES - tolerated)
+    program = (
+        "import sys\n"
+        "from tieout.rules.base import load_all_rules\n"
+        "load_all_rules()\n"
+        "import tieout.cli, tieout.fixtures.generator, tieout.learn, tieout.report.html\n"
+        f"watched = {watched!r}\n"
+        "print(','.join(name for name in watched if name in sys.modules))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, check=True
+    )
+    loaded = [name for name in result.stdout.strip().split(",") if name]
+    assert not loaded, f"importing tieout loaded {loaded}"
 
 
 def test_the_html_report_has_no_external_references(clean_deck, reference_profile):

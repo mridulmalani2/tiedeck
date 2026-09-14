@@ -38,6 +38,16 @@ CATEGORIES: Final[tuple[str, ...]] = (
     "consistency",
 )
 
+#: Categories whose findings are reported but do not drive the exit code.
+#:
+#: No rule in this package produces one — ``semantic`` belongs to the optional
+#: ``tieout_review`` layer, whose findings come from a language model rather than
+#: from arithmetic. They are worth reading and are not worth failing a build on
+#: unasked, because a probabilistic finding gating a deterministic gate would
+#: make the exit code mean something different from one run to the next. The
+#: constant lives here so the contract is stated once, next to ``exceeds``.
+NON_GATING_CATEGORIES: Final[frozenset[str]] = frozenset({"semantic"})
+
 #: Ordering for report grouping and for ``--fail-on`` comparisons.
 SEVERITY_ORDER: Final[dict[str, int]] = {
     "blocker": 0,
@@ -370,10 +380,19 @@ class AuditResult:
             return None
         return min(self.findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 9)).severity
 
-    def exceeds(self, threshold: str) -> bool:
-        """Whether any finding is at or above ``threshold``. Drives the exit code."""
+    def exceeds(self, threshold: str, *, include_non_gating: bool = False) -> bool:
+        """Whether any finding is at or above ``threshold``. Drives the exit code.
+
+        Findings in :data:`NON_GATING_CATEGORIES` are excluded unless the caller
+        opts in, so adding the optional semantic layer to a run cannot change
+        what an existing gate does.
+        """
         limit = SEVERITY_ORDER.get(threshold, 0)
-        return any(SEVERITY_ORDER.get(f.severity, 9) <= limit for f in self.findings)
+        return any(
+            SEVERITY_ORDER.get(f.severity, 9) <= limit
+            and (include_non_gating or f.category not in NON_GATING_CATEGORIES)
+            for f in self.findings
+        )
 
 
 def run_rules(

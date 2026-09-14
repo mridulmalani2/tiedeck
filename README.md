@@ -22,6 +22,14 @@ air-gapped, and `tests/test_no_network.py` walks the abstract syntax tree of
 every runtime module to keep it that way — the guarantee is structural, not a
 claim about one code path.
 
+There is an optional semantic layer, `tieout-review`, which does call a model.
+It is a **separate package installed separately** precisely so the sentence
+above stays true of `tieout` itself rather than becoming a claim about an import
+guard: the walk treats `tieout_review` as a forbidden import, so a core module
+reaching for it is a test failure. Every identifying term is replaced before
+anything leaves the machine, and nothing is sent while the redaction has items
+outstanding. See [Optional: semantic review](#optional-semantic-review).
+
 ---
 
 ## Contents
@@ -31,6 +39,7 @@ claim about one code path.
 - [How derivation works](#how-derivation-works)
 - [The profile](#the-profile)
 - [The rule catalogue](#the-rule-catalogue)
+- [Optional: semantic review](#optional-semantic-review)
 - [Command reference](#command-reference)
 - [Known limitations](#known-limitations)
 - [Development](#development)
@@ -48,7 +57,18 @@ python3 -m venv .venv
 
 That puts `tieout` on the path. Nine runtime dependencies, all of them local:
 `python-pptx`, `lxml`, `pydantic`, `typer`, `rich`, `jinja2`, `Pillow`,
-`pyyaml`, `ruamel.yaml`.
+`pyyaml`, `ruamel.yaml`. None of them can open a socket.
+
+The optional semantic layer is a separate install and adds exactly one
+dependency, the Anthropic SDK:
+
+```bash
+.venv/bin/python -m pip install -e ".[review]"
+```
+
+That puts `tieout-review` on the path as a second command. Install it and
+`tieout` is unchanged: it still has no way to reach a network, and the test that
+proves that treats the review package as a forbidden import.
 
 ---
 
@@ -504,6 +524,169 @@ BR-002 has been accepted 3 times. It is probably miscalibrated. Fold the evidenc
 
 ---
 
+## Optional: semantic review
+
+Everything above is deterministic and offline. This is neither, which is why it
+is a separate package and a separate command.
+
+### Why it exists at all
+
+TieOut's own consistency rules compare labelled figures between tables
+arithmetically: `CO-001` catches the same figure stated two ways, `CO-002` a
+factor-of-a-thousand unit error, `CO-003` a total that does not sum. What they
+cannot do is read. A headline claiming 20% growth over a table showing 8% is a
+sentence, not a sum, and no amount of parsing gets there.
+
+So the deterministic layer was built first, and deliberately. Every question it
+can answer is one the model never needs to see, which is the cheapest possible
+way to keep material out of a third party's hands.
+
+### The bargain
+
+The model may see the figures. It may not see whose they are.
+
+```bash
+tieout-review redact deck.pptx --client acme --forbid "Meridian Capital,Project Atlas"
+```
+
+`redact` needs no key, makes no request, and prints exactly what would be sent.
+Run it first.
+
+```console
+$ tieout-review redact decks/reference_clean.pptx --client demo \
+    --forbid "Ashcombe Partners,Project Meridian"
+
+10 term(s) redacted across 12,262 characters from 26 slides.
+redacted
+ placeholder    kind       uses  original                            from
+ ─────────────────────────────────────────────────────────────────────────────────────
+ [CODENAME_1]   codename      1  Meridian                            detected:codename
+ [COMPANY_1]    company       1  Ravensworth Group                   detected:company
+ [TERM_1]       custom        1  Project Meridian                    blocklist
+ [TERM_2]       custom       23  Ashcombe Partners                   blocklist
+ [TERM_3]       custom       25  Strictly Private and Confidential   profile:brand.footer.boilerplate
+ [TERM_4]       custom        1  Halloway                            profile:hygiene.dictionary
+ ...
+
+term list assembled from:
+  blocklist                         2 custom term(s)
+  profile:brand.footer.boilerplate  1 custom term(s)
+  profile:client                    1 company term(s)
+  profile:hygiene.dictionary        7 custom term(s)
+
+could not be cleared (2)
+ line  uses  text              why
+ ──────────────────────────────────────────────────────────────────────────────
+   98     1  Bodoni Sixtysix   a capitalised phrase containing a word that is
+                               not ordinary English
+  145     1  TBD Pre-tax       a capitalised phrase containing a word that is
+                               not ordinary English
+
+Each of these is a judgement only you can make. Add the ones that identify
+someone to --forbid and run again; pass --yes once the list is one you are
+content to send.
+```
+
+What went out of that 26-slide deck is the figures — `1,908`, `18.4%`,
+`(42)` — and the argument around them with every name replaced. What a
+contradiction then reads like on the way back:
+
+> `[COMPANY_1]` margin is 15.6% on slide 4 and 15.8% on slide 12
+
+which is a finding. Whose margin it is, the model never knew. The report you
+read says "Ravensworth Group", because the placeholders are restored locally
+after the answer arrives; the mapping is never transmitted.
+
+### Where the terms come from
+
+Four sources, in descending order of how much you control them.
+
+| Source | What it contributes |
+|---|---|
+| `--forbid "a,b,c"` or `--forbid-file` | Whatever you type. Semicolons and newlines work as separators too, so a list pasted out of a spreadsheet lands correctly. |
+| The client's profile | `client`, `hygiene.dictionary` (the proper nouns the learner already wrote down so `TY-009` would not flag them), `brand.footer.boilerplate` (a confidentiality line usually names the firm). |
+| `docProps` | `creator`, `lastModifiedBy`, `Company`, `Manager`, `title`, `subject`, `keywords`, comment authors. `HY-004` reports two of those as a hygiene defect; here all of them are evidence. On the reference deck, `docProps/core.xml` carries the project codename in its title field — which no hygiene rule looks at. |
+| The presets | Pattern detectors for what nobody can enumerate in advance: emails, phone numbers, URLs and bare hosts, local file paths, tickers with an exchange prefix, addresses and postcodes, company names carrying a legal or quasi-legal suffix, project codenames, and names adjacent to a role or an honorific. |
+
+Two things the profile deliberately does **not** contribute.
+`typography.canon_terms` records how to spell a term, not who it belongs to —
+an early version pulled it in and removed "EBITDA" from the payload, which
+deletes the one thing the model was shown the deck to reason about. And an
+entry in `hygiene.dictionary` that is ordinary English ("Pre-tax", "run-rate")
+is skipped for the same reason: it strips meaning for no privacy gain.
+
+Detected names are also harvested as **short forms**, because the suffix is what
+lets a detector recognise a name and the deck then uses the bare head
+everywhere else. "Calderwood Holdings" on the cover makes "Calderwood" a term,
+so the three table headers that use it bare are redacted too.
+
+### Fail closed
+
+The residual list is the control, and it is enforced structurally rather than by
+convention. There is no function that takes a deck and returns findings, because
+such a function would have to decide on its own that a payload was safe:
+
+```python
+prepared = prepare(deck, profile, forbidden=[...])   # offline, no key
+prepared.plan.is_clear                               # or read the residuals
+outcome = send(prepared.approve(), client)           # refuses otherwise
+```
+
+`send` refuses a payload with residuals outstanding, and then independently
+re-verifies that every literal term it was given is absent from the outgoing
+text. Two people would have to be wrong for a client name to leave the
+building: whoever wrote the detectors, and whoever approved a list they had
+read. A term surviving into the payload raises `RedactionFailed`, which is a bug
+report rather than a user error, and nothing is sent.
+
+Residuals are deliberately over-eager. Clearing one is a judgement, so it
+persists: pass it to `--forbid` if it identifies someone, or to the profile's
+allowlist if it does not.
+
+### The questions it asks
+
+Six, and the list is short on purpose. A model asked to "review the deck"
+returns opinions, and opinions in a QA report train people to skim it.
+
+| Rule | Severity | What it looks for |
+|---|---|---|
+| **SE-001** | major | A statement in prose contradicts the figures it describes |
+| **SE-002** | minor | A quantified claim no figure in the deck supports |
+| **SE-003** | major | Period or unit drift between two statements of the same measure |
+| **SE-004** | minor | A footnote marker with no matching footnote, or the reverse |
+| **SE-005** | minor | An enumeration that does not match its own count |
+| **SE-006** | minor | A defined measure used inconsistently |
+
+They arrive in a `semantic` category, and **a semantic finding never drives the
+exit code.** A probabilistic finding gating a deterministic gate would make the
+exit code mean something different from one run to the next, so adding this
+layer to an existing pipeline cannot fail a build that used to pass. Ask for it
+with `--fail-on-semantic` if you want it.
+
+Every finding has to quote the text it is about and, where it is a
+contradiction, the text it contradicts. One that quotes nothing, cites a slide
+the deck does not have, or names a rule that does not exist is discarded — and
+counted, so a prompt that needs fixing does not hide.
+
+### Running it
+
+```bash
+export ANTHROPIC_API_KEY=...
+tieout-review check deck.pptx --client acme --forbid "Meridian Capital" --format html --out report.html
+```
+
+`check` runs the full deterministic audit *and* the semantic pass and merges
+them into one report, so there is one thing to read. The key is read from the
+environment by the SDK, which means this code never sees it: it is not written
+to a profile, a report or a cache, and the one object that can hold one
+suppresses it from its own `repr`.
+
+The payload for a 26-slide deck is about 12,000 characters, so it is one
+request. Model: `claude-opus-5`, adaptive thinking, with the response shape
+enforced as a JSON schema rather than only asked for in the prompt.
+
+---
+
 ## Command reference
 
 ```
@@ -522,6 +705,28 @@ tieout profile show --client NAME
 tieout profile lock --client NAME --field brand.logo.per_archetype.content
 tieout scaffold-reference --out DIR [--spec PATH] [--clean-only]
 ```
+
+The optional semantic layer, installed separately and a separate command:
+
+```
+tieout-review redact DECK [--client NAME] [--profile PATH]
+                          [--forbid "a,b,c"] [--forbid-file PATH]
+                          [--include-notes] [--show-payload]
+
+tieout-review check  DECK [--client NAME] [--profile PATH]
+                          [--forbid "a,b,c"] [--forbid-file PATH] [--yes]
+                          [--include-notes] [--model NAME]
+                          [--format table|json|html] [--out PATH]
+                          [--fail-on SEVERITY] [--fail-on-semantic] [--quiet]
+```
+
+`redact` exits `1` when something could not be cleared, so it scripts as a
+pre-flight check. `check` refuses to send in that case unless `--yes` is passed,
+and exits `2` rather than proceeding. Its diagnostic summary goes to stderr, so
+`--format json` on stdout stays parseable.
+
+Speaker notes are excluded from the payload unless `--include-notes` is passed.
+They are where the price and the walk-away number live.
 
 **Exit codes.** `0` nothing at or above `--fail-on`; `1` findings at or above it;
 `2` the run itself failed. A gate that cannot distinguish the last two will
@@ -543,12 +748,38 @@ fetched at view time, with the provenance of every finding shown inline.
 Stated plainly, because a QA tool that overstates its coverage is worse than one
 that admits its edges.
 
-**No semantic or argument-level review.** This is the mechanical layer only.
+**No semantic or argument-level review in the core tool.** `tieout` itself is
+the mechanical layer only. There is an
+[optional semantic layer](#optional-semantic-review), separately installed, that
+does read — but it reads a redacted payload, its findings never drive the exit
+code, and it has no view on whether the valuation is defensible either.
+
 TieOut will tell you the logo is 18pt out of place, the EBITDA column mixes
 decimal places, and that a figure stated twice disagrees with itself — but the
 last of those is arithmetic, not comprehension. It has no view on whether the
 valuation is defensible, whether the chart supports the headline above it, or
 whether the story works. Nothing here substitutes for reading the deck.
+
+**The semantic layer cannot redact a name made of ordinary English words.**
+"Northern Trust", "General Electric" and "Meridian" are invisible to every rule
+in `tieout_review.patterns` unless they carry a legal suffix, a role, an
+honorific or a codename marker — which is why `--forbid` exists, why the
+residual list is over-eager, and why nothing is sent until a person has read it.
+Where a detected name reduces to an ordinary word, the bare form is reported as
+a residual rather than either leaked or blanket-substituted. The failure mode to
+be honest about is a one-word invented name that is also a dictionary word,
+appearing only in places no detector fires: the blocklist is the only thing that
+catches it.
+
+**Merging a name's spellings can merge two companies.** The redactor gives
+"Meridian Capital Partners LLP", "Meridian Capital" and "Meridian" one
+placeholder, so the model can see that a margin quoted under one is the same
+company as a margin quoted under another. The rule is narrow — whole-word
+prefix, same kind — and it can still be wrong: "First Capital" and "First
+Capital Partners of Texas LLC" need not be related. That error is visible (you
+restore the real names and see two companies); the opposite error, splitting one
+company across three placeholders, is a silent miss, and a miss is worse for a
+tool whose job is to find things.
 
 **Consistency findings compare labels, and two tables can mean different things
 by one label.** CO-001 and CO-002 key a figure on its (row label, column header)
@@ -629,8 +860,8 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 684 tests
-.venv/bin/python -m pytest --cov=tieout # coverage, floor 85%
+.venv/bin/python -m pytest              # 950 tests
+.venv/bin/python -m pytest --cov=tieout --cov=tieout_review   # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
 ```
@@ -677,6 +908,26 @@ report/     console, json_out, html
 fixtures/   spec + generator
 ```
 
+The optional layer is a second top-level package, which is the whole of how the
+air-gap guarantee survives its existence:
+
+```
+tieout_review/
+  patterns.py  regex detectors for identifying text; no dependencies
+  redact.py    the boundary: harvest, replace, verify, residuals, restore
+  terms.py     assembling the term list from blocklist, profile and docProps
+  extract.py   deck -> the smallest payload that can answer the question
+  review.py    prepare -> hold -> send -> parse; the fail-closed sequence
+  client.py    the only module in this repository that imports an HTTP client
+  cli.py       tieout-review
+```
+
+`tests/test_review_airgap.py` asserts that shape rather than trusting it: no
+module in `tieout` may import `tieout_review`, no module in `tieout_review`
+except `client.py` may import anything network-capable, `redact.py` may import
+nothing but the standard library and `tieout`, and importing either package must
+not load the SDK.
+
 Rules read the resolved model and nothing else. If a rule needs something the
 model does not expose, the model gets extended — without that boundary every rule
 reimplements inheritance slightly differently and the tool quietly disagrees with
@@ -693,43 +944,50 @@ Recorded for review rather than buried:
    specification: the deck's own tables are enough to catch a figure that
    disagrees with itself, which is the defect a banker most wants caught and the
    one no amount of formatting discipline surfaces.
-2. **Five modules not in section 4's file list**: `model/color.py` (Delta-E is
+2. **An optional semantic layer the specification does not mention.** Section 2
+   forbids LLM calls and network access, and `tieout` still honours that
+   absolutely. `tieout_review` is additive: a separate package, a separate
+   install, a separate command, and a forbidden import as far as the air-gap
+   walk is concerned. The deterministic consistency rules were built first
+   specifically so that the questions a model gets asked are only the ones
+   arithmetic cannot answer.
+3. **Five modules not in section 4's file list**: `model/color.py` (Delta-E is
    required throughout and needs a home), `model/furniture.py` (logo, footer and
    text-role identification, shared by the learner and the rules so the two
    cannot disagree), `cluster.py` and `text.py` (shared primitives the rules must
    reach without importing the learning engine), and `fixtures/spec.py` (the
    declarative specification the generator builds from, which section 11 requires
    as a file).
-3. **A ceiling on the palette tolerance.** Section 8.3 derives it as half the
+4. **A ceiling on the palette tolerance.** Section 8.3 derives it as half the
    minimum inter-cluster distance, floored at 2.0. With a well-separated
    four-colour palette that yields ~16 Delta-E, wide enough for a visibly wrong
    colour to pass, so a ceiling of 6.0 is applied and recorded in the profile's
    provenance.
-4. **LO-003 fires only against a learned grid line.** A literal "any two edges
+5. **LO-003 fires only against a learned grid line.** A literal "any two edges
    0.5–4pt apart" reading produces dozens of false positives per deck. Section 8.3
    resolves it — "a shape 3pt off a real grid line is a defect while a shape 3pt
    off a one-off edge is not" — and that is what is implemented.
-5. **Provenance is written twice**, as `why:` comments and as a generated
+6. **Provenance is written twice**, as `why:` comments and as a generated
    `provenance` block. The single-copy design was built first and abandoned: YAML
    attaches a leading comment to the preceding sibling key, so recovering notes
    from comments mis-assigned them across section boundaries and a finding about
    the grid cited the margin derivation.
-6. **Hygiene questions are conditional on evidence.** Section 8.4 lists four
+7. **Hygiene questions are conditional on evidence.** Section 8.4 lists four
    settings to ask about with a default; asked unconditionally they fire on every
    deck, and section 14's requirement that a clean reference deck produce zero
    questions would be unachievable. They are asked only where the deck shows
    contrary evidence.
-7. **`p:defaultTextStyle` added to the inheritance chain** between the master's
+8. **`p:defaultTextStyle` added to the inheritance chain** between the master's
    text styles and the theme. It is genuinely part of PowerPoint's resolution —
    a plain text box inherits from it — and omitting it resolved every text box to
    the theme default size.
-8. **Margins are clamped to the tightest observed edge.** The 5th percentile
+9. **Margins are clamped to the tightest observed edge.** The 5th percentile
    exists to tolerate shapes outside the content frame, but every shape it
    tolerates is one LO-002 would then report on the deck the margin was learned
    from. The clamp makes the profile unable to fail its own reference deck.
-9. **`rules.enabled` added to the profile.** Without an opt-in list a rule with
+10. **`rules.enabled` added to the profile.** Without an opt-in list a rule with
    `default_enabled = False` could never be switched on at all.
-10. **`Rule.run(deck, profile)` keeps the specified signature**, with furniture
+11. **`Rule.run(deck, profile)` keeps the specified signature**, with furniture
     reached through a memoised helper and `unchecked` collected from the rule
     instance, rather than changing the signature to pass a context object.
 

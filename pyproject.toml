@@ -30,19 +30,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The optional semantic layer. Deliberately an extra: a core install has no way
+# to reach a network, and tests/test_no_network.py proves it by walking the
+# syntax tree of every module in `tieout`, which cannot import this package.
+review = [
+  "anthropic>=1.0",
+]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.6",
   "mypy>=1.11",
   "types-PyYAML>=6.0",
+  "anthropic>=1.0",
 ]
 
 [project.scripts]
 tieout = "tieout.cli:app"
+# A separate script rather than a `tieout review` subcommand, so that no module
+# in `tieout` imports the review layer and the air-gap walk stays a statement
+# about the code rather than about an import guard.
+tieout-review = "tieout_review.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["tieout"]
+packages = ["tieout", "tieout_review"]
 artifacts = ["tieout/report/templates/*.j2", "tieout/data/*.gz"]
 
 [tool.ruff]
@@ -87,7 +98,7 @@ strict = true
 warn_unreachable = true
 disallow_any_generics = true
 show_error_codes = true
-files = ["tieout", "tests"]
+files = ["tieout", "tieout_review", "tests"]
 # tests/ has no __init__.py, so without this mypy resolves conftest.py under two
 # module names and refuses to check anything.
 explicit_package_bases = true
@@ -114,7 +125,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["tieout"]
+source = ["tieout", "tieout_review"]
 omit = ["tieout/fixtures/*"]
 
 [tool.coverage.report]
