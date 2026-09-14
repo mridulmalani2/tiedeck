@@ -104,6 +104,11 @@ def _plural(count: int, singular: str) -> str:
 # --------------------------------------------------------------------------------------
 
 
+
+def _article(word: str) -> str:
+    """"a" or "an", so a generated message reads as English."""
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
 @register
 class QuoteStyle(Rule):
     """Quote and apostrophe glyphs that contradict the learned convention.
@@ -389,7 +394,8 @@ class TitleCapitalisation(Rule):
             if slide.archetype not in CONTENT_ARCHETYPES:
                 self.note_unchecked(
                     slide.index,
-                    f"a {slide.archetype} heading is a fixed document label rather "
+                    f"{_article(slide.archetype)} {slide.archetype} heading is a "
+                    f"fixed document label rather "
                     "than a prose headline",
                 )
                 continue

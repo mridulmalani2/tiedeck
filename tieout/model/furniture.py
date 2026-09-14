@@ -66,6 +66,26 @@ _PAGE_NUMBER_CANDIDATES: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"^\s*[Pp]age\s+(\d{1,3})\s+of\s+\d{1,3}\s*$"),
 )
 
+#: Shape-name fragments that identify a text role outright.
+#:
+#: A template names its furniture, and that name is better evidence of intent
+#: than the shape's current position. Position alone makes the role change when
+#: the shape moves: a footnote dragged up the slide stops being read as a
+#: footnote and its 7pt type is then reported as undersized body text, which is
+#: a confusing second finding about a defect already reported.
+_NAME_ROLE_HINTS: Final[tuple[tuple[str, str], ...]] = (
+    ("footnote", "footnote"),
+    ("foot note", "footnote"),
+    ("source", "footnote"),
+    ("disclaimer", "footnote"),
+    ("legal", "footnote"),
+    ("page number", "footnote"),
+    ("subtitle", "subtitle"),
+    ("sub-title", "subtitle"),
+    ("kicker", "subtitle"),
+    ("eyebrow", "subtitle"),
+)
+
 #: Text roles. ``footnote`` covers source lines, legal type and footer furniture,
 #: which all share one size in every house style encountered.
 ROLES: Final[tuple[str, ...]] = (
@@ -338,6 +358,10 @@ def font_role(
     slide, is treated as ``footnote``. Both are legal or source type in every
     house style, and the alternative -- folding 7pt legal copy into the body band
     -- widens that band until LO-007 permits anything.
+
+    A shape whose name names its role is believed ahead of its position, because
+    position alone makes the role change when the shape does. See
+    :data:`_NAME_ROLE_HINTS`.
     """
     if in_chart or shape.chart is not None:
         return "chart_label"
@@ -351,6 +375,10 @@ def font_role(
     if furniture is not None and furniture.is_furniture(slide.index, shape.ref.shape_id):
         return "footnote"
 
+    named = _role_from_name(shape.ref.name)
+    if named is not None:
+        return named
+
     if slide.archetype == "disclaimer":
         return "footnote"
 
@@ -362,6 +390,15 @@ def font_role(
         return "subtitle"
 
     return "body"
+
+
+def _role_from_name(name: str) -> str | None:
+    """A role stated by the shape's own name, if any."""
+    lowered = " ".join(name.split()).casefold()
+    for fragment, role in _NAME_ROLE_HINTS:
+        if fragment in lowered:
+            return role
+    return None
 
 
 def content_shapes(

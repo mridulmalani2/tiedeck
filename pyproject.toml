@@ -43,9 +43,7 @@ tieout = "tieout.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tieout"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"profiles/default.yaml" = "tieout/profiles_default/default.yaml"
+artifacts = ["tieout/report/templates/*.j2", "tieout/data/*.gz"]
 
 [tool.ruff]
 line-length = 100

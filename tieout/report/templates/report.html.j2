@@ -1,0 +1,383 @@
+{#
+  Single self-contained report. No CDN, no external fonts, no network of any
+  kind at render time or at view time -- the tool is specified to run air-gapped
+  and a report that phones home for a stylesheet breaks that promise in the one
+  artefact most likely to be emailed outside the firm.
+
+  Every slide gets a .thumb element with a fixed aspect box and data-bbox
+  attributes on each finding, so slide images and bounding-box overlays can be
+  added later by populating the box and reading the attributes. No template
+  logic needs to change to do it.
+#}
+<title>{{ result.client }} — {{ deck_name }} — tieout</title>
+<style>
+  :root {
+    --ink: #17181c;
+    --ink-soft: #5c6070;
+    --ink-faint: #8b90a0;
+    --paper: #ffffff;
+    --ground: #f5f6f8;
+    --line: #e2e4ea;
+    --line-soft: #eef0f4;
+    --blocker: #b4232a;
+    --major: #b26a00;
+    --minor: #1b6ea8;
+    --info: #6b7080;
+    --ok: #1f7a45;
+    --accent: #1f3864;
+    --radius: 6px;
+    --sidebar: 250px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e8eaef;
+      --ink-soft: #a8aebd;
+      --ink-faint: #787f90;
+      --paper: #1a1c21;
+      --ground: #13151a;
+      --line: #2c2f38;
+      --line-soft: #23262d;
+      --blocker: #ff6b6b;
+      --major: #e6a14a;
+      --minor: #68b6e8;
+      --info: #9aa0b0;
+      --ok: #58c98a;
+      --accent: #8fa9d8;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+    font-size: 0.92em;
+  }
+  a { color: inherit; }
+
+  .shell { display: flex; align-items: flex-start; gap: 0; min-height: 100vh; }
+
+  /* ---- sidebar ---- */
+  .sidebar {
+    width: var(--sidebar);
+    flex: 0 0 var(--sidebar);
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 20px 12px 32px 20px;
+    border-right: 1px solid var(--line);
+    background: var(--paper);
+  }
+  .brand { font-weight: 650; letter-spacing: -0.01em; margin-bottom: 2px; }
+  .brand-sub { color: var(--ink-faint); font-size: 12px; margin-bottom: 18px; }
+  .nav { display: flex; flex-direction: column; gap: 1px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 4px;
+    text-decoration: none; color: var(--ink-soft); font-size: 13px;
+  }
+  .nav-item:hover { background: var(--line-soft); color: var(--ink); }
+  .nav-item .n { width: 26px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .nav-item .arch { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item.is-clean .arch { color: var(--ink-faint); }
+  .counts { display: flex; gap: 3px; }
+  .dot {
+    min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+    font-size: 10.5px; line-height: 17px; text-align: center; font-weight: 600;
+    color: var(--paper);
+  }
+  .dot.blocker { background: var(--blocker); }
+  .dot.major { background: var(--major); }
+  .dot.minor { background: var(--minor); }
+  .dot.info { background: var(--info); }
+
+  /* ---- main ---- */
+  .main { flex: 1 1 auto; min-width: 0; padding: 24px 28px 72px; }
+  header.top { margin-bottom: 22px; }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: -0.015em; }
+  .meta { color: var(--ink-faint); font-size: 12.5px; }
+  .meta span + span::before { content: "·"; margin: 0 7px; }
+
+  .tally { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 4px; }
+  .tile {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 9px 13px; min-width: 92px;
+  }
+  .tile .v { font-size: 20px; font-weight: 640; font-variant-numeric: tabular-nums; }
+  .tile .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+             color: var(--ink-faint); }
+  .tile.blocker .v { color: var(--blocker); }
+  .tile.major .v { color: var(--major); }
+  .tile.minor .v { color: var(--minor); }
+  .tile.info .v { color: var(--info); }
+  .tile.clean .v { color: var(--ok); }
+
+  .slide {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: var(--radius); margin: 18px 0; overflow: hidden;
+  }
+  .slide > h2 {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    margin: 0; padding: 11px 15px; border-bottom: 1px solid var(--line-soft);
+    font-size: 14px; font-weight: 620;
+  }
+  .slide > h2 .arch {
+    font-weight: 400; font-size: 12px; color: var(--ink-faint);
+  }
+  .slide-body { display: flex; gap: 16px; padding: 15px; align-items: flex-start; }
+
+  /* Reserved for slide images; see the note at the top of this template. */
+  .thumb {
+    flex: 0 0 176px; width: 176px; aspect-ratio: 16 / 9;
+    border: 1px dashed var(--line); border-radius: 4px;
+    background: var(--ground); position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .thumb::after {
+    content: attr(data-placeholder); font-size: 10.5px; color: var(--ink-faint);
+    text-align: center; padding: 0 8px;
+  }
+  .findings { flex: 1 1 auto; min-width: 0; }
+
+  .finding {
+    display: grid;
+    grid-template-columns: 3px 62px 1fr;
+    gap: 0 11px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line-soft);
+  }
+  .finding:first-child { border-top: 0; padding-top: 0; }
+  .bar { border-radius: 2px; }
+  .finding.blocker .bar { background: var(--blocker); }
+  .finding.major .bar { background: var(--major); }
+  .finding.minor .bar { background: var(--minor); }
+  .finding.info .bar { background: var(--info); }
+  .rule { font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+  .rule .sev {
+    display: block; font-size: 10px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--ink-faint);
+  }
+  .msg { min-width: 0; }
+  .msg .headline { margin-bottom: 3px; }
+  .shape { color: var(--ink-faint); font-size: 12px; }
+  .delta {
+    margin-top: 5px; font-size: 12.5px;
+    display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap;
+  }
+  .delta .was { color: var(--blocker); }
+  .delta .arrow { color: var(--ink-faint); }
+  .delta .want { color: var(--ok); }
+  .why {
+    margin-top: 6px; padding: 6px 9px; border-left: 2px solid var(--line);
+    background: var(--ground); border-radius: 0 4px 4px 0;
+    font-size: 12px; color: var(--ink-soft);
+  }
+  .why b { font-weight: 600; color: var(--ink); }
+
+  .clean-note {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 26px; text-align: center;
+    color: var(--ok); font-weight: 600;
+  }
+  .clean-note small { display: block; font-weight: 400; color: var(--ink-faint);
+                      margin-top: 5px; }
+
+  details.block {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: var(--radius); margin: 14px 0; padding: 0;
+  }
+  details.block > summary {
+    padding: 11px 15px; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  details.block > summary::marker { color: var(--ink-faint); }
+  details.block .inner { padding: 0 15px 13px; }
+  .row {
+    display: grid; grid-template-columns: 70px 1fr; gap: 4px 11px;
+    padding: 6px 0; border-top: 1px solid var(--line-soft);
+    font-size: 12.5px;
+  }
+  .row:first-child { border-top: 0; }
+  .row .k { color: var(--ink-soft); font-weight: 600; }
+  .row .v { color: var(--ink-soft); min-width: 0; }
+  footer.foot {
+    margin-top: 26px; color: var(--ink-faint); font-size: 11.5px; line-height: 1.6;
+  }
+
+  @media (max-width: 900px) {
+    .shell { flex-direction: column; }
+    .sidebar {
+      width: 100%; flex: 1 1 auto; position: static; max-height: none;
+      border-right: 0; border-bottom: 1px solid var(--line); padding: 16px;
+    }
+    .nav { flex-direction: row; flex-wrap: wrap; gap: 5px; }
+    .nav-item { border: 1px solid var(--line); }
+    .main { padding: 18px 16px 56px; }
+    .slide-body { flex-direction: column; }
+    .thumb { flex: 1 1 auto; width: 100%; max-width: 320px; }
+  }
+  @media print {
+    .sidebar { display: none; }
+    .slide, details.block { break-inside: avoid; }
+    body { background: #fff; }
+  }
+</style>
+
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">tieout</div>
+    <div class="brand-sub">{{ result.client }} · profile v{{ result.profile_version }}</div>
+    <div class="nav">
+      {%- for slide in slides %}
+      <a class="nav-item{% if not slide.findings %} is-clean{% endif %}"
+         href="#slide-{{ slide.index }}">
+        <span class="n">{{ slide.index }}</span>
+        <span class="arch">{{ slide.archetype }}</span>
+        <span class="counts">
+          {%- for severity, count in slide.counts %}
+          <span class="dot {{ severity }}" title="{{ count }} {{ severity }}">{{ count }}</span>
+          {%- endfor %}
+        </span>
+      </a>
+      {%- endfor %}
+    </div>
+  </nav>
+
+  <main class="main">
+    <header class="top">
+      <h1>{{ deck_name }}</h1>
+      <div class="meta">
+        <span>{{ result.client }}</span>
+        <span>profile v{{ result.profile_version }}</span>
+        <span>{{ result.slide_count }} slides</span>
+        <span>{{ result.rules_run | length }} rules run</span>
+        <span>{{ result.generated_at }}</span>
+      </div>
+      <div class="tally">
+        {%- if summary.total == 0 %}
+        <div class="tile clean"><div class="v">0</div><div class="k">findings</div></div>
+        {%- else %}
+        {%- for severity in severities %}
+        {%- if summary.get(severity) %}
+        <div class="tile {{ severity }}">
+          <div class="v">{{ summary[severity] }}</div><div class="k">{{ severity }}</div>
+        </div>
+        {%- endif %}
+        {%- endfor %}
+        {%- endif %}
+        <div class="tile">
+          <div class="v">{{ result.unchecked | length }}</div>
+          <div class="k">not checked</div>
+        </div>
+      </div>
+    </header>
+
+    {%- if summary.total == 0 %}
+    <div class="clean-note">
+      No findings.
+      <small>
+        {{ result.rules_run | length }} rules ran across {{ result.slide_count }}
+        slides. {{ result.rules_skipped | length }} rule(s) did not run; see below.
+      </small>
+    </div>
+    {%- endif %}
+
+    {%- for slide in slides_with_findings %}
+    <section class="slide" id="slide-{{ slide.index }}">
+      <h2>slide {{ slide.index }} <span class="arch">{{ slide.archetype }}</span></h2>
+      <div class="slide-body">
+        <div class="thumb"
+             data-slide="{{ slide.index }}"
+             data-slide-width-pt="{{ slide.width_pt }}"
+             data-slide-height-pt="{{ slide.height_pt }}"
+             data-placeholder="slide image"></div>
+        <div class="findings">
+          {%- for finding in slide.findings %}
+          <div class="finding {{ finding.severity }}"
+               data-rule="{{ finding.rule_id }}"
+               data-severity="{{ finding.severity }}"
+               data-confidence="{{ finding.confidence }}"
+               {% if finding.bbox_pt %}data-bbox="{{ finding.bbox_pt | join(',') }}"{% endif %}>
+            <div class="bar"></div>
+            <div class="rule">{{ finding.rule_id }}<span class="sev">{{ finding.severity }}</span></div>
+            <div class="msg">
+              <div class="headline">{{ finding.message }}</div>
+              {%- if finding.shape_name %}
+              <div class="shape mono">{{ finding.shape_name }}</div>
+              {%- endif %}
+              {%- if finding.measured or finding.expected %}
+              <div class="delta mono">
+                <span class="was">{{ finding.measured or "—" }}</span>
+                <span class="arrow">→</span>
+                <span class="want">{{ finding.expected or "—" }}</span>
+              </div>
+              {%- endif %}
+              {%- if finding.expected_provenance %}
+              <div class="why"><b>Why this is expected:</b> {{ finding.expected_provenance }}</div>
+              {%- endif %}
+            </div>
+          </div>
+          {%- endfor %}
+        </div>
+      </div>
+    </section>
+    {%- endfor %}
+
+    {%- if unchecked %}
+    <details class="block">
+      <summary>Not checked ({{ result.unchecked | length }})</summary>
+      <div class="inner">
+        {%- for entry in unchecked %}
+        <div class="row">
+          <div class="k mono">{{ entry.rule_id }}</div>
+          <div class="v">{{ entry.reason }} <em>({{ entry.where }})</em></div>
+        </div>
+        {%- endfor %}
+      </div>
+    </details>
+    {%- endif %}
+
+    {%- if result.rules_skipped %}
+    <details class="block">
+      <summary>Rules not run ({{ result.rules_skipped | length }})</summary>
+      <div class="inner">
+        {%- for entry in result.rules_skipped %}
+        <div class="row">
+          <div class="k mono">{{ entry.rule_id }}</div>
+          <div class="v">{{ entry.reason }}</div>
+        </div>
+        {%- endfor %}
+      </div>
+    </details>
+    {%- endif %}
+
+    {%- if result.suppressed %}
+    <details class="block">
+      <summary>Accepted previously ({{ result.suppressed | length }})</summary>
+      <div class="inner">
+        {%- for finding in result.suppressed %}
+        <div class="row">
+          <div class="k mono">{{ finding.rule_id }}</div>
+          <div class="v">slide {{ finding.slide_index }} — {{ finding.message }}</div>
+        </div>
+        {%- endfor %}
+      </div>
+    </details>
+    {%- endif %}
+
+    <footer class="foot">
+      Generated by tieout from {{ result.deck_path }}.
+      Expectations are derived from this client's own reference deck; each finding
+      states the evidence behind the value it expected.
+      No semantic review: this is the mechanical layer only.
+    </footer>
+  </main>
+</div>
