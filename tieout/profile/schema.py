@@ -301,6 +301,10 @@ class HygieneProfile(_Model):
 
 class RulesProfile(_Model):
     disabled: list[str] = Field(default_factory=list)
+    #: Rules to run even though they are disabled by default. LO-006 and TY-009
+    #: are off out of the box -- one is approximate, the other needs a client
+    #: dictionary to be useful -- and this is how a client who wants them opts in.
+    enabled: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
 
 
@@ -429,8 +433,16 @@ class Profile(_Model):
         return None
 
     def rule_enabled(self, rule_id: str, *, default: bool) -> bool:
+        """Whether a rule should run.
+
+        An explicit entry in ``disabled`` always wins, so a client can turn off a
+        rule they disagree with. Otherwise ``enabled`` can switch on a rule that
+        ships off by default.
+        """
         if rule_id in self.rules.disabled:
             return False
+        if rule_id in self.rules.enabled:
+            return True
         return default
 
     def severity_of(self, rule_id: str, default: Severity) -> Severity:

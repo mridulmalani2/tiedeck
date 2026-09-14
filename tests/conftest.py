@@ -17,13 +17,20 @@ exercise the learner's output.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tieout.fixtures.generator import BuildResult, _logo_png, build_all
-from tieout.fixtures.spec import ReferenceSpec, default_spec
+from tieout.fixtures.spec import (
+    CONTENT_LEFT_PT,
+    CONTENT_WIDTH_PT,
+    FOOTNOTE_TOP_PT,
+    ReferenceSpec,
+    default_spec,
+)
 from tieout.model.archetype import CONTENT_ARCHETYPES
 from tieout.model.deck import DeckModel
 from tieout.model.loader import load_deck
@@ -43,10 +50,25 @@ from tieout.profile.schema import (
     NotLearned,
     PageNumberProfile,
     Profile,
+    RecurringElement,
     RulesProfile,
     SlideProfile,
     TypographyProfile,
 )
+from tieout.rules.base import clear_caches
+
+
+@pytest.fixture(autouse=True)
+def _clear_rule_caches() -> Iterator[None]:
+    """Drop the rule engine's per-deck memoisation around every test.
+
+    The fixture decks are session-scoped and the profiles are function-scoped, so
+    without this a test could read furniture derived from the previous test's
+    profile.
+    """
+    clear_caches()
+    yield
+    clear_caches()
 
 
 @pytest.fixture(scope="session")
@@ -190,6 +212,20 @@ def build_reference_profile(spec: ReferenceSpec, logo_sha1: str) -> Profile:
                 rows_pt=[36.0, 84.0, 96.0, 120.0, 456.0, 468.0, 480.0, 492.0],
             ),
             near_miss_alignment_pt=NearMissWindow(min=0.5, max=4.0),
+            recurring=[
+                RecurringElement(
+                    key="name:footnote",
+                    box_pt=Box(
+                        left=float(CONTENT_LEFT_PT),
+                        top=float(FOOTNOTE_TOP_PT),
+                        width=float(CONTENT_WIDTH_PT),
+                        height=12.0,
+                        tolerance_pt=2.0,
+                    ),
+                    archetypes=sorted(CONTENT_ARCHETYPES),
+                    support=17,
+                ),
+            ],
         ),
         typography=TypographyProfile(
             quotes=spec.typography.quotes,
@@ -224,6 +260,22 @@ def build_reference_profile(spec: ReferenceSpec, logo_sha1: str) -> Profile:
     )
 
     profile.set_provenance("slide", "observed, invariant across 26 slides", "high")
+    profile.set_provenance(
+        "brand",
+        "derived from the reference deck listed in sources",
+        "high",
+    )
+    profile.set_provenance(
+        "brand.title_geometry_tolerance_pt",
+        "default 2pt: a title is expected to sit where its own layout places it, "
+        "which is not inferred from the reference deck",
+        "medium",
+    )
+    profile.set_provenance(
+        "layout.recurring",
+        "the footnote block observed at one position on 17 of 26 slides",
+        "high",
+    )
     profile.set_provenance(
         "brand.fonts.allowed",
         "96.8% and 3.2% of characters across 26 slides",

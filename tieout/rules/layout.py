@@ -41,7 +41,14 @@ from tieout.cluster import cluster_values
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel, TextParagraph
 from tieout.model.furniture import Furniture, content_shapes, detect_furniture, font_role
 from tieout.model.units import rect_intersection_area_pt2
-from tieout.profile.schema import Box, Confidence, GridProfile, Profile, Severity
+from tieout.profile.schema import (
+    Box,
+    Confidence,
+    GridProfile,
+    Profile,
+    RecurringElement,
+    Severity,
+)
 from tieout.rules.base import Finding, Rule, cluster_findings, register
 
 #: Rounding slack for canvas containment. PowerPoint stores EMU, and a shape
@@ -540,6 +547,28 @@ def _normalised_key(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text.strip()).casefold()
 
 
+def _recurring_index(
+    entries: list[RecurringElement],
+) -> dict[tuple[str, str], RecurringElement]:
+    """Index recurring entries by the kind of identity they carry.
+
+    The learning engine qualifies a key as ``name:footnote`` or
+    ``placeholder:title``, because a shape called "Title" and a shape occupying
+    the title placeholder are different claims. An unqualified key is indexed
+    under both kinds so a hand-written profile still works.
+    """
+    out: dict[tuple[str, str], RecurringElement] = {}
+    for entry in entries:
+        kind, separator, rest = entry.key.partition(":")
+        if separator and kind in ("name", "placeholder"):
+            out[(kind, _normalised_key(rest))] = entry
+        else:
+            normalised = _normalised_key(entry.key)
+            out.setdefault(("name", normalised), entry)
+            out.setdefault(("placeholder", normalised), entry)
+    return out
+
+
 @register
 class RecurringElementDisplaced(Rule):
     """Reports a recurring element sitting away from its learned modal position.
@@ -566,14 +595,16 @@ class RecurringElementDisplaced(Rule):
     requires: ClassVar[tuple[str, ...]] = ("layout.recurring",)
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
-        by_key = {_normalised_key(entry.key): entry for entry in profile.layout.recurring}
+        by_key = _recurring_index(profile.layout.recurring)
         findings: list[Finding] = []
 
         for slide in deck.slides:
             for shape in slide.leaf_shapes():
-                entry = by_key.get(_normalised_key(shape.ref.name))
+                entry = by_key.get(("name", _normalised_key(shape.ref.name)))
                 if entry is None and shape.placeholder_type:
-                    entry = by_key.get(_normalised_key(shape.placeholder_type))
+                    entry = by_key.get(
+                        ("placeholder", _normalised_key(shape.placeholder_type))
+                    )
                 if entry is None:
                     continue
                 if entry.archetypes and slide.archetype not in entry.archetypes:

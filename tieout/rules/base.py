@@ -387,8 +387,14 @@ def run_rules(
         slide_count=deck.slide_count,
     )
 
+    named = _explicitly_named(include)
     for rule_cls in select_rules(include, exclude):
-        if not profile.rule_enabled(rule_cls.id, default=rule_cls.default_enabled):
+        # Naming a rule exactly on the command line is a request to run it, which
+        # is the only way a user can reach LO-006 or TY-009 without editing their
+        # profile. A glob such as "LO-*" is a filter, not an opt-in, so it leaves
+        # the default alone.
+        default_enabled = rule_cls.default_enabled or rule_cls.id in named
+        if not profile.rule_enabled(rule_cls.id, default=default_enabled):
             reason = (
                 "disabled in the profile"
                 if rule_cls.id in profile.rules.disabled
@@ -440,6 +446,17 @@ def run_rules(
     result.rules_skipped.sort(key=lambda s: s.rule_id)
     result.unchecked.sort(key=lambda u: (u.slide_index, u.rule_id))
     return result
+
+
+def _explicitly_named(include: Sequence[str] | None) -> frozenset[str]:
+    """Include patterns that name one rule exactly rather than matching a set."""
+    if not include:
+        return frozenset()
+    return frozenset(
+        pattern.strip()
+        for pattern in include
+        if pattern.strip() and not set(pattern) & {"*", "?", "[", "]"}
+    )
 
 
 def _missing_requirements(rule_cls: type[Rule], profile: Profile) -> list[str]:

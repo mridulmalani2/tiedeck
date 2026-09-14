@@ -16,8 +16,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 
 import pytest
-from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 
+from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import default_defects
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
 from tieout.profile.schema import Profile
