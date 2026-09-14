@@ -8,7 +8,9 @@ style from it — palette, typefaces, size bands per text role, logo placement p
 slide type, footer conventions, margins, alignment grid, typographic
 conventions, terminology — and writes it out as an editable YAML profile where
 every value carries the evidence behind it. Check every deck after that against
-that profile.
+that profile. Three further rules need no profile at all: they read the deck's
+own tables and report a figure that disagrees with itself, a figure stated in two
+different units, and a total row that does not sum.
 
 ```bash
 tieout learn project_meridian_final.pptx --client acme
@@ -115,7 +117,7 @@ $ tieout check decks/reference_clean.pptx --client demo
 
 No findings.
 
-0 findings from 34 rules across 26 slides.
+0 findings from 37 rules across 26 slides.
 
 rules not run
   LO-006  disabled in the profile
@@ -131,7 +133,7 @@ not checked (34 shape(s))
 Exit code 0. This is the property everything else rests on: **learn from a deck,
 then check that deck, and get nothing.** Anything reported here would be the tool
 disagreeing with the material it was taught from. `tests/test_clean_deck.py`
-holds all 36 rules to it, individually, on every commit.
+holds all 39 rules to it, individually, on every commit.
 
 Note the footer. "Not checked" is as important as the finding list — it is what
 lets you tell *nothing is wrong* from *nothing was looked at*.
@@ -150,7 +152,14 @@ slide 5
                        elsewhere in the deck (left 36pt, top 480pt,
                        888x12pt (+/-2pt), support 17)
 
-44 finding(s): 6 blocker, 20 major, 18 minor — from 34 rules across 26 slides.
+slide 7
+    shape              message
+────────────────────────────────────────────────────────────────────────────
+    Recap table        '2025a' / 'ebitda' is 375 here but 351 in Financial
+                       table on slide 6
+...
+
+47 finding(s): 6 blocker, 23 major, 18 minor — from 37 rules across 26 slides.
 $ echo $?
 1
 ```
@@ -373,7 +382,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-36 rules across four categories. Each one is an independent class — rules never
+39 rules across five categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -440,6 +449,26 @@ produce would be measured against a default the client never agreed to.
 | **HY-007** | blocker | on | External or broken relationship in the package | not learned; fixed behaviour |
 | **HY-008** | major | on | Image effective resolution below the profile's floor | not learned; fixed behaviour |
 | **HY-009** | minor | on | Font neither embedded nor a standard system font | not learned; fixed behaviour |
+
+### Consistency (3 rules)
+
+The one category that reads the deck's *content* rather than its form, and it
+does so arithmetically: every finding is a comparison between two numbers the
+deck itself states. No profile input, no key, no network. These are the mistakes
+that survive four turns of a deck because each page is internally correct.
+
+| Rule | Severity | Default | What it measures | Expectation derived from |
+|---|---|---|---|---|
+| **CO-001** | major | on | The same labelled figure differs between tables | not learned; fixed behaviour |
+| **CO-002** | major | on | The same figure appears in two different scales | not learned; fixed behaviour |
+| **CO-003** | major | on | A row labelled as a total does not sum its column | not learned; fixed behaviour |
+
+Each one keys a number on the pair (row label, column header) so the column
+disambiguates the scope, ignores labels too generic to identify a metric
+(`total`, `value`, `other`), and treats a label bearing a footnote marker as the
+same label without it. CO-003 reads a total row four ways — the block since the
+previous total, everything above it, all line items, the subtotals above it —
+and only reports when no reading sums.
 
 ### Turning a rule on or off
 
@@ -515,10 +544,21 @@ Stated plainly, because a QA tool that overstates its coverage is worse than one
 that admits its edges.
 
 **No semantic or argument-level review.** This is the mechanical layer only.
-TieOut will tell you the logo is 18pt out of place and the EBITDA column mixes
-decimal places. It has no view on whether the valuation is defensible, whether
-the chart supports the headline above it, or whether the story works. Nothing
-here substitutes for reading the deck.
+TieOut will tell you the logo is 18pt out of place, the EBITDA column mixes
+decimal places, and that a figure stated twice disagrees with itself — but the
+last of those is arithmetic, not comprehension. It has no view on whether the
+valuation is defensible, whether the chart supports the headline above it, or
+whether the story works. Nothing here substitutes for reading the deck.
+
+**Consistency findings compare labels, and two tables can mean different things
+by one label.** CO-001 and CO-002 key a figure on its (row label, column header)
+pair, which is usually enough to pin the scope — but a group table and a segment
+table that both say "Revenue" under "FY24A" hold different, correct numbers, and
+TieOut will report the pair. Generic labels are excluded and footnote markers
+normalised to cut this down; it remains the category's false-positive mode, and
+the reason its rules are `major` rather than `blocker`. CO-003 is narrower: it
+only reports a total row when none of four plausible readings of "the rows above"
+sums, and only when at least three addends are involved.
 
 **Errors in the reference deck are learned as rules.** The whole design treats
 the reference deck as ground truth, so a mistake that is *consistent* in it
@@ -589,7 +629,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 385 tests
+.venv/bin/python -m pytest              # 684 tests
 .venv/bin/python -m pytest --cov=tieout # coverage, floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
@@ -614,7 +654,7 @@ fails the build if a binary `.pptx` is ever committed.
   learner cannot recover values the deck was built from, it is broken however
   plausible its output looks.
 - **`test_clean_deck.py`** is the ongoing false-positive guard, running each of
-  the 36 rules individually against the clean deck so a regression names the
+  the 39 rules individually against the clean deck so a regression names the
   rule. A rule that catches its seeded defect but also fires on a correct slide is
   worse than no rule, because a report with false positives in it teaches the
   reader to skim.
@@ -632,7 +672,7 @@ cluster.py  deterministic 1-D clustering, dominance, entropy
 text.py     quote/case/number/currency/date/terminology parsing
 learn/      observe -> classify -> derive_* -> interview -> emit / merge
 profile/    schema (pydantic) and loader
-rules/      base + brand, layout, typography, hygiene
+rules/      base + brand, layout, typography, hygiene, consistency
 report/     console, json_out, html
 fixtures/   spec + generator
 ```
@@ -646,10 +686,13 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **36 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **39 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
-   tested.
+   tested. A fifth category, **consistency** (3 rules), is then added beyond the
+   specification: the deck's own tables are enough to catch a figure that
+   disagrees with itself, which is the defect a banker most wants caught and the
+   one no amount of formatting discipline surfaces.
 2. **Five modules not in section 4's file list**: `model/color.py` (Delta-E is
    required throughout and needs a home), `model/furniture.py` (logo, footer and
    text-role identification, shared by the learner and the rules so the two

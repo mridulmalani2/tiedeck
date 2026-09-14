@@ -95,7 +95,13 @@ def test_the_rule_counts_per_category_are_stated_correctly(readme):
 
 
 def test_the_stated_rule_total_matches_the_registry(readme):
-    assert f"{len(load_all_rules())} rules across four categories" in readme
+    categories = {rule.category for rule in load_all_rules().values()}
+    words = {4: "four", 5: "five", 6: "six"}
+    expected = (
+        f"{len(load_all_rules())} rules across "
+        f"{words.get(len(categories), len(categories))} categories"
+    )
+    assert expected in readme, f"the README should say {expected!r}"
 
 
 @pytest.mark.parametrize(
@@ -152,7 +158,7 @@ def test_the_deviations_from_the_specification_are_recorded(readme):
     assert len(deviations) == 2, "the deviations section is missing"
     body = deviations[1]
     for topic in (
-        "36 rules, not 27",
+        f"{len(load_all_rules())} rules, not 27",
         "palette tolerance",
         "LO-003",
         "Provenance is written twice",

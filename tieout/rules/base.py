@@ -30,7 +30,13 @@ from tieout.model.deck import DeckModel, ShapeRef
 from tieout.model.furniture import Furniture, detect_furniture
 from tieout.profile.schema import Confidence, Profile, Severity, SuppressionFile
 
-CATEGORIES: Final[tuple[str, ...]] = ("brand", "layout", "typography", "hygiene")
+CATEGORIES: Final[tuple[str, ...]] = (
+    "brand",
+    "layout",
+    "typography",
+    "hygiene",
+    "consistency",
+)
 
 #: Ordering for report grouping and for ``--fail-on`` comparisons.
 SEVERITY_ORDER: Final[dict[str, int]] = {
@@ -249,7 +255,13 @@ def load_all_rules() -> dict[str, type[Rule]]:
     layer does not drag in every rule, which keeps ``test_no_network``'s module
     walk and the CLI's start-up time honest.
     """
-    from tieout.rules import brand, hygiene, layout, typography  # noqa: F401
+    from tieout.rules import (  # noqa: F401
+        brand,
+        consistency,
+        hygiene,
+        layout,
+        typography,
+    )
 
     return dict(REGISTRY)
 

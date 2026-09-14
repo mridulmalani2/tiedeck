@@ -96,7 +96,11 @@ def _slide_table(
     table.add_column("", width=1, no_wrap=True)
     table.add_column("rule", width=6, no_wrap=True, style="dim")
     table.add_column("shape", width=22, overflow="ellipsis")
-    table.add_column("message", width=_MESSAGE_WIDTH)
+    # Flexible rather than fixed: rich shrinks every column proportionally when
+    # the table exceeds the terminal, which on an 80- or 100-column terminal
+    # truncated the rule id to "CO-0…" — the one field a reader needs whole.
+    # Letting the message absorb the deficit keeps the identifiers readable.
+    table.add_column("message", min_width=32, max_width=_MESSAGE_WIDTH)
     table.add_column("measured → expected", overflow="fold")
 
     for finding in sorted(findings, key=lambda f: f.sort_key):

@@ -720,13 +720,60 @@ class _DeckBuilder:
                 FontSpec("Bodoni Sixtysix", 11.0, self.brand.ink),
             )
 
+        if self.defect_on("CO-001", slide_spec.index):
+            self._recap_table(slide, "351", "375")
+        if self.defect_on("CO-002", slide_spec.index):
+            self._recap_table(slide, "1,908", "1,908,000", metric="Revenue")
+
         self._footnote(slide, slide_spec)
+
+    def _recap_table(
+        self, slide: Any, correct: str, seeded: str, metric: str = "EBITDA"
+    ) -> None:
+        """A small recap table restating a figure from the projections table.
+
+        Decks restate key figures on summary slides constantly, which is exactly
+        why a figure can end up disagreeing with itself. The row and column
+        labels match slide 6's table so the consistency rules have a genuine
+        pair to compare, and only the value differs.
+        """
+        frame = slide.shapes.add_table(
+            2, 2, Pt(492), Pt(384), Pt(432), Pt(48)
+        )
+        frame.name = "Recap table"
+        table = frame.table
+        self._plain_table_style(table)
+        table.columns[0].width = Emu(216 * 12700)
+        table.columns[1].width = Emu(216 * 12700)
+        for index in range(2):
+            table.rows[index].height = Emu(24 * 12700)
+
+        for column, heading in enumerate(("Fiscal year", metric)):
+            cell = table.cell(0, column)
+            self._fill_cell(cell, self.brand.house_navy)
+            self._cell_text(cell, heading, self.brand.header_cell_font())
+
+        for column, value in enumerate(("2025A", seeded)):
+            cell = table.cell(1, column)
+            self._fill_cell(cell, self.brand.paper)
+            font = (
+                self.brand.body_font(self.brand.table_sizes_pt[1])
+                if column == 0
+                else self.brand.figure_cell_font()
+            )
+            self._cell_text(cell, value, font)
+        del correct
 
     def _build_table(self, slide: Any, slide_spec: SlideSpec) -> None:
         self._title_block(slide, slide_spec)
         columns: list[str] = list(slide_spec.payload.get("columns", []))
         rows: list[list[str]] = [list(r) for r in slide_spec.payload.get("rows", [])]
 
+        if self.defect_on("CO-003", slide_spec.index) and rows:
+            for row in rows:
+                if row and row[0].lower().startswith("total"):
+                    row[1] = "9,900"
+                    break
         if self.defect_on("TY-006", slide_spec.index) and rows:
             rows[0][1] = "1,284.5"
         if self.defect_on("TY-007", slide_spec.index) and rows:

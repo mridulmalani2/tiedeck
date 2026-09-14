@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.test_clean_deck import EXPECTED_RULE_COUNT
 from tieout.learn import learn_from_decks
 from tieout.learn.emit import render
 from tieout.model.color import delta_e_76, parse_hex
@@ -346,7 +347,7 @@ def test_the_clean_deck_produces_zero_findings_against_its_own_profile(
     )
 
 
-def test_all_36_rules_are_accounted_for(clean_deck, learned_profile):
+def test_every_rule_is_accounted_for(clean_deck, learned_profile):
     """Every rule must run or say why not. A rule that does neither is a silent
     gap in the audit."""
     from tieout.rules.base import load_all_rules
@@ -354,7 +355,7 @@ def test_all_36_rules_are_accounted_for(clean_deck, learned_profile):
     clear_caches()
     result = run_rules(clean_deck, learned_profile)
     registry = load_all_rules()
-    assert len(registry) == 36
+    assert len(registry) == EXPECTED_RULE_COUNT
 
     accounted = set(result.rules_run) | {s.rule_id for s in result.rules_skipped}
     assert accounted == set(registry), (

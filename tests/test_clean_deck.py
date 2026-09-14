@@ -23,9 +23,20 @@ from tieout.learn import learn_from_decks
 from tieout.report import console as console_report
 from tieout.report import html as html_report
 from tieout.report import json_out
-from tieout.rules.base import clear_caches, load_all_rules, run_rules
+from tieout.rules.base import CATEGORIES, clear_caches, load_all_rules, run_rules
 
 ALL_RULE_IDS = sorted(load_all_rules())
+
+#: The catalogue as it stands. Stated here so a rule added or removed without
+#: updating the README and the round-trip test fails loudly in one place.
+EXPECTED_PER_CATEGORY = {
+    "brand": 10,
+    "layout": 8,
+    "typography": 9,
+    "hygiene": 9,
+    "consistency": 3,
+}
+EXPECTED_RULE_COUNT = sum(EXPECTED_PER_CATEGORY.values())
 
 
 @pytest.fixture(scope="module")
@@ -135,11 +146,11 @@ def test_no_finding_is_suppressed_to_reach_silence(clean_result):
     assert clean_result.suppressed == []
 
 
-def test_all_36_rules_are_registered_documented_and_categorised():
+def test_every_rule_is_registered_documented_and_categorised():
     registry = load_all_rules()
-    assert len(registry) == 36, sorted(registry)
+    assert len(registry) == EXPECTED_RULE_COUNT, sorted(registry)
     for rule_id, rule in sorted(registry.items()):
-        assert rule.category in ("brand", "layout", "typography", "hygiene"), rule_id
+        assert rule.category in CATEGORIES, rule_id
         assert rule.severity in ("blocker", "major", "minor", "info"), rule_id
         assert rule.summary, f"{rule_id} has no summary for `tieout rules`"
         assert rule.__doc__ and len(rule.__doc__.strip()) > 80, (
@@ -152,7 +163,7 @@ def test_the_catalogue_covers_every_category_at_the_specified_size():
     counts: dict[str, int] = {}
     for rule in registry.values():
         counts[rule.category] = counts.get(rule.category, 0) + 1
-    assert counts == {"brand": 10, "layout": 8, "typography": 9, "hygiene": 9}
+    assert counts == EXPECTED_PER_CATEGORY
 
 
 # --------------------------------------------------------------------------------------

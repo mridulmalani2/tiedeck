@@ -363,6 +363,11 @@ def default_slides() -> tuple[SlideSpec, ...]:
                 ["2025A", "1,908", "351", "18.4%", "27"],
                 ["2026E", "2,314", "446", "19.3%", "94"],
                 ["2027E", "2,760", "552", "20.0%", "168"],
+                # A cumulative row whose arithmetic is correct: 1,284 + 1,562 +
+                # 1,908 + 2,314 + 2,760 = 9,828, and so on. CO-003 verifies it,
+                # and the margin column is deliberately n.a. because percentages
+                # do not add up -- which is the case the rule has to skip.
+                ["Total 2023A-2027E", "9,828", "1,808", "n.a.", "229"],
             ],
             footnote="Source: Company management. Figures in US$ millions.",
         ),
@@ -646,6 +651,10 @@ def default_defects() -> tuple[SeededDefect, ...]:
         ),
         SeededDefect("HY-008", "a low resolution image below 150 effective DPI", 11),
         SeededDefect("HY-009", "a non-standard, non-embedded typeface", 16),
+        # -- consistency ---------------------------------------------------------
+        SeededDefect("CO-001", "a recap table restating an EBITDA figure wrongly", 7),
+        SeededDefect("CO-002", "a recap table restating revenue in the wrong unit", 11),
+        SeededDefect("CO-003", "a cumulative total that does not sum its column", 6),
     )
 
 
