@@ -18,12 +18,18 @@ from tieout.learn.derive_brand import (
     cluster_palette,
     derive_palette_tolerance,
 )
-from tieout.model.color import delta_e_76, try_parse_hex
+from tieout.model.color import Rgb, delta_e_76, try_parse_hex
+from tieout.model.deck import DeckModel
+
+
+def _rgb(value: str) -> Rgb:
+    colour = try_parse_hex(value)
+    assert colour is not None, f"{value} is not an sRGB triplet"
+    return colour
 
 
 def _cluster(hex_values: list[str], weight: float = 10.0) -> PaletteCluster:
-    colours = [try_parse_hex(value) for value in hex_values]
-    assert all(colour is not None for colour in colours)
+    colours = [_rgb(value) for value in hex_values]
     return PaletteCluster(
         rgb=colours[0],
         weight=weight,
@@ -31,7 +37,7 @@ def _cluster(hex_values: list[str], weight: float = 10.0) -> PaletteCluster:
     )
 
 
-def test_the_palette_tolerance_admits_its_own_clusters():
+def test_the_palette_tolerance_admits_its_own_clusters() -> None:
     """The bug this was written for.
 
     Clustering gathers colours within 3 Delta-E of each other; the tolerance was
@@ -56,16 +62,16 @@ def test_the_palette_tolerance_admits_its_own_clusters():
     assert reason
 
 
-def test_the_tolerance_still_has_a_floor_with_one_cluster():
+def test_the_tolerance_still_has_a_floor_with_one_cluster() -> None:
     tolerance, reason = derive_palette_tolerance([_cluster(["#2B2B2B"])])
     assert tolerance >= 2.0
     assert reason
 
 
-def test_every_colour_the_deck_uses_is_within_tolerance_of_its_cluster():
+def test_every_colour_the_deck_uses_is_within_tolerance_of_its_cluster() -> None:
     """Stated over the clustering itself, so the two constants cannot drift apart."""
     weighted = [
-        (try_parse_hex(value), 10.0, 1)
+        (_rgb(value), 10.0, 1)
         for value in ("#E2E5E9", "#DCE1E8", "#2B2B2B", "#C9A227", "#6B7280")
     ]
     clusters = cluster_palette(weighted)
@@ -75,7 +81,7 @@ def test_every_colour_the_deck_uses_is_within_tolerance_of_its_cluster():
         assert delta_e_76(nearest.rgb, colour) <= tolerance
 
 
-def test_review_reference_is_run_and_reported_by_learn(clean_deck):
+def test_review_reference_is_run_and_reported_by_learn(clean_deck: DeckModel) -> None:
     result = learn_from_decks([clean_deck], "guard")
     review = result.reference_review
     assert review.describe()
@@ -85,7 +91,9 @@ def test_review_reference_is_run_and_reported_by_learn(clean_deck):
     assert review.clean == (not review.findings)
 
 
-def test_review_reference_reports_what_a_rule_finds(clean_deck, dirty_deck):
+def test_review_reference_reports_what_a_rule_finds(
+    clean_deck: DeckModel, dirty_deck: DeckModel
+) -> None:
     """A profile learned from one deck, reviewed against a deck with defects.
 
     Not the normal call -- `learn` reviews the deck it learned from -- but it is
