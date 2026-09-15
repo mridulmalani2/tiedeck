@@ -288,6 +288,12 @@
   }
   .action .inst:hover { color: var(--accent); }
   .action .inst .at { font: 11px var(--mono); color: var(--ink-3); }
+  .action .inst .mv {
+    font: inherit; font-size: 11px; padding: 1px 7px; margin-left: 4px;
+    border: 1px solid var(--line-2); border-radius: 2px; background: var(--surface);
+    color: var(--ink-2); cursor: pointer; vertical-align: baseline;
+  }
+  .action .inst .mv:hover { background: var(--chrome-2); color: var(--accent); }
 
   /* Where it is. Every finding has carried its box since the first version and
      nothing ever drew it. */
@@ -298,6 +304,93 @@
   .mark span {
     position: absolute; top: -19px; left: -2px; background: var(--accent); color: #fff;
     font: 600 10px/1 var(--font); padding: 3px 5px; white-space: nowrap;
+  }
+
+  /* ---- the position editor ----
+     Geometry is the one thing TieOut will not decide, so this is the one place
+     the deck is edited by hand rather than by a rule. The chrome says so: the
+     outline becomes something you can pick up, the learned grid appears as
+     guides to aim at, and where the shape started stays on screen as a ghost so
+     the move is always readable as a change from something. */
+  /* The spotlight comes off while the shape is in hand. Dimming the slide is
+     right for "look here" and wrong for "put this somewhere": placing a shape is
+     a judgement about its neighbours, and they have to be legible to be judged
+     against. */
+  .mark.live {
+    pointer-events: auto; cursor: grab; touch-action: none; z-index: 5;
+    box-shadow: 0 1px 10px rgba(0,0,0,.30);
+    transition: none;
+  }
+  .mark.live:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .mark.live.dragging { cursor: grabbing; background: rgba(183,71,42,.2); }
+  /* Four corner marks, so the box reads as a handle rather than an annotation.
+     They do not resize: this editor moves, and a control that looked like a
+     resize grip would be promising something it does not do. */
+  .mark.live i {
+    position: absolute; width: 7px; height: 7px; background: #fff;
+    border: 1px solid var(--accent); border-radius: 50%;
+  }
+  .mark.live i.tl { left: -4px; top: -4px; }
+  .mark.live i.tr { right: -4px; top: -4px; }
+  .mark.live i.bl { left: -4px; bottom: -4px; }
+  .mark.live i.br { right: -4px; bottom: -4px; }
+
+  .ghost {
+    position: absolute; border: 1px dashed rgba(255,255,255,.85); z-index: 3;
+    pointer-events: none;
+  }
+
+  .guide {
+    position: absolute; background: #35c1f1; z-index: 4; pointer-events: none;
+    opacity: 0; transition: opacity .09s linear;
+  }
+  .guide.col { top: 0; bottom: 0; width: 1px; margin-left: -.5px; }
+  .guide.row { left: 0; right: 0; height: 1px; margin-top: -.5px; }
+  /* Every learned line, faint, while a shape is in hand: the point of snapping
+     to a derived grid is being able to see what you are aiming at. */
+  .guide.near { opacity: .3; }
+  .guide.on { opacity: 1; box-shadow: 0 0 0 1px rgba(53,193,241,.35); }
+
+  /* The readout. Floating over the canvas rather than docked in the ribbon,
+     because during a drag the eye is on the shape and a number four inches away
+     is a number nobody reads. */
+  .posbar {
+    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+    z-index: 6; display: flex; align-items: stretch; gap: 0;
+    background: rgba(32,31,30,.94); color: #fff; border-radius: 5px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.4); font-size: 12px; max-width: calc(100% - 28px);
+  }
+  .posbar > div {
+    display: flex; align-items: center; gap: 9px; padding: 8px 12px;
+    border-right: 1px solid rgba(255,255,255,.14);
+  }
+  .posbar > div:last-child { border-right: 0; }
+  .posbar .who { font-weight: 600; max-width: 190px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .posbar .who em { font-style: normal; opacity: .6; font-weight: 400; }
+  .posbar .read { font: 12px var(--mono); white-space: nowrap; }
+  .posbar .read b { font-weight: 600; }
+  .posbar .read .d { opacity: .62; }
+  .posbar .read .snapped { color: #7fd6f7; }
+  .posbar label { display: flex; align-items: center; gap: 6px; white-space: nowrap;
+    cursor: pointer; opacity: .9; }
+  .posbar button {
+    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.28); background: transparent; color: #fff;
+    cursor: pointer; white-space: nowrap;
+  }
+  .posbar button:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+  .posbar button.go {
+    background: var(--accent); border-color: var(--accent); font-weight: 600;
+  }
+  .posbar button.go:hover:not(:disabled) { background: var(--accent-dark); }
+  .posbar button:disabled { opacity: .4; cursor: default; }
+  /* Its own pill rather than text on the canvas: the canvas behind it is a
+     slide, which can be any colour, and white-on-white is a hint nobody reads. */
+  .posbar .hint {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: -25px;
+    background: rgba(32,31,30,.86); color: #fff; padding: 3px 9px; border-radius: 3px;
+    font-size: 11px; white-space: nowrap; pointer-events: none;
   }
   .empty strong { display: block; color: var(--ok); font-size: 14px; margin-bottom: 4px; }
 
@@ -552,7 +645,21 @@ const S = {
   noteMode: "fix",
   // The box currently outlined on the canvas, and what to call it.
   mark: null,
+  // The shape currently in the person's hands, or null. Every coordinate on it
+  // is whole EMU: x0/y0 where the shape was when it was picked up, x/y where it
+  // is now, cx/cy its size. Integers all the way through, so a nudge out and a
+  // nudge back are addition and subtraction that cancel exactly — in points they
+  // would accumulate a fraction of an EMU per move and the shape would come back
+  // to somewhere very close to where it started instead of to where it started.
+  edit: null,
+  // Whether dragging pulls onto the learned grid. A preference, so it survives
+  // moving from one shape to the next.
+  snap: true,
 };
+
+// OOXML's unit. Declared once here for the same reason model/units.py declares
+// it once there: a second copy of 12700 is a second place for it to be wrong.
+const EMU_PT = 12700;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -607,7 +714,7 @@ async function upload(file) {
   // A new deck invalidates everything measured about the last one. Leaving the
   // tally up made the status bar read "16 blocker" under a deck that had not
   // been checked.
-  S.audit = null; S.draft = null; S.slide = 1; S.mode = null;
+  S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
   $("tally").textContent = "";
   $("openreport").disabled = true;
   $("undo").disabled = true;
@@ -984,7 +1091,7 @@ $("check").onclick = async () => {
   clearFlash();
   // Drop the previous run before starting this one, so nothing on screen is
   // left describing a check that is no longer the current one.
-  S.audit = null; $("tally").textContent = ""; renderRail(); renderNote();
+  S.audit = null; S.edit = null; $("tally").textContent = ""; renderRail(); renderNote();
   busy(semantic ? "Auditing, then reviewing the content" : "Auditing");
   $("check").disabled = true;
   try {
@@ -1089,11 +1196,13 @@ function byFix(actions) {
     const instances = a.count > 1 || a.instances[0].shape ? `
       <details>
         <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
-        ${a.instances.map((i) => `<div class="inst" data-goto="${i.slide}"
+        ${a.instances.map((i, k) => `<div class="inst" data-goto="${i.slide}"
             data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
             data-label="${esc(a.rule_id)}">
             <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
-            — ${esc(sentence(i.message))}
+            — ${esc(sentence(i.message))}${
+              a.movable && i.move && !i.move.refused
+                ? ` <button class="mv" data-moveinst="${index}:${k}">Move</button>` : ""}
           </div>`).join("")}
       </details>` : "";
     return `<div class="action${a.rejected ? " turned-down" : ""}">
@@ -1107,7 +1216,7 @@ function byFix(actions) {
         <div class="k">${esc(a.title)}</div>
         <div class="scope">${where}${times}</div>
         ${a.remedy ? `<div class="do">${esc(a.remedy)}</div>` : ""}
-        ${actionButtons(a)}
+        ${actionButtons(a, index)}
         ${delta}
         ${a.why ? `<div class="why">${esc(a.why)}</div>` : ""}
         ${instances}
@@ -1116,9 +1225,10 @@ function byFix(actions) {
 }
 
 // Fix where the change is a substitution with one correct outcome; say so, and
-// why, where it is not. A button that moved shapes would be the useful-looking
-// one and the one that breaks decks.
-function actionButtons(a) {
+// why, where it is not. A button that moved shapes *for* the reader would be the
+// useful-looking one and the one that breaks decks — so where the answer is a
+// position, the offer is the mouse rather than the correction.
+function actionButtons(a, index) {
   if (a.rejected) {
     return `<div class="acts">
       <span class="manual">Set aside for this deck.</span>
@@ -1129,19 +1239,28 @@ function actionButtons(a) {
   // attention with the ones they have not. Session-only, deliberately — see the
   // note on Deck.rejected.
   const aside = `<button data-reject="${esc(a.key)}">Set aside</button>`;
-  if (!a.fixable) {
-    return `<div class="acts">${aside}
+  if (a.fixable) {
+    return `<div class="acts">
+      <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
+  }
+  if (a.movable) {
+    return `<div class="acts">
+      <button class="go" data-move="${index}">Move it</button>${aside}
       <span class="manual">${esc(whyManual(a))}</span></div>`;
   }
-  return `<div class="acts">
-    <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
+  return `<div class="acts">${aside}
+    <span class="manual">${esc(whyManual(a))}</span></div>`;
 }
 
-// Named per rule rather than as one sentence, because the two reasons are not
-// the same and the difference is the whole basis for the refusal.
+// Named per rule rather than as one sentence, because the reasons are not the
+// same and the difference is the whole basis for the refusal. Where the shape
+// can be picked up, the sentence says what the refusal actually is: TieOut will
+// not choose the position, which is not the same as nothing being possible.
 const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003",
                   "LO-004","LO-005","LO-006","LO-007","LO-008"];
 function whyManual(a) {
+  if (a.movable)
+    return "Yours to place — TieOut will not choose where it goes.";
   if (GEOMETRY.includes(a.rule_id))
     return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
   return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
@@ -1165,6 +1284,9 @@ function bySlide() {
 
 async function correct(path, body, working) {
   if (S.checking) return;
+  // A correction — or an undo of one — can move the shape the editor is holding,
+  // so the editor's coordinates stop being true the moment either lands.
+  S.edit = null;
   S.checking = true;
   busy(working);
   let next;
@@ -1209,6 +1331,25 @@ function wireNote() {
         { deck_id: S.deck.deck_id, client: S.client, key,
           rejected: el.dataset.reject !== undefined },
         "");
+    };
+  });
+  // Picking a shape up. The group's button takes the first shape it can move,
+  // which is the one a reader means by "this"; each instance carries its own so
+  // a finding on six shapes is six separate decisions rather than one.
+  $("pane").querySelectorAll("[data-move]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const action = (S.audit.actions || [])[Number(el.dataset.move)];
+      const instance = action && action.instances.find((i) => movableOf(i));
+      if (instance) beginMove(instance.slide, instance);
+    };
+  });
+  $("pane").querySelectorAll("[data-moveinst]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const [a, k] = el.dataset.moveinst.split(":").map(Number);
+      const instance = ((S.audit.actions || [])[a] || { instances: [] }).instances[k];
+      if (instance) beginMove(instance.slide, instance);
     };
   });
   $("pane").querySelectorAll("[data-goto]").forEach((el) => {
@@ -1378,11 +1519,12 @@ function renderSlide() {
     $("slide").style.aspectRatio = `${S.deck.width_pt} / ${S.deck.height_pt}`;
   $("slide").innerHTML = (thumbs
     ? `<img alt="Slide ${S.slide}"
-        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${encodeURIComponent(TOKEN)}">`
+        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${encodeURIComponent(TOKEN)}&v=${S.deck.thumbnails.version || 0}">`
     : `<div class="placeholder"><h2>Slide ${S.slide}</h2>
         <p>${esc(slideTitle(S.slide) || "")}</p>
         <p style="margin-top:12px">${esc(S.deck.thumbnails.reason
           || "Slide images are still rendering.")}</p></div>`) + markup();
+  wireEdit();
 }
 
 // The outline over the shape a finding is about. Positioned as a percentage of
@@ -1393,12 +1535,307 @@ function renderSlide() {
 function markup() {
   const m = S.mark;
   if (!m || !S.deck.width_pt || !S.deck.height_pt) return "";
-  const [left, top, width, height] = m.bbox;
   const pc = (value, total) => `${(value / total) * 100}%`;
-  return `<div class="mark" style="
+  const e = S.edit;
+  // While a shape is being moved the same outline is the thing being moved: it
+  // is drawn from the editor's own coordinates rather than from the finding's
+  // box, and it is the only overlay on the page that takes a pointer.
+  const [left, top, width, height] = e
+    ? [e.x / EMU_PT, e.y / EMU_PT, e.cx / EMU_PT, e.cy / EMU_PT]
+    : m.bbox;
+  const box = `<div class="mark${e ? " live" : ""}"${e ? ' tabindex="0"' : ""} style="
     left:${pc(left, S.deck.width_pt)}; top:${pc(top, S.deck.height_pt)};
     width:${pc(width, S.deck.width_pt)}; height:${pc(height, S.deck.height_pt)}">
-    ${m.label ? `<span>${esc(m.label)}</span>` : ""}</div>`;
+    ${m.label ? `<span>${esc(m.label)}</span>` : ""}${
+      e ? `<i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>` : ""}</div>`;
+  return editLayer() + box;
+}
+
+/* ---------- the position editor ----------
+
+   TieOut will not choose where a shape belongs — snapping the six shapes LO-003
+   reported on a real deck to their nearest grid line drove one text box into its
+   neighbour and pulled an evenly spaced column out of true. Which alignment
+   matters is a judgement about what the slide is for, and that judgement is the
+   person's. What the tool can supply is precision: the learned grid to aim at,
+   a pointer, and arrow keys that move by exactly a point.
+
+   So every coordinate that leaves this block came from a mouse or a keypress.
+   Nothing here rounds toward a rule, and the server writes the number it is
+   given without consulting the grid at all. */
+
+function grid() {
+  const g = S.audit && S.audit.grid;
+  return g && (g.columns_pt.length || g.rows_pt.length) ? g : null;
+}
+
+// The move block the server put on a finding, when it names a shape this can
+// actually pick up. `refused` is set for a shape inside a group: its offset is
+// stored in the group's coordinate space, so a slide-space number written there
+// would move it somewhere nobody asked for.
+function movableOf(source) {
+  const m = source && source.move;
+  return m && !m.refused && m.x_emu !== undefined ? m : null;
+}
+
+function beginMove(slideIndex, source) {
+  const m = movableOf(source);
+  if (!m) return;
+  select(slideIndex, [m.left_pt, m.top_pt, m.width_pt, m.height_pt], m.shape);
+  S.edit = {
+    slide: slideIndex, shapeId: m.shape_id, name: m.shape,
+    x0: m.x_emu, y0: m.y_emu, x: m.x_emu, y: m.y_emu,
+    cx: m.cx_emu, cy: m.cy_emu,
+    rotation: m.rotation || 0,
+    lineX: null, lineY: null, busy: false,
+  };
+  renderSlide();
+  const box = $("slide").querySelector(".mark");
+  if (box) box.focus();
+}
+
+function endMove() {
+  if (!S.edit) return;
+  S.edit = null;
+  renderSlide();
+}
+
+// Snap one axis. `value` and `size` are EMU; `lines` are the learned grid in
+// points, exactly as the profile holds them. Both edges are candidates — a
+// shape can be aligned by its right edge as readily as its left — and the
+// nearer wins. Mirrors what LO-003 measures (left and right against columns,
+// top and bottom against rows), so a shape dragged onto a line clears the
+// finding that named it rather than landing merely near it.
+//
+// `tolerance` is the server's snap_pt, which is the near-miss window rather
+// than the grid's own tolerance — see _snap_reach. Every shape LO-003 reports
+// sits further from the line than grid.tolerance_pt, so a magnet that size
+// could not reach one of them.
+function snapAxis(value, size, lines, tolerance) {
+  let best = null;
+  for (const line of lines) {
+    const at = Math.round(line * EMU_PT);
+    for (const candidate of [at, at - size]) {
+      const off = Math.abs(candidate - value);
+      if (off <= tolerance * EMU_PT && (best === null || off < best.off))
+        best = { at: candidate, line, off };
+    }
+  }
+  return best;
+}
+
+// Where the shape would go for a raw pointer position, with the grid applied.
+// Arrow keys deliberately do not come through here: a nudge of one point that
+// a snap pulls straight back is a nudge that did nothing, and the keyboard is
+// the precision instrument of the two.
+function withSnap(x, y) {
+  const g = grid();
+  const e = S.edit;
+  e.lineX = e.lineY = null;
+  if (!g || !S.snap) { e.x = x; e.y = y; return; }
+  const cx = snapAxis(x, e.cx, g.columns_pt, g.snap_pt);
+  const cy = snapAxis(y, e.cy, g.rows_pt, g.snap_pt);
+  e.x = cx ? cx.at : x;
+  e.y = cy ? cy.at : y;
+  e.lineX = cx ? cx.line : null;
+  e.lineY = cy ? cy.line : null;
+}
+
+// The editor's furniture, drawn once per render: the ghost of where the shape
+// started, one guide per learned grid line, and the readout.
+function editLayer() {
+  const e = S.edit, g = grid();
+  if (!e) return "";
+  const pcx = (v) => `${(v / (S.deck.width_pt * EMU_PT)) * 100}%`;
+  const pcy = (v) => `${(v / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  const guides = !g ? "" :
+    g.columns_pt.map((c) => `<div class="guide col" data-col="${c}"
+        style="left:${(c / S.deck.width_pt) * 100}%"></div>`).join("") +
+    g.rows_pt.map((r) => `<div class="guide row" data-row="${r}"
+        style="top:${(r / S.deck.height_pt) * 100}%"></div>`).join("");
+  return guides + `
+    <div class="ghost" style="left:${pcx(e.x0)}; top:${pcy(e.y0)};
+      width:${pcx(e.cx)}; height:${pcy(e.cy)}"></div>` + posbar();
+}
+
+function posbar() {
+  const g = grid();
+  return `<div class="posbar" id="posbar">
+    <div><span class="who">${esc(S.edit.name)}<em> · slide ${S.edit.slide}</em></span></div>
+    <div><span class="read" id="posread"></span></div>
+    ${g ? `<div><label title="Within ${g.snap_pt}pt of a learned grid line, dragging pulls onto it — the same distance LO-003 calls a near miss. Arrow keys always move by exactly the amount shown.">
+      <input type="checkbox" id="snaptoggle" ${S.snap ? "checked" : ""}> Snap to grid</label></div>` : ""}
+    <div>
+      <button class="go" id="applymove">Apply move</button>
+      <button id="resetmove">Reset</button>
+      <button id="cancelmove">Done</button>
+    </div>
+    <span class="hint">Drag, or use the arrow keys — 1pt, or 10pt with Shift.
+      Esc closes without writing anything.</span>
+  </div>`;
+}
+
+// Style updates only, never innerHTML: a drag repaints on every pointer event,
+// and rebuilding the canvas would reload the slide image sixty times a second.
+function paintEdit() {
+  const e = S.edit;
+  if (!e) return;
+  const box = $("slide").querySelector(".mark");
+  if (box) {
+    box.style.left = `${(e.x / (S.deck.width_pt * EMU_PT)) * 100}%`;
+    box.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  }
+  $("slide").querySelectorAll(".guide").forEach((el) => {
+    const mine = el.dataset.col !== undefined
+      ? Number(el.dataset.col) === e.lineX
+      : Number(el.dataset.row) === e.lineY;
+    el.className = `guide ${el.dataset.col !== undefined ? "col" : "row"} `
+      + (mine ? "on" : "near");
+  });
+  const read = $("posread");
+  if (read) {
+    const dx = (e.x - e.x0) / EMU_PT, dy = (e.y - e.y0) / EMU_PT;
+    const moved = e.x !== e.x0 || e.y !== e.y0;
+    read.innerHTML =
+      `<b>X</b> ${(e.x / EMU_PT).toFixed(1)}<span class="${e.lineX !== null ? "snapped" : ""}">${
+        e.lineX !== null ? " │" : ""}</span>  `
+      + `<b>Y</b> ${(e.y / EMU_PT).toFixed(1)}<span class="${e.lineY !== null ? "snapped" : ""}">${
+        e.lineY !== null ? " ─" : ""}</span>`
+      + (moved ? `  <span class="d">(${dx >= 0 ? "+" : ""}${dx.toFixed(1)}, ${
+        dy >= 0 ? "+" : ""}${dy.toFixed(1)}pt)</span>` : `  <span class="d">(unmoved)</span>`);
+  }
+  const apply = $("applymove"), reset = $("resetmove");
+  const moved = e.x !== e.x0 || e.y !== e.y0;
+  if (apply) apply.disabled = !moved || e.busy;
+  if (reset) reset.disabled = !moved || e.busy;
+}
+
+function wireEdit() {
+  const e = S.edit;
+  if (!e) return;
+  const box = $("slide").querySelector(".mark");
+  if (!box) return;
+
+  let from = null;
+  box.onpointerdown = (event) => {
+    if (e.busy || event.button !== 0) return;
+    event.preventDefault();
+    box.setPointerCapture(event.pointerId);
+    box.classList.add("dragging");
+    from = { px: event.clientX, py: event.clientY, x: e.x, y: e.y };
+  };
+  box.onpointermove = (event) => {
+    if (!from) return;
+    // From the rendered width each time rather than once on pointerdown: the
+    // window can be resized mid-drag, and a stale scale silently moves the
+    // shape by the wrong amount.
+    const rect = $("slide").getBoundingClientRect();
+    const perPx = (S.deck.width_pt * EMU_PT) / rect.width;
+    withSnap(
+      Math.round(from.x + (event.clientX - from.px) * perPx),
+      Math.round(from.y + (event.clientY - from.py) * perPx),
+    );
+    paintEdit();
+  };
+  const release = (event) => {
+    if (!from) return;
+    from = null;
+    box.classList.remove("dragging");
+    try { box.releasePointerCapture(event.pointerId); } catch (_) { /* already gone */ }
+  };
+  box.onpointerup = release;
+  box.onpointercancel = release;
+
+  const toggle = $("snaptoggle");
+  if (toggle) toggle.onchange = () => {
+    S.snap = toggle.checked;
+    // Re-apply to where the shape is now, so switching snap on pulls it onto the
+    // line it is beside instead of waiting for the next drag.
+    withSnap(e.x, e.y);
+    paintEdit();
+  };
+  $("applymove").onclick = applyMove;
+  $("resetmove").onclick = () => {
+    e.x = e.x0; e.y = e.y0; e.lineX = e.lineY = null;
+    paintEdit();
+  };
+  $("cancelmove").onclick = endMove;
+  paintEdit();
+}
+
+// 1pt, or 10pt with Shift, and exactly that: no snap, no rounding. EMU_PT is an
+// integer, so the shape returns to the offset it started from however many times
+// it is nudged away from it and back.
+function nudge(dx, dy, big) {
+  const e = S.edit;
+  const step = EMU_PT * (big ? 10 : 1);
+  e.x += dx * step;
+  e.y += dy * step;
+  e.lineX = e.lineY = null;
+  paintEdit();
+}
+
+const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+
+document.addEventListener("keydown", (event) => {
+  if (!S.edit || S.edit.busy) return;
+  const on = document.activeElement;
+  if (on && /^(INPUT|TEXTAREA|SELECT)$/.test(on.tagName) && on.id !== "snaptoggle") return;
+  if (event.key === "Escape") { event.preventDefault(); return endMove(); }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (S.edit.x !== S.edit.x0 || S.edit.y !== S.edit.y0) applyMove();
+    return;
+  }
+  const arrow = ARROWS[event.key];
+  if (!arrow) return;
+  event.preventDefault();  // or the canvas scrolls out from under the shape
+  nudge(arrow[0], arrow[1], event.shiftKey);
+});
+
+async function applyMove() {
+  const e = S.edit;
+  if (!e || e.busy || (e.x === e.x0 && e.y === e.y0)) return;
+  e.busy = true; paintEdit();
+  busy("Moving the shape");
+  let next;
+  try {
+    next = await api("/api/move", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client,
+      slide: e.slide, shape_id: e.shapeId, x_emu: e.x, y_emu: e.y,
+    } });
+  } catch (err) {
+    e.busy = false; busy(""); paintEdit();
+    return paneMessage("bad", err.message);
+  }
+  busy("");
+  S.audit = next;
+  S.edit = null;
+  // The move changes what a slide looks like, so the images are being made
+  // again in the background. Everything else — the note, the counts, the mark —
+  // is already right.
+  refreshThumbs();
+  renderRail(); renderNote(); editState(); renderSlide();
+  paneMessage("good", `${next.moved}. ${next.summary.total} finding${
+    next.summary.total === 1 ? "" : "s"} left. Undo is on the ribbon.`);
+}
+
+// Poll until the re-render lands, then redraw. Separate from pollThumbs, which
+// waits for a deck's first images; this one waits for a newer set of them.
+async function refreshThumbs() {
+  if (!S.deck) return;
+  const was = S.deck.thumbnails.version;
+  for (let i = 0; i < 90 && S.deck; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let d;
+    try { d = await api(`/api/decks/${S.deck.deck_id}`); } catch (_) { return; }
+    S.deck = d;
+    thumbState();
+    if (d.thumbnails.version !== was || d.thumbnails.reason) {
+      renderRail(); renderSlide(); return;
+    }
+    if (!d.thumbnails.rendering) return;
+  }
 }
 
 function slideTitle(index) {
@@ -1409,6 +1846,14 @@ function slideTitle(index) {
 }
 
 function select(index, bbox, label) {
+  // Selecting anything else puts the shape down. Nothing has been written, so
+  // there is nothing to undo — but a move abandoned in silence reads as a move
+  // that was applied and did nothing, so it says so.
+  if (S.edit && !S.edit.busy) {
+    const moved = S.edit.x !== S.edit.x0 || S.edit.y !== S.edit.y0;
+    S.edit = null;
+    if (moved) paneMessage("warn", "Move discarded — nothing was written to the deck.");
+  }
   S.slide = index;
   S.mark = bbox ? { bbox, label: label || "" } : null;
   $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;

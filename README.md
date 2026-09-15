@@ -852,14 +852,19 @@ spelling to the canon term, a double space to one space, a document property to
 nothing at all. Each is a substitution, and applying it cannot make the deck
 worse.
 
-**Geometry is never fixed, and that is a finding rather than a policy.** Snapping
-the six shapes LO-003 reported on a real deck to their nearest grid line was
-tried: it drove one text box into its neighbour — a `major` overlap where there
-had been none — and turned a timetable column spaced evenly to the point into one
-varying by five. The grid lines had been derived from that deck, different shapes
-align to different ones, and pulling a group onto a line breaks its relationship
-with everything around it. Which alignment matters is a judgement about what the
-slide is for. So LO-\*, the logo rules and BR-008 report and stop, and say why.
+**TieOut never decides where a shape goes, and that is a finding rather than a
+policy.** Snapping the six shapes LO-003 reported on a real deck to their nearest
+grid line was tried: it drove one text box into its neighbour — a `major` overlap
+where there had been none — and turned a timetable column spaced evenly to the
+point into one varying by five. The grid lines had been derived from that deck,
+different shapes align to different ones, and pulling a group onto a line breaks
+its relationship with everything around it. Which alignment matters is a
+judgement about what the slide is for.
+
+So there is no **Fix it** on LO-\*, the logo rules or BR-008, and no builder in
+`tieout_fix` that could produce one. What there is instead is
+[the position editor](#moving-a-shape-yourself): the judgement stays the
+person's, and the tool supplies the precision.
 
 **Nor is anything fixed where the answer is unknowable.** Two figures that
 disagree, a total that does not sum, a placeholder that needs real words, a word
@@ -874,6 +879,53 @@ itself is never written over. **Set aside** is held for the session only: decidi
 to leave one deck's colour alone is not a decision about the client's house
 style, and writing it to the profile would make it one. For that, `tieout check
 --accept` writes a suppression.
+
+### Moving a shape yourself
+
+Where a finding is about *where something sits* — `LO-001` through `LO-005`,
+`LO-008`, `BR-002`, `BR-008` — the note offers **Move it** instead of **Fix it**,
+and the outline already drawn over the shape becomes something you can pick up.
+
+```
+Off canvas · slide 21   X 36.0 │  Y 120.0 ─  (-864.0, +0.0pt)   ☑ Snap to grid
+                                              [ Apply move ] [ Reset ] [ Done ]
+        Drag, or use the arrow keys — 1pt, or 10pt with Shift.
+```
+
+- **Drag** it with the mouse, and the learned grid appears as guides. Come within
+  the near-miss distance of a line and the shape is pulled onto it; the line
+  lights up and the readout marks the axis that snapped. Turn **Snap to grid**
+  off and the shape lands exactly where you left it.
+- **Arrow keys** move by exactly one point, or ten with Shift, and never snap.
+  A nudge that a magnet pulled straight back would be a nudge that did nothing,
+  so the keyboard is the precise instrument of the two.
+- **Apply move** writes it and re-audits, so the count moves as you work. **Undo**
+  on the ribbon steps back through moves and corrections alike. `Esc` closes the
+  editor without writing anything.
+
+Two details worth knowing.
+
+**The magnet reaches further than the grid's own tolerance, and has to.** LO-003
+reports an edge that is *further* from a line than `layout.grid.tolerance_pt` —
+that is what makes it off-grid rather than on it — and no further than
+`layout.near_miss_alignment_pt.max`. A magnet the width of the tolerance could
+therefore not reach a single shape the rule reports. The reach is the near-miss
+window instead: the deck's own account of how far off a line a shape can be and
+still be trying to sit on it. Wider than that would pull shapes onto lines they
+are deliberately away from, which is the mistake auto-snapping made.
+
+**A shape inside a group cannot be moved here**, and the editor says so rather
+than quietly not offering. A grouped shape's offset is stored in its group's
+coordinate space, which the group then translates and scales; writing a
+slide-space number into it would move the shape somewhere nobody asked for.
+Ungroup it in PowerPoint and TieOut will move it.
+
+The coordinates written are the ones you produced — nothing is rounded toward a
+rule, and the server consults no grid before writing them. That is the whole
+reason this is allowed to write geometry when nothing else in TieOut is. It is
+also why the arithmetic runs in whole EMU from the page to the file: a point is
+12,700 of them, so ten nudges out and ten nudges back land on the offset they
+started from exactly, rather than near it.
 
 ### The note answers three questions, in order
 
@@ -950,7 +1002,8 @@ when the server stops.
    the residuals and said so.
 5. **Run.**
 6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
-   can correct exactly and **Export deck** when you are done. **Copy note** puts the same thing on
+   can correct exactly, **Move it** where the answer is a position rather than a
+   substitution, and **Export deck** when you are done. **Copy note** puts the same thing on
    the clipboard as plain text, and the self-contained HTML report is the one
    `tieout check --format html` produces.
 
@@ -1372,10 +1425,18 @@ audit is only ever as good as the profile behind it.
 
 **Auto-fix is deliberately partial.** The UI will apply a correction where the
 change is a substitution with exactly one right answer — see
-[Fixing what can be fixed](#fixing-what-can-be-fixed). It will not touch
-geometry, and it will not guess at anything the tool can see is wrong without
-knowing what is right. Those stay instructions for a person, and the CLI applies
+[Fixing what can be fixed](#fixing-what-can-be-fixed). It will not choose where a
+shape goes, and it will not guess at anything the tool can see is wrong without
+knowing what is right. Those stay judgements for a person: the first has
+[an editor](#moving-a-shape-yourself) that supplies the precision and takes the
+coordinates from your own mouse, and the rest stay instructions. The CLI applies
 nothing at all.
+
+**The position editor moves a shape and nothing else.** It does not resize,
+rotate, reorder or regroup, and it cannot move a shape inside a group. Moving a
+shape is also not checked against anything before it is written: put a shape
+somewhere that overlaps its neighbour and the next audit reports the overlap,
+which is the tool doing its job rather than refusing yours.
 
 **Ambiguous dates are resolved by order, not by intelligence.** `09/14/2026` is
 unambiguous, but `05/06/2026` is not, and the first matching format in the
@@ -1465,7 +1526,8 @@ The UI is a third:
 ```
 tieout_fix/
   the corrections, and the refusals: a substitution with one right answer is
-  applied, geometry and judgement are never touched
+  applied, judgement is never guessed at, and the only geometry it writes is a
+  position a person supplied with their own mouse
 
 tieout_ui/
   render.py    LibreOffice -> PDF -> PNG, degrading to nothing on every failure

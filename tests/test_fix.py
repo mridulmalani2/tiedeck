@@ -14,6 +14,7 @@ put a button on.
 
 from __future__ import annotations
 
+import re
 import shutil
 import zipfile
 
@@ -25,8 +26,9 @@ from pptx.util import Emu, Pt
 from tieout.learn import learn_from_decks
 from tieout.model.loader import load_deck
 from tieout.model.package import load_package
+from tieout.model.units import EMU_PER_POINT, pt_to_emu
 from tieout.rules.base import clear_caches, run_rules
-from tieout_fix import apply_fix, plan_fixes
+from tieout_fix import apply_fix, move_fix, plan_fixes
 
 
 def _audit(deck, profile):
@@ -282,6 +284,251 @@ def test_every_fix_on_the_dirty_deck_applies_and_reduces_the_count(
     after = len(_audit(after_deck, reference_profile).findings)
     assert after < before
     assert after_deck.slide_count == dirty_deck.slide_count
+
+
+# --------------------------------------------------------------------------- #
+# Moving a shape: the one fix whose value comes from the person
+# --------------------------------------------------------------------------- #
+
+
+def _moveable_deck(path):
+    """Two slides, each with a text box and a table.
+
+    A table because it is a ``graphicFrame``, which keeps its transform in
+    ``p:xfrm`` rather than ``a:xfrm`` -- a distinction that costs nothing to get
+    right and reports every chart and table at the slide origin when it is got
+    wrong.
+    """
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for index in range(2):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        box = slide.shapes.add_textbox(Pt(60), Pt(80), Pt(300), Pt(40))
+        box.name = f"Body {index}"
+        box.text_frame.text = f"Body copy on slide {index + 1}."
+        table = slide.shapes.add_table(2, 2, Pt(100), Pt(200), Pt(300), Pt(80))
+        table.name = f"Table {index}"
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _emu(points):
+    """``pt_to_emu`` with the "not specified" case ruled out, since every shape
+    these tests build has a real box."""
+    value = pt_to_emu(points)
+    assert value is not None
+    return value
+
+
+def _shape(deck, slide_index, name):
+    slide = deck.slide(slide_index)
+    assert slide is not None, f"no slide {slide_index}"
+    for shape in slide.all_shapes():
+        if shape.ref.name == name:
+            return shape
+    raise AssertionError(f"no shape named {name} on slide {slide_index}")
+
+
+def _move(shape, slide_index, x_emu, y_emu):
+    return move_fix(
+        slide_index=slide_index,
+        shape_id=shape.ref.shape_id,
+        shape_name=shape.ref.name,
+        x_emu=x_emu,
+        y_emu=y_emu,
+        cx_emu=_emu(shape.width_pt),
+        cy_emu=_emu(shape.height_pt),
+    )
+
+
+def _offset(deck, slide_index, name):
+    shape = _shape(deck, slide_index, name)
+    return (_emu(shape.left_pt), _emu(shape.top_pt))
+
+
+@pytest.mark.parametrize("name", ["Body 0", "Table 0"])
+def test_a_move_writes_the_offset_it_was_given(tmp_path, name):
+    """Exactly the offset, with nothing rounded toward anything. The whole
+    licence for writing geometry at all is that the number came from the person
+    rather than from the tool."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, name)
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _move(shape, 1, 1_234_567, 7_654_321)).applied
+
+    assert _offset(load_deck(target), 1, name) == (1_234_567, 7_654_321)
+
+
+@pytest.mark.parametrize("name", ["Body 0", "Table 0"])
+def test_ten_nudges_out_and_ten_back_land_on_the_original_offset(tmp_path, name):
+    """The property the arrow keys rest on.
+
+    A nudge is ``EMU_PER_POINT`` and the offset is an integer number of EMU, so
+    twenty moves are integer addition and the shape returns to where it was --
+    not to within a rounding error of it. Done in points this drifts, and a
+    shape that never quite goes back is a shape whose owner stops trusting undo.
+    """
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, name)
+    start = (_emu(shape.left_pt), _emu(shape.top_pt))
+
+    current, x, y = source, start[0], start[1]
+    for step in range(20):
+        direction = 1 if step < 10 else -1
+        x += direction * EMU_PER_POINT
+        y += direction * EMU_PER_POINT
+        nxt = tmp_path / f"step{step}.pptx"
+        report = apply_fix(current, nxt, _move(shape, 1, x, y))
+        assert report.applied, report.detail
+        current = nxt
+
+    assert _offset(load_deck(current), 1, name) == start
+
+
+def test_a_move_changes_nothing_but_the_offset(tmp_path):
+    """Not the size, not the rotation, not the other shapes, not the other
+    slides, and not the package's ability to open."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _move(shape, 1, 90 * 12700, 300 * 12700)).applied
+
+    after = load_deck(target)
+    moved = _shape(after, 1, "Body 0")
+    assert (moved.left_pt, moved.top_pt) == (90.0, 300.0)
+    assert (moved.width_pt, moved.height_pt) == (shape.width_pt, shape.height_pt)
+    assert moved.rotation == shape.rotation
+
+    assert _offset(after, 1, "Table 0") == _offset(deck, 1, "Table 0")
+    assert _offset(after, 2, "Body 1") == _offset(deck, 2, "Body 1")
+    assert after.slide_count == deck.slide_count
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+    Presentation(str(target))
+
+
+def test_a_move_gives_an_inherited_placeholder_a_transform_of_its_own(tmp_path):
+    """A placeholder nobody has dragged has no ``a:xfrm`` at all -- the normal
+    state of a title on a house template. Writing an offset there means writing
+    the whole transform, and a transform with an offset and no extent is not
+    valid OOXML, so the size the shape already resolves to is written with it.
+    """
+    source = tmp_path / "before.pptx"
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "Inherited"
+    presentation.save(str(source))
+
+    deck = load_deck(source)
+    slide = deck.slide(1)
+    assert slide is not None
+    title = next(s for s in slide.all_shapes() if s.is_placeholder)
+    assert (title.width_pt, title.height_pt) != (0.0, 0.0), "it inherits a real box"
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _move(title, 1, 120 * 12700, 40 * 12700)).applied
+
+    after_slide = load_deck(target).slide(1)
+    assert after_slide is not None
+    after = next(s for s in after_slide.all_shapes() if s.is_placeholder)
+    assert (after.left_pt, after.top_pt) == (120.0, 40.0)
+    assert (after.width_pt, after.height_pt) == (title.width_pt, title.height_pt)
+
+
+def test_a_move_follows_the_deck_order_not_the_part_numbers(tmp_path):
+    """Slide parts are numbered in creation order, not presentation order. A
+    deck whose slides have been reordered numbers them differently from how it
+    reads, and a move applied to the wrong slide is this feature's worst failure
+    because it is a silent one."""
+    source = tmp_path / "before.pptx"
+    _moveable_deck(source)
+
+    # Reverse the presentation order without touching the parts themselves,
+    # which is what dragging a slide in the rail does to the package.
+    with zipfile.ZipFile(source) as archive:
+        items = {name: archive.read(name) for name in archive.namelist()}
+    presentation = items["ppt/presentation.xml"].decode("utf-8")
+    ids = re.findall(r"<p:sldId [^>]*/>", presentation)
+    assert len(ids) == 2
+    items["ppt/presentation.xml"] = presentation.replace(
+        "".join(ids), "".join(reversed(ids))
+    ).encode("utf-8")
+    reordered = tmp_path / "reordered.pptx"
+    with zipfile.ZipFile(reordered, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, payload in items.items():
+            out.writestr(name, payload)
+
+    deck = load_deck(reordered)
+    # Slide 1 now holds what was built second.
+    first = _shape(deck, 1, "Body 1")
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(reordered, target, _move(first, 1, 200 * 12700, 200 * 12700)).applied
+
+    after = load_deck(target)
+    assert _offset(after, 1, "Body 1") == (200 * 12700, 200 * 12700)
+    assert _offset(after, 2, "Body 0") == _offset(deck, 2, "Body 0")
+
+
+def test_a_move_naming_a_shape_that_is_not_there_writes_nothing(tmp_path):
+    """The deck has changed under a page still showing the previous audit. The
+    file it was given has to come back untouched, because a half-applied move is
+    a deck someone sends."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+    ghost = move_fix(
+        slide_index=1,
+        shape_id=999_999,
+        shape_name="gone",
+        x_emu=10,
+        y_emu=10,
+        cx_emu=_emu(shape.width_pt),
+        cy_emu=_emu(shape.height_pt),
+    )
+
+    target = tmp_path / "after.pptx"
+    report = apply_fix(source, target, ghost)
+    assert not report.applied
+    assert "999999" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_move_off_the_end_of_the_deck_writes_nothing(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+
+    target = tmp_path / "after.pptx"
+    report = apply_fix(source, target, _move(shape, 9, 10, 10))
+    assert not report.applied
+    assert "slide 9" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_planning_can_never_produce_a_move(dirty_deck, reference_profile):
+    """The refusal above and this feature are the same rule, not two.
+
+    A move is applied from coordinates a person supplied; it is never something
+    the audit decided on. If one could arrive out of ``plan_fixes`` then TieOut
+    would be choosing where shapes go after all, which is the thing that broke a
+    real deck.
+    """
+    from tieout_fix import _BUILDERS, MOVE_KIND, MOVE_RULE_ID
+
+    planned = plan_fixes(_audit(dirty_deck, reference_profile), reference_profile)
+    assert all(fix.kind != MOVE_KIND for fix in planned.values())
+    assert all(fix.rule_id != MOVE_RULE_ID for fix in planned.values())
+    assert MOVE_RULE_ID not in _BUILDERS
+    assert not set(_BUILDERS) & set(GEOMETRY_RULES)
 
 
 def test_the_core_never_imports_the_fixer():

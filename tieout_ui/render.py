@@ -96,6 +96,12 @@ class Renderer:
 
     def _to_pdf(self, binary: str, deck_path: Path) -> Path | None:
         out_dir = self.work_dir / "pdf"
+        # Emptied rather than reused. A deck rendered a second time -- which is
+        # what happens after a shape is moved -- converts `v1-deck.pptx` beside
+        # the earlier `deck.pdf`, and picking the first of two by name would show
+        # the version before the move. With one file in the directory there is
+        # nothing to pick wrongly, and a conversion that failed leaves none.
+        shutil.rmtree(out_dir, ignore_errors=True)
         out_dir.mkdir(parents=True, exist_ok=True)
         profile = self.work_dir / "lo-profile"
         try:

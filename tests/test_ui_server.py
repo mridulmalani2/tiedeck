@@ -15,9 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tieout.model.loader import load_deck
+from tieout.model.units import pt_to_emu
 from tieout.profile.loader import PROFILE_DIR_ENV
 from tieout_ui.server import create_app, is_loopback
 from tieout_ui.session import MAX_UPLOAD_BYTES, SessionStore
+from tieout_ui.view import find_shape, movable
 
 
 @pytest.fixture
@@ -1180,3 +1182,332 @@ def test_the_upload_itself_is_never_written_over(client, dirty_uploaded, onboard
     )
     assert deck.path.read_bytes() == original
     assert deck.current != deck.path
+
+
+# --------------------------------------------------------------------------- #
+# Moving a shape
+#
+# The one route that writes geometry, and the reason it may is that it decides
+# none of it. What is worth testing is that the number the person supplied is
+# the number written, that the move flows through the same correction machinery
+# as everything else so undo and export need no special case, and that the
+# refusals around it hold.
+# --------------------------------------------------------------------------- #
+
+
+def _at(model, slide_index, shape_id):
+    """Where a shape actually sits in a deck, in whole EMU."""
+    shape = find_shape(model, slide_index, shape_id)
+    assert shape is not None, f"slide {slide_index} has no shape {shape_id}"
+    left, top = pt_to_emu(shape.left_pt), pt_to_emu(shape.top_pt)
+    assert left is not None and top is not None
+    return (left, top)
+
+
+def _movable(view):
+    """The first finding in an audit whose shape this can pick up."""
+    for slide in view["slides"]:
+        for finding in slide["findings"]:
+            move = finding["move"]
+            if move and not move["refused"] and finding["rule_id"] != "BR-009":
+                return slide["index"], move
+    return None, None
+
+
+def test_the_audit_carries_the_grid_a_shape_can_be_snapped_to(
+    client, dirty_uploaded, onboarded
+):
+    """The same grid LO-003 measures against, so a shape dragged onto a line
+    clears the finding that named it rather than landing merely near it."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    grid = view["grid"]
+    assert set(grid) == {"columns_pt", "rows_pt", "tolerance_pt", "snap_pt", "why"}
+    assert grid["columns_pt"] or grid["rows_pt"]
+    assert grid["tolerance_pt"] > 0
+
+
+def test_the_magnet_reaches_the_shapes_the_rule_reports(client, dirty_uploaded, onboarded):
+    """The property that makes snapping useful rather than decorative.
+
+    LO-003 reports an edge further from a line than ``grid.tolerance_pt`` -- that
+    is what makes it off-grid -- and no further than the near-miss window. A
+    magnet the width of ``tolerance_pt`` could not reach a single one of them, so
+    the reach is the window instead.
+    """
+    grid = _check(client, dirty_uploaded["deck_id"])["grid"]
+    assert grid["snap_pt"] > grid["tolerance_pt"], (
+        "a magnet no wider than the on-grid tolerance can never reach a near miss"
+    )
+
+
+def test_a_finding_about_a_shape_says_how_to_pick_it_up(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    _, move = _movable(view)
+    assert move is not None, "the seeded deck reports shapes"
+    assert {"shape_id", "shape", "x_emu", "y_emu", "cx_emu", "cy_emu"} <= set(move)
+    # EMU, as integers: the page's arithmetic has to be exact -- see move_fix.
+    for key in ("x_emu", "y_emu", "cx_emu", "cy_emu"):
+        assert isinstance(move[key], int)
+
+
+def test_moving_a_shape_writes_the_offset_and_can_be_undone(
+    client, dirty_uploaded, onboarded, store
+):
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    slide_index, move = _movable(view)
+    assert move is not None
+
+    target = (move["x_emu"] + 18 * 12700, move["y_emu"] - 6 * 12700)
+    moved = client.post(
+        "/api/move",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "x_emu": target[0], "y_emu": target[1],
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    after = moved.json()
+    assert after["edited"] is True and after["can_undo"] is True
+    assert after["moved"].startswith("Move ")
+    assert after["applied"] == [after["moved"]]
+
+    # The deck itself, not just the payload.
+    assert _at(store.require(deck_id).model, slide_index, move["shape_id"]) == target
+
+    undone = client.post("/api/undo", json={"deck_id": deck_id, "client": "demo"})
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["can_undo"] is False
+    assert _at(store.require(deck_id).model, slide_index, move["shape_id"]) == (
+        move["x_emu"], move["y_emu"],
+    )
+
+
+def test_a_moved_deck_exports_with_the_shape_moved(client, dirty_uploaded, onboarded, tmp_path):
+    """The whole point of the correction machinery being shared: export needed
+    no change to carry a move."""
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    slide_index, move = _movable(view)
+    assert move is not None
+    target = (move["x_emu"] + 24 * 12700, move["y_emu"])
+
+    assert client.post(
+        "/api/move",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "x_emu": target[0], "y_emu": target[1],
+        },
+    ).status_code == 200
+
+    exported = client.get(f"/api/export/{deck_id}")
+    assert exported.status_code == 200
+    assert "corrected" in exported.headers["content-disposition"]
+    out = tmp_path / "exported.pptx"
+    out.write_bytes(exported.content)
+    assert _at(load_deck(out), slide_index, move["shape_id"]) == target
+
+
+def test_snapping_a_near_miss_onto_its_grid_line_clears_the_finding(
+    client, dirty_uploaded, onboarded, store
+):
+    """The acceptance criterion the whole feature exists for.
+
+    LO-003 reports a shape edge sitting just off a learned grid line. Put the
+    edge on the line -- which is what dragging with snap on does -- and the
+    finding is gone on the next check, because the editor aims at the same grid
+    the rule measures against.
+    """
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    grid = view["grid"]
+
+    candidate = None
+    for slide in view["slides"]:
+        for finding in slide["findings"]:
+            move = finding["move"]
+            if finding["rule_id"] == "LO-003" and move and not move["refused"]:
+                candidate = (slide["index"], move)
+                break
+        if candidate:
+            break
+    assert candidate is not None, "the seeded deck reports a movable near miss"
+
+    slide_index, move = candidate
+    before = sum(
+        1 for s in view["slides"] for f in s["findings"]
+        if f["rule_id"] == "LO-003" and (f["move"] or {}).get("shape_id") == move["shape_id"]
+    )
+    assert before
+
+    # Snap exactly as the page does: the nearer of the two edges, against the
+    # columns for x and the rows for y.
+    def snapped(value, size, lines):
+        best = value
+        off = None
+        for line in lines:
+            at = round(line * 12700)
+            for candidate_value in (at, at - size):
+                delta = abs(candidate_value - value)
+                if delta <= grid["snap_pt"] * 12700 and (off is None or delta < off):
+                    best, off = candidate_value, delta
+        return best
+
+    x = snapped(move["x_emu"], move["cx_emu"], grid["columns_pt"])
+    y = snapped(move["y_emu"], move["cy_emu"], grid["rows_pt"])
+    assert (x, y) != (move["x_emu"], move["y_emu"]), (
+        "a near miss has to be within the magnet's reach, or snapping cannot "
+        "clear the finding that reported it"
+    )
+
+    moved = client.post(
+        "/api/move",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "x_emu": x, "y_emu": y,
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    after = sum(
+        1 for s in moved.json()["slides"] for f in s["findings"]
+        if f["rule_id"] == "LO-003" and (f["move"] or {}).get("shape_id") == move["shape_id"]
+    )
+    assert after < before, "snapping to the learned line should clear the near miss"
+
+
+def _grouped_deck(path):
+    """A deck with one shape inside a group and one beside it."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    loose = slide.shapes.add_textbox(Pt(60), Pt(80), Pt(300), Pt(40))
+    loose.name = "Loose"
+    loose.text_frame.text = "Not in a group."
+    group = slide.shapes.add_group_shape()
+    group.name = "Group"
+    inner = group.shapes.add_textbox(Pt(400), Pt(200), Pt(200), Pt(40))
+    inner.name = "Inside"
+    inner.text_frame.text = "In a group."
+    presentation.save(str(path))
+    return path
+
+
+def test_a_shape_inside_a_group_is_refused_with_the_reason(
+    client, onboarded, store, tmp_path
+):
+    """Not taste: a grouped shape's offset is stored in the group's coordinate
+    space, which the group then translates and scales. Writing a slide-space
+    number there moves the shape somewhere nobody asked for, so the refusal says
+    what to do about it instead of failing quietly."""
+    path = _grouped_deck(tmp_path / "grouped.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+
+    inside = next(
+        shape
+        for _, shape in deck.model.all_shapes()
+        if shape.ref.name == "Inside"
+    )
+    assert inside.ref.group_path, "the fixture puts this shape inside a group"
+
+    response = client.post(
+        "/api/move",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "x_emu": 0, "y_emu": 0,
+        },
+    )
+    assert response.status_code == 422
+    assert "group" in response.json()["detail"]
+
+    # And the shape beside it still moves, so the refusal is about the group
+    # rather than about the slide.
+    loose = next(
+        shape for _, shape in deck.model.all_shapes() if shape.ref.name == "Loose"
+    )
+    moved = client.post(
+        "/api/move",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": loose.ref.shape_id,
+            "x_emu": 90 * 12700, "y_emu": 90 * 12700,
+        },
+    )
+    assert moved.status_code == 200, moved.text
+
+
+def test_a_grouped_shape_is_reported_as_unmovable_with_its_reason(store, tmp_path):
+    """The page has to be able to say *why* rather than just not offering, or a
+    shape that cannot be dragged looks like a shape the tool failed to notice."""
+    path = _grouped_deck(tmp_path / "grouped.pptx")
+    model = load_deck(path)
+    inside = next(s for _, s in model.all_shapes() if s.ref.name == "Inside")
+    loose = next(s for _, s in model.all_shapes() if s.ref.name == "Loose")
+
+    assert "group" in movable(inside)
+    assert movable(loose) == ""
+
+
+def test_moving_a_shape_that_is_not_there_is_refused(client, dirty_uploaded, onboarded):
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.post(
+        "/api/move",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": 999_999, "x_emu": 0, "y_emu": 0,
+        },
+    )
+    assert response.status_code == 404
+
+
+def test_a_position_nothing_could_be_placed_at_is_refused(client, dirty_uploaded, onboarded):
+    """Parking a shape off the slide is the person's business and LO-001 reports
+    it. A coordinate a thousand slides away is a malformed request, and writing
+    it would produce a file PowerPoint will not open."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    slide_index, move = _movable(view)
+    assert move is not None
+    response = client.post(
+        "/api/move",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "x_emu": 99_999_999_999, "y_emu": 0,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_moving_a_shape_to_where_it_already_is_writes_no_version(
+    client, dirty_uploaded, onboarded, store
+):
+    """Otherwise a click that changed nothing leaves an undo step that undoes
+    nothing, and the count of corrections made stops meaning anything."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    slide_index, move = _movable(view)
+    assert move is not None
+    response = client.post(
+        "/api/move",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "x_emu": move["x_emu"], "y_emu": move["y_emu"],
+        },
+    )
+    assert response.status_code == 400
+    assert not store.require(dirty_uploaded["deck_id"]).history
+
+
+def test_moving_needs_the_token_like_everything_else(store, tmp_path, monkeypatch):
+    monkeypatch.setenv(PROFILE_DIR_ENV, str(tmp_path / "profiles"))
+    with TestClient(create_app(store)) as anonymous:
+        response = anonymous.post(
+            "/api/move",
+            json={"deck_id": "x", "client": "demo", "slide": 1, "shape_id": 1,
+                  "x_emu": 0, "y_emu": 0},
+        )
+    assert response.status_code == 401

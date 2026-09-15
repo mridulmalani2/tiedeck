@@ -18,6 +18,7 @@ The route list is short on purpose:
 * ``POST /api/check``            the audit, slide by slide
 * ``GET  /api/thumbnails/...``   a rendered slide
 * ``POST /api/fix``              apply one correction to the open deck
+* ``POST /api/move``             put one shape where the person dragged it
 * ``POST /api/undo``             step back one correction
 * ``POST /api/reject``           turn one down, for this session only
 * ``GET  /api/export/{id}``      the corrected deck
@@ -42,6 +43,7 @@ from tieout.learn import LearnResult, apply_answers, learn_from_decks
 from tieout.learn.emit import write as write_profile
 from tieout.model.deck import DeckModel
 from tieout.model.loader import DeckLoadError, load_deck
+from tieout.model.units import pt_to_emu
 from tieout.profile.loader import (
     ProfileError,
     load_for_client,
@@ -52,10 +54,10 @@ from tieout.profile.loader import (
 from tieout.profile.schema import Profile
 from tieout.report import html as html_report
 from tieout.rules.base import AuditResult, clear_caches, run_rules
-from tieout_fix import Fix, apply_fix, plan_fixes
+from tieout_fix import Fix, apply_fix, move_fix, plan_fixes
 from tieout_ui.edit import apply_edits, drop
 from tieout_ui.session import Deck, SessionStore
-from tieout_ui.view import audit_view, profile_view, rules_view
+from tieout_ui.view import audit_view, find_shape, movable, profile_view, rules_view
 
 __all__ = ["PAGE", "Guard", "create_app", "is_loopback"]
 
@@ -177,6 +179,24 @@ class FixRequest(BaseModel):
     client: str
     #: The action the correction belongs to, as the review note names it.
     key: str
+
+
+class MoveRequest(BaseModel):
+    """Where a person put a shape.
+
+    ``x_emu`` and ``y_emu`` are absolute, not a delta, and they are integers. The
+    page keeps its arithmetic in whole EMU so that a nudge out and a nudge back
+    cancel exactly; sending a delta would move that arithmetic onto the server
+    and lose the one thing this design guarantees, which is that the number the
+    person saw is the number written.
+    """
+
+    deck_id: str
+    client: str
+    slide: int
+    shape_id: int
+    x_emu: int
+    y_emu: int
 
 
 class UndoRequest(BaseModel):
@@ -423,6 +443,69 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         payload["changes"] = report.changes
         return JSONResponse(payload)
 
+    @app.post("/api/move")
+    def move(store: Guard, request: MoveRequest) -> JSONResponse:
+        """Put one shape where the person dragged it, and re-audit.
+
+        The only route in TieOut that writes geometry, and the reason it may is
+        that it computes none of it: the offset is taken from the request and
+        written, with no grid consulted and nothing rounded. What the server does
+        decide is whether the shape *can* be moved -- a grouped shape's offset is
+        in its group's coordinate space, so writing a slide-space number there
+        would be wrong -- and whether the number is sane.
+        """
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+
+        shape = find_shape(deck.model, request.slide, request.shape_id)
+        if shape is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"slide {request.slide} has no shape {request.shape_id}. "
+                    "Re-run the check and try again."
+                ),
+            )
+        refused = movable(shape)
+        if refused:
+            raise HTTPException(status_code=422, detail=refused)
+
+        _check_reach(deck.model, request.x_emu, request.y_emu)
+        if (request.x_emu, request.y_emu) == (
+            pt_to_emu(shape.left_pt),
+            pt_to_emu(shape.top_pt),
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="that is where the shape already is, so nothing was written.",
+            )
+
+        chosen = move_fix(
+            slide_index=request.slide,
+            shape_id=request.shape_id,
+            shape_name=shape.ref.display_name,
+            x_emu=request.x_emu,
+            y_emu=request.y_emu,
+            cx_emu=pt_to_emu(shape.width_pt) or 0,
+            cy_emu=pt_to_emu(shape.height_pt) or 0,
+        )
+        version = store.next_version(deck)
+        report = apply_fix(deck.current, version, chosen)
+        if not report.applied:
+            version.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=report.detail)
+
+        store.record(deck, version, chosen.summary)
+        deck.moved = True
+        _reload(deck)
+        # A move is the one correction worth re-rendering for: it is the only one
+        # whose result is a position, and a canvas still showing the old one
+        # would read as the move having failed.
+        store.render_in_background(deck, force=True)
+        payload = _recheck(deck, profile)
+        payload["moved"] = chosen.summary
+        return JSONResponse(payload)
+
     @app.post("/api/undo")
     def undo(store: Guard, request: UndoRequest) -> JSONResponse:
         deck = _require(store, request.deck_id)
@@ -431,6 +514,11 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         if undone is None:
             raise HTTPException(status_code=400, detail="nothing to undo")
         _reload(deck)
+        if deck.moved:
+            # Only decks whose geometry has been edited: everything else this
+            # tool applies is a recolour or a text substitution, which is not
+            # worth a LibreOffice conversion between a click and its result.
+            store.render_in_background(deck, force=True)
         payload = _recheck(deck, profile)
         payload["undone"] = undone
         return JSONResponse(payload)
@@ -475,6 +563,46 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+#: How far outside the canvas a shape may be placed, as a multiple of the slide's
+#: own dimensions. Parking a shape off-slide while you work is ordinary, and
+#: putting one somewhere it cannot be seen is the person's business -- LO-001
+#: will report it either way. What this rejects is a malformed request: a
+#: coordinate large enough to write a number PowerPoint will not open.
+_MOVE_REACH: Final[int] = 4
+
+
+def _snap_reach(profile: Profile) -> float:
+    """How near a grid line a dragged edge has to be for the line to pull it.
+
+    Not ``grid.tolerance_pt``, and the difference matters. LO-003 reports an edge
+    that is *further* than ``tolerance_pt`` from the nearest line -- that is what
+    makes it off-grid rather than on it -- and no further than
+    ``near_miss_alignment_pt.max``, which is what makes it a near miss rather
+    than a different position. A magnet of ``tolerance_pt`` therefore could not
+    reach a single shape this editor exists to help place: every one of them
+    starts outside it by definition.
+
+    So the reach is the near-miss window, which is the deck's own account of how
+    far off a line a shape can be and still be trying to sit on it. Wider than
+    that would pull shapes onto lines they are deliberately away from, which is
+    the mistake auto-snapping made.
+    """
+    return max(profile.layout.grid.tolerance_pt, profile.layout.near_miss_alignment_pt.max)
+
+
+def _check_reach(model: DeckModel, x_emu: int, y_emu: int) -> None:
+    limit_x = int((pt_to_emu(model.width_pt) or 0) * _MOVE_REACH)
+    limit_y = int((pt_to_emu(model.height_pt) or 0) * _MOVE_REACH)
+    if abs(x_emu) > limit_x or abs(y_emu) > limit_y:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "that position is further from the slide than any shape is placed "
+                "in practice, so it was not written."
+            ),
+        )
 
 
 def _plan(deck: Deck, profile: Profile) -> dict[str, Fix]:
@@ -523,6 +651,19 @@ def _audit_payload(
     view["edited"] = deck.edited
     view["applied"] = list(deck.applied)
     view["can_undo"] = bool(deck.history)
+    # The lines the canvas offers to snap to while a shape is being dragged.
+    # Added here rather than in the view because it is a fact about the client's
+    # house style, not about this deck -- and because it is the same grid LO-003
+    # measures against, so a shape dragged onto a line clears the finding that
+    # named it rather than landing somewhere merely near.
+    grid = profile.layout.grid
+    view["grid"] = {
+        "columns_pt": list(grid.columns_pt),
+        "rows_pt": list(grid.rows_pt),
+        "tolerance_pt": grid.tolerance_pt,
+        "snap_pt": _snap_reach(profile),
+        "why": profile.provenance.get("layout.grid", ""),
+    }
     view["fixable_count"] = sum(
         1
         for action in view["actions"]
@@ -558,6 +699,7 @@ def _deck_payload(deck: Deck) -> dict[str, Any]:
             "available": deck.thumbnails.available,
             "count": len(deck.thumbnails.pages),
             "reason": deck.thumbnails.reason,
+            "version": deck.thumbnails_version,
         },
         "slides": [
             {

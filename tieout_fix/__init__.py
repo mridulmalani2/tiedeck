@@ -13,20 +13,31 @@ typeface to the approved one, a variant spelling to the canon term, a double
 space to one space, a document property to nothing at all. Each has exactly one
 correct outcome, and applying it cannot make the deck worse.
 
-Geometry is never fixed, and that is a finding rather than a policy. Snapping the
-six shapes LO-003 reported on a real deck to their nearest grid line was tried:
-it drove one text box into its neighbour -- a *major* overlap where there had
-been none -- and turned a timetable column spaced evenly to the point into one
-varying by five. The grid lines were derived from that deck, different shapes
-align to different ones, and pulling a group onto a line breaks its relationship
-with everything around it. Which alignment matters is a judgement about what the
-slide is for. So LO-*, the logo rules and BR-008 report and stop.
+Geometry is never fixed *by the tool*, and that is a finding rather than a
+policy. Snapping the six shapes LO-003 reported on a real deck to their nearest
+grid line was tried: it drove one text box into its neighbour -- a *major*
+overlap where there had been none -- and turned a timetable column spaced evenly
+to the point into one varying by five. The grid lines were derived from that
+deck, different shapes align to different ones, and pulling a group onto a line
+breaks its relationship with everything around it. Which alignment matters is a
+judgement about what the slide is for. So LO-*, the logo rules and BR-008 state
+the measurement and stop, and no builder below produces a correction for them.
 
 Nor is anything fixed where the tool can see a problem but not the answer. Two
 figures that disagree, a total that does not sum, a placeholder that needs real
 words, a word the dictionary does not know, text that overflows its box: the
 tool knows something is wrong and has no way to know what is right. Inventing a
 value there would be worse than silence, because it would be wrong invisibly.
+
+**The one exception, and why it is not one.** :func:`move_fix` writes geometry.
+It is not a correction TieOut decided on: there is no builder for it, no rule
+produces it, and :func:`plan_fixes` can never return one. It exists only to
+carry two numbers a person produced with their own mouse or arrow keys onto the
+shape they were looking at. The distinction the rest of this module rests on is
+between a value the tool derived and a value the tool was handed, and a move is
+the second kind -- so the refusal above is intact. What TieOut still will not do
+is decide *where* a shape belongs, which is the judgement the grid-snapping
+experiment got wrong.
 
 Everything this package declines to fix is still reported. The deck a person
 gets back is the deck they gave, with the mechanical corrections made and every
@@ -35,6 +46,7 @@ judgement still theirs.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import shutil
 import zipfile
@@ -42,10 +54,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from lxml import etree
+
+from tieout.model.units import EMU_PER_POINT
 from tieout.profile.schema import Profile
 from tieout.rules.base import AuditResult, Finding
 
-__all__ = ["Fix", "FixReport", "action_key", "apply_fix", "plan_fixes"]
+__all__ = [
+    "MOVE_KIND",
+    "MOVE_RULE_ID",
+    "Fix",
+    "FixReport",
+    "MoveFailed",
+    "action_key",
+    "apply_fix",
+    "move_fix",
+    "move_key",
+    "plan_fixes",
+]
 
 #: Parts whose XML carries slide content. Colour and typeface substitutions walk
 #: these; charts and diagrams are included because a series recoloured by hand
@@ -85,6 +111,16 @@ class FixReport:
     applied: bool
     changes: int = 0
     detail: str = ""
+
+
+class MoveFailed(Exception):
+    """The shape a move names is not where the move says it is.
+
+    Its own exception because every other way a fix can fail is a defect in the
+    package, while this one usually means the deck has changed under a page still
+    showing the previous audit -- a different thing to tell someone, and a
+    recoverable one.
+    """
 
 
 # --------------------------------------------------------------------------------------
@@ -247,6 +283,80 @@ _BUILDERS: Final[dict[str, Any]] = {
 
 
 # --------------------------------------------------------------------------------------
+# Moving a shape: the one fix whose value comes from the person, not the tool
+# --------------------------------------------------------------------------------------
+
+#: The ``kind`` of a move, and the ``rule_id`` it carries. Not a real rule id --
+#: no rule produces a move -- but ``Fix.rule_id`` is how a caller tells one fix
+#: from another, and a move that claimed to be LO-003's correction would be
+#: saying TieOut chose the position. It did not.
+MOVE_KIND: Final[str] = "move"
+MOVE_RULE_ID: Final[str] = "MOVE"
+
+
+def move_key(slide_index: int, shape_id: int) -> str:
+    """The identity of "this shape, on this slide".
+
+    Deliberately not an :func:`action_key`. An action key names a decision the
+    audit found; this names a shape a person picked up. Keeping the two in
+    separate namespaces is what stops a move ever being looked up as a planned
+    correction, or a planned correction being applied as a move.
+    """
+    return f"{MOVE_RULE_ID}|{slide_index}|{shape_id}"
+
+
+def move_fix(
+    *,
+    slide_index: int,
+    shape_id: int,
+    shape_name: str,
+    x_emu: int,
+    y_emu: int,
+    cx_emu: int,
+    cy_emu: int,
+) -> Fix:
+    """A fix that puts one shape at one position, in EMU, exactly as given.
+
+    **Every number here came from the person.** ``x_emu`` and ``y_emu`` are where
+    they dragged or nudged the shape to; nothing in this module rounds them,
+    re-snaps them, or checks them against a grid line. That is the whole reason
+    this is allowed to write geometry when nothing else in TieOut is: the tool is
+    not deciding where the shape belongs, it is recording where someone put it.
+
+    The units are EMU and they are integers, which is not incidental. A nudge is
+    ``EMU_PER_POINT`` exactly, so ten nudges out and ten back is integer addition
+    that lands on the offset it started from -- where points would accumulate
+    floating-point error into a shape that never quite returns.
+
+    ``cx_emu`` and ``cy_emu`` are the shape's own size, and are used only when
+    the shape has no transform of its own -- an untouched placeholder inheriting
+    its box from the layout. Writing an offset there means writing a whole
+    ``a:xfrm``, and a transform with an offset and no extent is not valid OOXML.
+    The extent written is the one the shape already resolves to, so the shape
+    keeps the size it had; this is what PowerPoint itself does the first time
+    someone drags a placeholder.
+    """
+    return Fix(
+        key=move_key(slide_index, shape_id),
+        rule_id=MOVE_RULE_ID,
+        summary=(
+            f"Move {shape_name or f'shape {shape_id}'} on slide {slide_index} to "
+            f"{x_emu / EMU_PER_POINT:.1f}, {y_emu / EMU_PER_POINT:.1f}pt"
+        ),
+        slides=(slide_index,),
+        kind=MOVE_KIND,
+        payload={
+            "slide": slide_index,
+            "shape_id": shape_id,
+            "x_emu": int(x_emu),
+            "y_emu": int(y_emu),
+            "cx_emu": int(cx_emu),
+            "cy_emu": int(cy_emu),
+        },
+    )
+
+
+# --------------------------------------------------------------------------------------
 # Applying
 # --------------------------------------------------------------------------------------
 
@@ -265,6 +375,11 @@ def apply_fix(source: Path, target: Path, fix: Fix) -> FixReport:
     shutil.copyfile(source, target)
     try:
         changes = handler(target, fix)
+    except MoveFailed as exc:
+        # Already a sentence written for the person holding the mouse, so it is
+        # passed through rather than wrapped in a type name.
+        shutil.copyfile(source, target)
+        return FixReport(key=fix.key, applied=False, detail=str(exc))
     except Exception as exc:
         # A fix that fails must leave the deck as it was, not half-edited.
         shutil.copyfile(source, target)
@@ -514,7 +629,173 @@ def _requote(text: str, style: str) -> str:
     return re.sub(r"'([^']*)'", "‘\\1’", out)
 
 
+# --------------------------------------------------------------------------------------
+# Writing a transform
+# --------------------------------------------------------------------------------------
+
+_NS: Final[dict[str, str]] = {
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
+}
+
+_A: Final[str] = _NS["a"]
+_R_ID: Final[str] = f"{{{_NS['r']}}}id"
+
+#: Where each kind of shape keeps its transform, in the order the loader looks.
+#: A ``graphicFrame`` -- every table and every chart -- uses ``p:xfrm`` in the
+#: presentation namespace rather than ``a:xfrm``, and a group keeps its own in
+#: ``p:grpSpPr``. Reading only ``p:spPr/a:xfrm`` would silently move nothing on a
+#: chart, which is exactly the shape this feature exists to move.
+_XFRM_PATHS: Final[tuple[str, ...]] = ("p:spPr/a:xfrm", "p:xfrm", "p:grpSpPr/a:xfrm")
+
+#: Where to put an ``a:xfrm`` that has to be created, per shape element. The
+#: schema fixes the order of a ``spPr``'s children and ``a:xfrm`` is first, so a
+#: transform appended to the end produces a file PowerPoint refuses to open.
+_XFRM_PARENT: Final[dict[str, str]] = {
+    "sp": "p:spPr",
+    "pic": "p:spPr",
+    "cxnSp": "p:spPr",
+    "grpSp": "p:grpSpPr",
+}
+
+
+def _slide_parts(items: dict[str, bytes]) -> list[str]:
+    """The slide part names, in the order the deck presents them.
+
+    Resolved from ``p:sldIdLst`` and the presentation's relationships rather than
+    by sorting ``slide1.xml``, ``slide2.xml`` ... Those names are allocated in
+    creation order, not presentation order, so a deck whose slides have ever been
+    reordered numbers them differently from how it reads -- and a move applied to
+    the wrong slide is the worst failure this feature has, because it is silent.
+    """
+    presentation = items.get("ppt/presentation.xml")
+    rels = items.get("ppt/_rels/presentation.xml.rels")
+    if presentation is None or rels is None:
+        raise MoveFailed("this package has no presentation part to read slide order from")
+
+    targets: dict[str, str] = {}
+    for relationship in etree.fromstring(rels):
+        identifier = relationship.get("Id")
+        target = relationship.get("Target")
+        if not identifier or not target:
+            continue
+        # A target is relative to the part holding the relationship, so a slide
+        # reads as "slides/slide1.xml" from ppt/presentation.xml. An absolute
+        # one is relative to the package root instead.
+        resolved = (
+            target.lstrip("/")
+            if target.startswith("/")
+            else posixpath.join("ppt", target)
+        )
+        targets[identifier] = posixpath.normpath(resolved)
+
+    ordered: list[str] = []
+    for entry in etree.fromstring(presentation).findall("p:sldIdLst/p:sldId", _NS):
+        target = targets.get(entry.get(_R_ID) or "")
+        if target is not None:
+            ordered.append(target)
+    return ordered
+
+
+def _shape_element(tree: etree._Element, shape_id: int) -> etree._Element:
+    """The top-level shape on this slide with this id.
+
+    ``./*/p:cNvPr`` rather than ``.//p:cNvPr`` on purpose: it reaches the shape's
+    own non-visual properties and stops there. A descendant search would match a
+    shape *inside* a group and then write an offset in the group's child
+    coordinate space as though it were slide space, which moves the shape
+    somewhere nobody asked for.
+    """
+    for child in tree:
+        properties = child.find("./*/p:cNvPr", _NS)
+        if properties is None:
+            continue
+        try:
+            found = int(properties.get("id") or "")
+        except ValueError:
+            continue
+        if found == shape_id:
+            return child
+    raise MoveFailed(
+        f"no shape with id {shape_id} at the top level of that slide. "
+        "Re-run the check and try the move again."
+    )
+
+
+def _transform(element: etree._Element, cx_emu: int, cy_emu: int) -> etree._Element:
+    """This shape's ``a:xfrm``, created with the size it already has if absent."""
+    for path in _XFRM_PATHS:
+        existing = element.find(path, _NS)
+        if existing is not None:
+            return existing
+
+    tag = etree.QName(element).localname
+    parent_path = _XFRM_PARENT.get(tag)
+    if parent_path is None:
+        # A graphicFrame's p:xfrm is required by the schema, so reaching here
+        # means the part is malformed rather than merely sparse.
+        raise MoveFailed(f"a {tag} with no transform cannot be given one safely")
+    parent = element.find(parent_path, _NS)
+    if parent is None:
+        raise MoveFailed(f"that shape has no {parent_path} to hold a transform")
+
+    xfrm = etree.Element(f"{{{_A}}}xfrm")
+    parent.insert(0, xfrm)
+    extent = etree.SubElement(xfrm, f"{{{_A}}}ext")
+    extent.set("cx", str(cx_emu))
+    extent.set("cy", str(cy_emu))
+    return xfrm
+
+
+def _apply_move(path: Path, fix: Fix) -> int:
+    """Write one shape's offset, and touch nothing else in the package.
+
+    Only ``a:off``'s ``x`` and ``y`` are assigned. The extent, the rotation, the
+    flips and every other attribute on the transform are left exactly as they
+    were, because the person moved the shape -- they did not resize it, turn it
+    or mirror it, and a fix that changed more than it was asked to is the defect
+    this module exists to avoid.
+    """
+    payload = fix.payload
+    with zipfile.ZipFile(path) as archive:
+        items = {name: archive.read(name) for name in archive.namelist()}
+
+    parts = _slide_parts(items)
+    index = int(payload["slide"])
+    if not 1 <= index <= len(parts):
+        raise MoveFailed(f"this deck has no slide {index}")
+    part = parts[index - 1]
+    if part not in items:
+        raise MoveFailed(f"slide {index} points at {part}, which is not in the package")
+
+    root = etree.fromstring(items[part])
+    tree = root.find("p:cSld/p:spTree", _NS)
+    if tree is None:
+        raise MoveFailed(f"slide {index} has no shape tree")
+
+    element = _shape_element(tree, int(payload["shape_id"]))
+    xfrm = _transform(element, int(payload["cx_emu"]), int(payload["cy_emu"]))
+
+    offset = xfrm.find("a:off", _NS)
+    if offset is None:
+        offset = etree.Element(f"{{{_A}}}off")
+        xfrm.insert(0, offset)  # a:off precedes a:ext; the schema fixes the order
+    offset.set("x", str(int(payload["x_emu"])))
+    offset.set("y", str(int(payload["y_emu"])))
+
+    items[part] = etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, content in items.items():
+            out.writestr(name, content)
+    return 1
+
+
 _APPLIERS: Final[dict[str, Any]] = {
+    MOVE_KIND: _apply_move,
     "colour": _apply_colour,
     "typeface": _apply_typeface,
     "metadata": _apply_metadata,

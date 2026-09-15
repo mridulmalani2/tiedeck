@@ -52,6 +52,11 @@ class Deck:
     model: DeckModel
     thumbnails: RenderResult = field(default_factory=RenderResult)
     rendering: bool = False
+    #: Bumped every time a render finishes, so the page can tell a new set of
+    #: images from the set it is already showing. Without it a re-render after a
+    #: move returns the same URLs and the browser has no reason to ask again --
+    #: the shape would move in the file and stay put on screen.
+    thumbnails_version: int = 0
     #: The HTML report from this deck's last check. Held per deck rather than
     #: one slot on the app: with two decks open, checking the second used to
     #: make the first one's report link answer 404.
@@ -75,6 +80,13 @@ class Deck:
     history: list[Path] = field(default_factory=list)
     #: What was applied, so the page can list it and the export can be described.
     applied: list[str] = field(default_factory=list)
+    #: Whether any correction on this deck has moved a shape. Only geometry
+    #: changes what a rendered slide looks like enough to be worth a second
+    #: LibreOffice conversion, and undo has to re-render for the same reason the
+    #: move did: putting the shape back is a position, and a stale image would
+    #: say it had not gone back.
+    moved: bool = False
+
     #: Corrections the person turned down. Held for this session only: deciding
     #: to leave one deck's colour alone is not a decision about the client's
     #: house style, and writing it to the profile would make it one.
@@ -193,23 +205,35 @@ class SessionStore:
 
     # -- thumbnails ------------------------------------------------------ #
 
-    def render_in_background(self, deck: Deck) -> None:
+    def render_in_background(self, deck: Deck, *, force: bool = False) -> None:
         """Start rendering, and return immediately.
 
         A LibreOffice conversion takes seconds. Blocking the upload response on
         it would make the UI feel broken while it did something optional, so the
         page shows slide cards straight away and swaps in images when they
         arrive.
+
+        Renders ``deck.current`` rather than the upload, so that what is on the
+        canvas is the deck as it now stands. ``force`` re-renders a deck that has
+        already been rendered: the general rule is not to put a LibreOffice
+        conversion between a click and its result, but a move is the one
+        correction whose whole point is that you can see it happen, and a stale
+        image there would be the tool telling the person their move did nothing.
         """
-        if deck.rendering or deck.thumbnails.pages or deck.thumbnails.reason:
+        if deck.rendering:
+            return
+        if not force and (deck.thumbnails.pages or deck.thumbnails.reason):
             return
         deck.rendering = True
+        source = deck.current
 
         def work() -> None:
             try:
-                deck.thumbnails = Renderer(
-                    deck.path.parent, width=self._renderer_width
-                ).render(deck.path)
+                rendered = Renderer(deck.path.parent, width=self._renderer_width).render(
+                    source
+                )
+                deck.thumbnails = rendered
+                deck.thumbnails_version += 1
             finally:
                 deck.rendering = False
 

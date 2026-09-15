@@ -15,13 +15,34 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-from tieout.model.deck import DeckModel
+from tieout.model.deck import DeckModel, ShapeModel
+from tieout.model.units import pt_to_emu
 from tieout.profile.schema import Profile
-from tieout.rules.base import SEVERITY_ORDER, AuditResult, load_all_rules
+from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding, load_all_rules
 from tieout_fix import action_key
 from tieout_ui.edit import can_clear, editable
 
-__all__ = ["audit_view", "profile_view", "rules_view"]
+__all__ = [
+    "MOVABLE_RULES",
+    "audit_view",
+    "find_shape",
+    "movable",
+    "profile_view",
+    "rules_view",
+]
+
+
+#: The rules where moving the shape is the correction, so the page offers to.
+#:
+#: Narrower than the set of rules TieOut declines to fix, deliberately. LO-006
+#: reports text overflowing its box and LO-007 a font size out of band: dragging
+#: the shape elsewhere makes neither of them true, and a **Move it** button on
+#: them would be an instruction to do something that does not work. BR-003 is
+#: the same -- a distorted logo is the wrong *size*, and this editor does not
+#: resize. What is left is the rules that are all about where a thing sits.
+MOVABLE_RULES: Final[frozenset[str]] = frozenset(
+    {"BR-002", "BR-008", "LO-001", "LO-002", "LO-003", "LO-004", "LO-005", "LO-008"}
+)
 
 
 def _fact(
@@ -235,6 +256,82 @@ def _band(band: object) -> str:
     return "not learned"
 
 
+def find_shape(deck: DeckModel, slide_index: int, shape_id: int) -> ShapeModel | None:
+    """The shape with this id on this slide, wherever it sits in the tree.
+
+    Walks into groups as well, so a caller asking about a grouped shape gets the
+    shape and its ``group_path`` rather than nothing -- the difference between
+    telling someone *why* they cannot drag this one and appearing not to know it
+    exists.
+    """
+    slide = deck.slide(slide_index)
+    if slide is None:
+        return None
+    for shape in slide.all_shapes():
+        if shape.ref.shape_id == shape_id:
+            return shape
+    return None
+
+
+def movable(shape: ShapeModel) -> str:
+    """Empty when this shape's position can be written, the reason when not.
+
+    One refusal, and it is about coordinate spaces rather than taste. A shape
+    inside a group stores its offset in the group's child space, which the group
+    then translates and scales; the model reports it in slide space, and writing
+    a slide-space number back into a child-space attribute puts the shape
+    somewhere neither the tool nor the person intended. Ungroup it in PowerPoint
+    and TieOut will move it.
+    """
+    if shape.ref.group_path:
+        return (
+            "This shape is inside a group, so its position is stored relative to "
+            "the group rather than to the slide. Ungroup it in PowerPoint to move "
+            "it here."
+        )
+    return ""
+
+
+def _move_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:
+    """What the canvas needs to pick this finding's shape up, or None.
+
+    The geometry comes from the model rather than from ``finding.bbox_pt``,
+    because they are not always the same box: LO-001 and LO-002 report the
+    rotation-aware box a reader sees, and what a move writes is the stored
+    offset. Dragging the visual box of a rotated shape and writing the result as
+    its offset would move it by the wrong amount.
+
+    EMU, as integers, for the reason given on :func:`tieout_fix.move_fix`: the
+    page does its arithmetic in whole EMU so that a nudge out and a nudge back
+    cancel exactly.
+    """
+    ref = finding.where
+    if isinstance(ref, int):
+        return None
+    shape = find_shape(deck, ref.slide_index, ref.shape_id)
+    if shape is None:
+        return None
+    refused = movable(shape)
+    block: dict[str, Any] = {
+        "shape_id": ref.shape_id,
+        "shape": ref.display_name,
+        "refused": refused,
+        "left_pt": shape.left_pt,
+        "top_pt": shape.top_pt,
+        "width_pt": shape.width_pt,
+        "height_pt": shape.height_pt,
+        "rotation": shape.rotation,
+    }
+    if not refused:
+        block.update(
+            x_emu=pt_to_emu(shape.left_pt),
+            y_emu=pt_to_emu(shape.top_pt),
+            cx_emu=pt_to_emu(shape.width_pt),
+            cy_emu=pt_to_emu(shape.height_pt),
+        )
+    return block
+
+
 def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
     """The audit, arranged slide by slide.
 
@@ -257,6 +354,7 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
                 "why": finding.expected_provenance,
                 "remedy": finding.remedy,
                 "bbox_pt": finding.bbox_pt,
+                "move": _move_block(finding, deck),
             }
         )
 
@@ -395,6 +493,7 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "measured": finding["measured"],
                     "expected": finding["expected"],
                     "bbox_pt": finding["bbox_pt"],
+                    "move": finding["move"],
                 }
             )
 
@@ -410,6 +509,13 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
     for action in actions:
         action["count"] = len(action["instances"])
+        # Whether the page offers to open the position editor on this group. Both
+        # halves are needed: the rule has to be one moving the shape answers, and
+        # at least one of its shapes has to be one this can actually write.
+        action["movable"] = action["rule_id"] in MOVABLE_RULES and any(
+            instance["move"] and not instance["move"]["refused"]
+            for instance in action["instances"]
+        )
         # A measurement or an expectation on the group header is only true if
         # every instance shares it. Six shapes off six different grid lines
         # have six expectations, and printing the first one at the top would
