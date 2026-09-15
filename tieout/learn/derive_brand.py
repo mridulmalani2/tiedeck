@@ -7,10 +7,12 @@ palette rule.
 
 Three deliberate conservatisms:
 
-* A colour seen once is discarded rather than admitted to the palette, and is
-  reported to the user as a possible error in their own reference deck. A single
-  ``#1F3865`` on slide 12 is almost certainly a typo for ``#1F3864``; adding it
-  to the palette would licence the typo forever.
+* A colour seen on one slide only, and covering almost none of the deck, is
+  discarded rather than admitted to the palette, and is reported to the user as
+  a possible error in their own reference deck. A single ``#1F3865`` on slide 12
+  is almost certainly a typo for ``#1F3864``; adding it to the palette would
+  licence the typo forever. A colour that recurs across slides is kept however
+  little area it covers, because an accent is not a typo.
 * The palette tolerance is derived from the *minimum inter-cluster distance*,
   halved, so it can never be wide enough to merge two real brand colours.
 * A font role with few distinct observed sizes gets an exact allowed set rather
@@ -61,8 +63,25 @@ from tieout.profile.schema import (
     PageNumberProfile,
 )
 
-#: A colour cluster below this share of total coloured weight is discarded.
+#: A colour cluster below this share of total coloured weight is discarded --
+#: unless it recurs, see :data:`PALETTE_MIN_SLIDES`.
 PALETTE_MIN_SHARE: Final[float] = 0.005
+
+#: Slides a low-area colour must appear on to be read as a deliberate accent
+#: rather than a mistake.
+#:
+#: Weight alone was the whole test, and it is the wrong test for an accent. A
+#: gold used for rule lines, chart markers and a few key figures covers well
+#: under half a percent of a deck's coloured area while appearing on four slides
+#: in five: unmistakably part of the design, and discarded as "a likely
+#: reference-deck error". Every shape using it was then reported against a
+#: palette that had just been told to leave it out.
+#:
+#: Two slides, because repetition across slides is what this tool treats as
+#: convention everywhere else -- boilerplate, the logo, the grid -- and a typo
+#: appears once. The docstring above always described this rule ("a colour seen
+#: once is discarded"); only the code disagreed.
+PALETTE_MIN_SLIDES: Final[int] = 2
 
 #: Clustering tolerance in Lab space, per section 8.2.
 PALETTE_CLUSTER_DELTA_E: Final[float] = 3.0
@@ -297,8 +316,13 @@ def _derive_palette(
     clusters = cluster_palette(weighted)
     total_weight = sum(c.weight for c in clusters) or 1.0
 
-    kept = [c for c in clusters if c.weight / total_weight >= PALETTE_MIN_SHARE]
-    discarded = [c for c in clusters if c.weight / total_weight < PALETTE_MIN_SHARE]
+    def _is_house_colour(cluster: PaletteCluster) -> bool:
+        if cluster.weight / total_weight >= PALETTE_MIN_SHARE:
+            return True
+        return len(set(cluster.slides)) >= PALETTE_MIN_SLIDES
+
+    kept = [c for c in clusters if _is_house_colour(c)]
+    discarded = [c for c in clusters if not _is_house_colour(c)]
 
     if not kept:
         result.derivation.unlearned(

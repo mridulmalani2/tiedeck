@@ -353,8 +353,26 @@ def test_ty008_catches_a_second_date_format(dirty_deck, reference_profile):
     findings = findings_for(result, "TY-008")
 
     assert slide_indices(findings) == {SEEDED["TY-008"]}
-    assert findings[0].expected == "%d-%B-%Y"
-    assert "%m/%d/%Y" in findings[0].message
+    # The machine-readable format belongs in the evidence line, where someone
+    # checking the profile wants it.
+    assert "%m/%d/%Y" in (findings[0].measured or "")
+
+
+def test_ty008_shows_the_reader_a_date_rather_than_a_format_string(
+    dirty_deck, reference_profile
+):
+    """``%d-%B-%Y`` is a correct answer to the wrong question. Nobody reformats
+    a deck from a strftime string, and a reader who has not met one reads it as
+    noise. The same convention shown as "14-March-2026" is a thing to copy."""
+    findings = findings_for(
+        run_rules(dirty_deck, reference_profile, include=["TY-008"]), "TY-008"
+    )
+    finding = findings[0]
+
+    assert "%" not in finding.message
+    assert "%" not in (finding.expected or "")
+    assert "%" not in (finding.remedy or "")
+    assert "14-March-2026" in finding.expected
 
 
 def test_ty008_silent_on_clean(clean_deck, reference_profile):

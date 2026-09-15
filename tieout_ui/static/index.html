@@ -1202,8 +1202,13 @@ function plainNote() {
         : `slides ${action.slides.join(", ")}`;
       lines.push(`${index + 1}. [${action.severity}] ${action.title} — ${where}`);
       if (action.remedy) lines.push(`   Fix: ${action.remedy}`);
-      if (action.measured || action.expected)
-        lines.push(`   ${action.measured || ""}${action.expected ? ` -> ${action.expected}` : ""}`);
+      // Only where both halves exist does the arrow mean anything; a group whose
+      // instances disagree carries no measurement, and "   -> no speaker notes"
+      // is an arrow from nowhere.
+      if (action.measured && action.expected)
+        lines.push(`   ${action.measured} -> ${action.expected}`);
+      else if (action.measured) lines.push(`   ${action.measured}`);
+      else if (action.expected) lines.push(`   expected ${action.expected}`);
       lines.push("");
     });
   }
@@ -1217,8 +1222,9 @@ function plainNote() {
     }
     lines.push(`  ${n}. [${f.severity}] ${f.rule_id}  ${sentence(f.message)}`);
     if (f.remedy) lines.push(`      Fix: ${f.remedy}`);
-    if (f.measured || f.expected)
-      lines.push(`      ${f.measured || ""}${f.expected ? ` -> ${f.expected}` : ""}`);
+    if (f.measured && f.expected) lines.push(`      ${f.measured} -> ${f.expected}`);
+    else if (f.measured) lines.push(`      ${f.measured}`);
+    else if (f.expected) lines.push(`      expected ${f.expected}`);
   }
   return lines.join("\n");
 }

@@ -20,6 +20,7 @@ from typing import Final
 from tieout.learn.classify import (
     Classification,
     Derivation,
+    ObservationClass,
     classify_categorical,
     min_support_for,
 )
@@ -85,9 +86,38 @@ def _record(
     *,
     total_slides: int,
 ) -> bool:
-    """Note provenance or record the key as not learned. Returns whether learned."""
+    """Note provenance or record the key as not learned. Returns whether learned.
+
+    Every caller here writes a field that holds exactly one value: a deck has one
+    quote convention, one date format. So a *multimodal* classification -- the
+    classifier's way of saying "two values are both used, and neither dominates"
+    -- has no honest representation in the field, and the previous behaviour was
+    to write the more common of the two as though it were the convention.
+
+    That turned the deck's own second format into findings against it. A deck
+    writing three dates as "15 September 2026" and five as "September 2026"
+    learned ``%B %Y`` and then reported the three, on the very deck the
+    convention had been read from. The user saw three defects where the truth was
+    that TieOut could not tell which spelling was the house one.
+
+    Recording it as not learned is the answer the rest of the design already
+    gives for evidence that does not settle a question: the rule that reads the
+    field does not run, and ``not_learned`` says why, so the silence cannot be
+    mistaken for a pass. Where a field *can* hold a set -- the approved typefaces,
+    the currency pattern -- the deriver reads ``classification.allowed`` itself
+    and does not come through here.
+    """
     if not classification.learned:
         result.derivation.unlearned(path, classification.reason)
+        return False
+    if classification.observation_class is ObservationClass.MULTIMODAL:
+        modes = ", ".join(str(value) for value in classification.allowed)
+        result.derivation.unlearned(
+            path,
+            f"the deck uses {len(classification.allowed)} of these consistently "
+            f"({modes}) and none dominates, so there is no single house "
+            f"convention to enforce",
+        )
         return False
     result.derivation.note_from(path, classification, total_slides=total_slides)
     return True

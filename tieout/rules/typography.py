@@ -201,6 +201,37 @@ def _is_enumerator_alignment(text: str, defect: WhitespaceDefect) -> bool:
     return bool(_ENUMERATOR.match(text[: defect.position]))
 
 
+#: Glyphs that separate fields on one line, rather than punctuating a sentence.
+_SEPARATORS: Final[str] = "|\u2502\u2022\u00b7\u2014\u2013"
+
+
+def _is_separator_spacing(text: str, defect: WhitespaceDefect) -> bool:
+    """Whether a run of spaces is padding around a field separator.
+
+    ``41 facilities across seven European markets  |  218,000 pallet positions``
+    is one line carrying two facts, and the wide space either side of the pipe is
+    what separates them. It is the same construction as the confidentiality
+    footer -- ``Project Meridian  |  Strictly private and confidential  |  EXA
+    Advisory Partners`` -- and a banker types it deliberately, on purpose, every
+    time.
+
+    Read as prose it is a double space, and TY-002 reported seven of them on one
+    title slide. The rule is for the typing slip that leaves two spaces in the
+    middle of a sentence; a padded separator is not that, and telling someone to
+    collapse it would make their slide worse.
+
+    Narrow on purpose: the spaces must sit immediately against the separator.
+    Two spaces in the middle of a sentence are still reported.
+    """
+    if defect.kind != "double space":
+        return False
+    before = text[: defect.position].rstrip(" \t\u00a0")
+    after = text[defect.position :].lstrip(" \t\u00a0")
+    return bool(
+        (before and before[-1] in _SEPARATORS) or (after and after[0] in _SEPARATORS)
+    )
+
+
 @register
 class Whitespace(Rule):
     """Spacing defects: double spaces, trailing whitespace, a space before
@@ -240,6 +271,8 @@ class Whitespace(Rule):
             for passage in _passages(slide, furniture=furniture):
                 for defect in whitespace_defects(passage.text):
                     if _is_enumerator_alignment(passage.text, defect):
+                        continue
+                    if _is_separator_spacing(passage.text, defect):
                         continue
                     kinds[defect.kind] = kinds.get(defect.kind, 0) + 1
                     if first_shape is None:
@@ -846,13 +879,13 @@ class DateFormat(Rule):
                     self.finding(
                         where=shape.ref,
                         message=(
-                            f"the date {example!r} is written as {found}, not "
-                            f"{convention}{occurrences}"
+                            f"the date {example!r} is not written the house way, "
+                            f"{_date_example(convention)}{occurrences}"
                         ),
                         profile=profile,
                         provenance_path="typography.date_format",
                         measured=f"{example!r} ({found})",
-                        expected=convention,
+                        expected=f"dates like {_date_example(convention)}",
                         remedy=f"Write dates like {_date_example(convention)}",
                         bbox_pt=shape.bbox_pt,
                     )

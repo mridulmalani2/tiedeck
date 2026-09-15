@@ -1165,9 +1165,12 @@ class InconsistentGutters(Rule):
             shapes = content_shapes(slide, furniture)
             for axis in (_ROW, _COLUMN):
                 for group in _sibling_groups(shapes, axis, tolerance):
+                    units = _touching_runs(group, axis, tolerance)
+                    if len(units) < MIN_SIBLINGS:
+                        continue
                     gutters = [
-                        axis.lead(later) - axis.trail(earlier)
-                        for earlier, later in itertools.pairwise(group)
+                        axis.lead(later[0]) - axis.trail(earlier[-1])
+                        for earlier, later in itertools.pairwise(units)
                     ]
                     # A negative gutter means consecutive members overlap, so
                     # they are stacked rather than set out in a row: a KPI card
@@ -1189,17 +1192,48 @@ class InconsistentGutters(Rule):
                             profile=profile,
                             provenance_path="layout.gutter_stdev_pt",
                             message=(
-                                f"gutters across a {len(group)}-shape {axis.name} vary by "
+                                f"gutters down a {len(units)}-item {axis.name} vary by "
                                 f"{spread:.1f}pt "
-                                f"({', '.join(f'{gutter:.1f}pt' for gutter in gutters)}) "
+                                # `+ 0.0` so a gutter of exactly zero measured from
+                                # the negative side does not print as "-0.0pt".
+                                f"({', '.join(f'{gutter + 0.0:.1f}pt' for gutter in gutters)}) "
                                 f"in {', '.join(shape.ref.name for shape in group)}"
                             ),
                             measured=f"stdev {spread:.2f}pt",
                             expected=f"stdev at most {limit:g}pt",
-                            remedy="Distribute the shapes evenly along the row",
+                            remedy=f"Space the items evenly down the {axis.name}"
+                            if axis is _COLUMN
+                            else "Space the items evenly across the row",
                         )
                     )
         return findings
+
+
+def _touching_runs(
+    group: Sequence[ShapeModel], axis: _Axis, tolerance: float
+) -> list[list[ShapeModel]]:
+    """Consecutive shapes that touch, collapsed into the units a reader sees.
+
+    A timetable entry is a heading with its caption sitting directly beneath it,
+    no gap at all. Four such entries are eight shapes of equal width on one
+    column, which is exactly the sibling test, and their gutters run
+    ``0, 26.6, 0, 26.6, 0, 26.6, 0`` -- a standard deviation of 14pt and a
+    finding that reads "gutters vary by 14.2pt" about a layout whose four items
+    are evenly spaced to the point.
+
+    Two shapes flush against each other are one thing on the slide, not two
+    badly spaced ones, so they are measured as one. What is left is the spacing a
+    reader would actually call uneven.
+    """
+    if not group:
+        return []
+    units: list[list[ShapeModel]] = [[group[0]]]
+    for earlier, later in itertools.pairwise(group):
+        if axis.lead(later) - axis.trail(earlier) <= tolerance:
+            units[-1].append(later)
+        else:
+            units.append([later])
+    return units
 
 
 def _sibling_groups(
