@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
-from tieout.cluster import cluster_values, derive_tolerance, floor_to, percentile
+from tieout.cluster import Cluster, cluster_values, derive_tolerance, floor_to, percentile
 from tieout.learn.classify import (
     Classification,
     Derivation,
@@ -57,6 +57,18 @@ FULL_BLEED_SHARE: Final[float] = 0.80
 
 #: An edge cluster needs this much support to be a grid line, per section 8.3.
 GRID_MIN_SUPPORT: Final[int] = 5
+
+#: Slides an edge cluster must span before it is a grid line rather than the
+#: outline of one component.
+#:
+#: Shape count alone was the whole test, and six cards in a row on one slide
+#: clear it twice over -- once for their shared top edge, once for their shared
+#: bottom. Both became deck-wide grid lines, and shapes on other slides with
+#: nothing to do with those cards were then reported for sitting 2pt off them.
+#: A grid is a structure the deck returns to; evidence from a single slide is a
+#: design element, and every other convention here already has to recur across
+#: slides to count as one.
+GRID_MIN_SLIDES: Final[int] = 2
 
 #: Edge clustering tolerance, per section 8.2.
 GRID_TOLERANCE_PT: Final[float] = 2.0
@@ -212,21 +224,36 @@ def derive_grid(
     """
     columns: list[float] = []
     rows: list[float] = []
+    # Which slides each edge position came from, so a cluster can be asked
+    # whether it is a deck-wide structure or one slide's furniture.
+    column_slides: dict[float, set[int]] = {}
+    row_slides: dict[float, set[int]] = {}
     for slide in learnable_slides(deck):
         for shape in content_shapes(slide, furniture):
             box = shape.visual_bbox_pt
-            columns.extend((box[0], box[0] + box[2]))
-            rows.extend((box[1], box[1] + box[3]))
+            for value in (box[0], box[0] + box[2]):
+                columns.append(value)
+                column_slides.setdefault(value, set()).add(slide.index)
+            for value in (box[1], box[1] + box[3]):
+                rows.append(value)
+                row_slides.setdefault(value, set()).add(slide.index)
 
     grid = GridProfile(tolerance_pt=GRID_TOLERANCE_PT)
-    for values, attribute, label in (
-        (columns, "columns_pt", "vertical"),
-        (rows, "rows_pt", "horizontal"),
+    for values, by_slide, attribute, label in (
+        (columns, column_slides, "columns_pt", "vertical"),
+        (rows, row_slides, "rows_pt", "horizontal"),
     ):
+
+        def _slides(cluster: Cluster, by_slide: dict[float, set[int]] = by_slide) -> int:
+            covered: set[int] = set()
+            for member in cluster.members:
+                covered |= by_slide.get(member, set())
+            return len(covered)
+
         clusters = [
             cluster
             for cluster in cluster_values(values, GRID_TOLERANCE_PT)
-            if cluster.support >= GRID_MIN_SUPPORT
+            if cluster.support >= GRID_MIN_SUPPORT and _slides(cluster) >= GRID_MIN_SLIDES
         ]
         lines = sorted(round(cluster.mode, 2) for cluster in clusters)
         setattr(grid, attribute, lines)
@@ -237,9 +264,9 @@ def derive_grid(
             }
             result.derivation.note(
                 path,
-                f"{len(lines)} {label} edge clusters with support of "
-                f"{GRID_MIN_SUPPORT} or more across {total_slides} slides "
-                "(support: "
+                f"{len(lines)} {label} edge clusters, each on {GRID_MIN_SUPPORT} or "
+                f"more shapes across at least {GRID_MIN_SLIDES} of {total_slides} "
+                "slides (support: "
                 + ", ".join(f"{line:g}pt on {supports[line]}" for line in lines)
                 + ")",
                 "high",
@@ -248,7 +275,8 @@ def derive_grid(
             result.derivation.unlearned(
                 path,
                 f"no {label} edge position recurs on {GRID_MIN_SUPPORT} or more "
-                f"shapes, so there is no grid to align to",
+                f"shapes across {GRID_MIN_SLIDES} or more slides, so there is no "
+                f"grid to align to",
             )
     return grid
 

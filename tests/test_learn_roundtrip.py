@@ -529,3 +529,101 @@ def test_the_colourway_variant_reaches_the_profile(tmp_path):
     assert "exempt" not in profile.brand.logo.per_archetype.values(), (
         "no archetype in this deck is without a logo"
     )
+
+
+# --------------------------------------------------------------------------------------
+# A grid line is a structure the deck returns to
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_one_card_row(path):
+    """Six cards in a row on slide 1, unrelated content on slides 2 and 3.
+
+    The cards share a top edge and a bottom edge, which is twelve shape-edges at
+    two positions -- comfortably over the shape-count support a grid line needs,
+    and all of it from one slide.
+    """
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+
+    cards = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index in range(6):
+        # Tall enough that the cards' bottom edge cannot cluster with the body
+        # text's on the other slides -- that would be a genuinely cross-slide
+        # position, and a different test.
+        box = cards.shapes.add_textbox(
+            Pt(40 + index * 150), Pt(234), Pt(130), Pt(60)
+        )
+        box.text_frame.text = f"Card {index + 1}"
+
+    # Two further slides whose content sits a couple of points off the cards'
+    # edges, and has nothing to do with them.
+    for slide_number in range(2):
+        other = presentation.slides.add_slide(presentation.slide_layouts[6])
+        for index in range(3):
+            box = other.shapes.add_textbox(
+                Pt(60 + index * 120), Pt(236.16), Pt(100), Pt(18)
+            )
+            box.text_frame.text = f"Body {slide_number}-{index}"
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_one_slide_s_card_row_is_not_a_deck_wide_grid(tmp_path):
+    """Support was counted in shapes, so six cards on one slide cleared it twice
+    -- once for their shared top, once for their shared bottom -- and both became
+    deck-wide grid lines. Shapes on other slides, with nothing to do with those
+    cards, were then reported for sitting 2pt off them.
+
+    A grid is a structure a deck returns to. Evidence from a single slide is one
+    component, and every other convention here already has to recur across
+    slides to count as one.
+    """
+    deck = _deck_with_one_card_row(tmp_path / "cards.pptx")
+    profile = learn_from_decks([deck], "acme").profile
+
+    assert 234.0 not in profile.layout.grid.rows_pt, (
+        "a row line drawn from one slide's card tops is not a grid line"
+    )
+    assert 294.0 not in profile.layout.grid.rows_pt, (
+        "nor is the line drawn from the same cards' bottoms"
+    )
+    # The body text on the other two slides sits at 236.16, and it is the thing
+    # that used to be reported against those lines. It recurs across slides, so
+    # it is a grid line and always was one.
+    assert 236.16 in profile.layout.grid.rows_pt
+
+
+def test_a_position_repeated_across_slides_is_still_a_grid_line(tmp_path):
+    """The guard must not have switched the grid off: the whole value of LO-003
+    is that it fires against a line the deck genuinely aligns to."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for slide_number in range(3):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        for index in range(3):
+            box = slide.shapes.add_textbox(Pt(60 + index * 120), Pt(180), Pt(100), Pt(18))
+            # Distinct text per slide: a string repeated verbatim on every slide
+            # is boilerplate, and boilerplate is furniture, and furniture is
+            # excluded from the grid.
+            box.text_frame.text = f"Slide {slide_number} item {index}"
+    presentation.save(str(tmp_path / "repeated.pptx"))
+
+    deck = load_deck(tmp_path / "repeated.pptx")
+    profile = learn_from_decks([deck], "acme").profile
+
+    assert 180.0 in profile.layout.grid.rows_pt, (
+        "a position used on every slide is exactly what a grid line is"
+    )
