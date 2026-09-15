@@ -339,8 +339,9 @@ def test_the_ui_section_gives_a_start_to_finish_recipe(readme):
     section = readme.split("## Optional: the local UI", 1)[1].split("\n## ", 1)[0]
     for needed in (
         "git clone",
+        "python3 --version",          # the Python check comes first for a reason
         "python3 -m venv .venv",
-        '-e ".[ui]"',
+        '".[ui]"',
         "tieout-ui",
         "http://127.0.0.1:8765/",
         "scaffold-reference",
@@ -348,3 +349,30 @@ def test_the_ui_section_gives_a_start_to_finish_recipe(readme):
         "libreoffice-impress",
     ):
         assert needed in section, needed
+
+
+def test_the_ui_recipe_does_not_tell_a_new_user_to_install_editable(readme):
+    """An editable install needs pip 21.3+, and the pip bundled with an older
+    Python is 21.2 — which fails with "editable mode currently requires a
+    setuptools-based build". A plain install works on every pip that can read a
+    pyproject.toml, and a user who is not changing the code wants that anyway.
+
+    Reported from a Mac on the first attempt, so the recipe has to keep saying
+    so: the requirement, the reason, and the upgrade for anyone who does want
+    `-e`.
+    """
+    section = readme.split("## Optional: the local UI", 1)[1].split("\n## ", 1)[0]
+    install = section.split(".venv/bin/tieout-ui", 1)[0]
+    assert '-e ".[ui]"' not in install, "the user recipe must not use -e"
+    normalised = " ".join(section.split())
+    assert "no `-e` there" in normalised
+    assert "pip 21.3" in normalised
+    assert "pip install --upgrade pip" in normalised
+
+
+def test_the_ui_recipe_warns_that_the_system_python_is_too_old(readme):
+    """macOS ships 3.9 with Xcode's command line tools, which fails requires-python."""
+    section = readme.split("## Optional: the local UI", 1)[1].split("\n## ", 1)[0]
+    normalised = " ".join(section.split())
+    assert "macOS ships 3.9" in normalised
+    assert "brew install python@3.12" in section

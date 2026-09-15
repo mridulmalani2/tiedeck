@@ -55,8 +55,14 @@ TieOut on someone else's machine see [Deploying it](#deploying-it).
 
 ```bash
 python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip      # -e needs pip 21.3 or newer
 .venv/bin/python -m pip install -e ".[dev]"
 ```
+
+The pip upgrade is not optional for an editable install: the pip bundled with an
+older Python is 21.2, which cannot install a `pyproject.toml`-only project in
+editable mode and says so obscurely — *"editable mode currently requires a
+setuptools-based build"*. Plain installs need no upgrade.
 
 That puts `tieout` on the path. Nine runtime dependencies, all of them local:
 `python-pptx`, `lxml`, `pydantic`, `typer`, `rich`, `jinja2`, `Pillow`,
@@ -702,7 +708,7 @@ enforced as a JSON schema rather than only asked for in the prompt.
 ## Optional: the local UI
 
 ```bash
-.venv/bin/python -m pip install -e ".[ui]"
+.venv/bin/python -m pip install ".[ui]"
 tieout-ui
 ```
 
@@ -714,15 +720,37 @@ optionally turn on content review, and read the findings slide by slide.
 
 Nothing here needs a key, a network or an account.
 
+**First, check your Python.** This needs 3.11 or later, and the `python3` already
+on a Mac is usually older — macOS ships 3.9 with Xcode's command line tools:
+
+```bash
+python3 --version
+```
+
+If that says 3.9 or 3.10, install a newer one (`brew install python@3.12` on
+macOS, `apt install python3.12-venv` on Debian or Ubuntu, python.org on Windows)
+and use it below in place of `python3`.
+
 ```bash
 git clone https://github.com/mridulmalani2/tiedeck
 cd tiedeck
 git checkout claude/practical-volta-j1yct7      # until the PR is merged
 
-python3 -m venv .venv                            # Python 3.11 or later
-.venv/bin/python -m pip install -e ".[ui]"       # the UI extra; the core comes with it
+python3 -m venv .venv
+.venv/bin/python -m pip install ".[ui]"          # the UI extra; the core comes with it
 
 .venv/bin/tieout-ui                              # then open http://127.0.0.1:8765/
+```
+
+Note there is no `-e` there. An editable install needs pip 21.3 or newer, and
+the pip bundled with an older Python is 21.2 — which fails with *"editable mode
+currently requires a setuptools-based build"*. A plain install works on every
+pip that can read a `pyproject.toml`, and is what you want anyway unless you are
+changing the code. If you are, upgrade pip first and then use `-e`:
+
+```bash
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
 On Windows the interpreter is `.venv\Scripts\python.exe` and the command
@@ -1217,7 +1245,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,099 tests
+.venv/bin/python -m pytest              # 1,101 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
