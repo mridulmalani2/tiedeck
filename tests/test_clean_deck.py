@@ -30,7 +30,7 @@ ALL_RULE_IDS = sorted(load_all_rules())
 #: The catalogue as it stands. Stated here so a rule added or removed without
 #: updating the README and the round-trip test fails loudly in one place.
 EXPECTED_PER_CATEGORY = {
-    "brand": 10,
+    "brand": 11,
     "layout": 8,
     "typography": 9,
     "hygiene": 9,

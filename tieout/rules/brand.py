@@ -459,6 +459,110 @@ class OffPaletteColour(Rule):
 
 
 @register
+class ChartSeriesOffPalette(Rule):
+    """Reports a chart series drawn in a colour that is not on the palette.
+
+    Measures: the resolved ``c:spPr`` fill of every series in every chart part
+    against ``brand.palette_hex``, on the same Delta-E tolerance BR-004 uses.
+    One finding per chart per offending colour.
+
+    Not measured: a series with no fill of its own. Such a series takes its
+    colour from the theme's chart colour cycle, which depends on the series
+    index and the chart style; that is chosen by the template rather than typed
+    by the author, and reporting a colour nobody in the deck picked would be
+    confident nonsense. Gridlines, plot area and data-label backgrounds are not
+    measured either, for the same reason. So this rule catches the case that
+    actually goes wrong -- someone recoloured a bar by hand -- and stays quiet
+    about the rest.
+
+    Separate from BR-004 rather than folded into it, and worth saying why. A
+    slide palette and a data palette are not the same thing: five series need
+    five distinguishable colours, and a house style with a four-colour palette
+    may legitimately carry a wider set for charts that the learner never sees,
+    because chart colours are deliberately not collected into the palette --
+    there is no area to weight them by. Where that is the client's convention,
+    this rule is the one to turn off, and turning it off should not also stop
+    BR-004 reporting an off-brand callout.
+
+    Known false positive: exactly that case -- a deliberate data palette wider
+    than the slide palette. Add those colours to ``brand.palette_hex``, or
+    disable BR-011.
+    """
+
+    id: ClassVar[str] = "BR-011"
+    category: ClassVar[str] = "brand"
+    severity: ClassVar[Severity] = "major"
+    summary: ClassVar[str] = "Chart series drawn in a colour off the learned palette"
+    requires: ClassVar[tuple[str, ...]] = ("brand.palette_hex",)
+
+    def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+        palette = _palette(profile)
+        if not palette:
+            return self.skip("no palette entry in the profile parses as an sRGB colour")
+
+        tolerance = profile.brand.palette_tolerance_delta_e
+        findings: list[Finding] = []
+        for slide in deck.slides:
+            for shape in slide.leaf_shapes():
+                if shape.chart is None:
+                    continue
+                for colour_hex, names in self._offenders(
+                    shape, palette, tolerance
+                ).items():
+                    rgb = try_parse_hex(colour_hex)
+                    if rgb is None:  # pragma: no cover - filtered in _offenders
+                        continue
+                    match = nearest(rgb, palette)
+                    if match is None:  # pragma: no cover - guarded above
+                        continue
+                    closest, delta = match
+                    listed = ", ".join(repr(name) for name in names)
+                    findings.append(
+                        self.finding(
+                            where=shape.ref,
+                            message=(
+                                f"{colour_hex} is off the palette, used by "
+                                f"{len(names)} series in this chart "
+                                f"({listed}); the nearest palette colour "
+                                f"{closest.hex} is Delta-E {delta:.1f} away"
+                            ),
+                            profile=profile,
+                            provenance_path="brand.palette_hex",
+                            measured=f"{colour_hex}, Delta-E {delta:.1f} from {closest.hex}",
+                            expected=f"a palette colour within Delta-E {tolerance:g}",
+                            remedy=f"Recolour the series to the palette's {closest.hex}",
+                            bbox_pt=shape.bbox_pt,
+                        )
+                    )
+        return findings
+
+    def _offenders(
+        self, shape: ShapeModel, palette: list[Rgb], tolerance: float
+    ) -> dict[str, list[str]]:
+        """Off-palette series colours in one chart, grouped by colour."""
+        grouped: dict[str, list[str]] = {}
+        assert shape.chart is not None
+        for index, series in enumerate(shape.chart.series):
+            if series.fill_hex is None:
+                continue
+            rgb = try_parse_hex(series.fill_hex)
+            if rgb is None:
+                self.note_unchecked(
+                    shape.ref,
+                    f"chart series colour {series.fill_hex!r} is not an sRGB triplet",
+                )
+                continue
+            match = nearest(rgb, palette)
+            if match is None:  # pragma: no cover - guarded by the caller
+                continue
+            _closest, delta = match
+            if delta <= tolerance:
+                continue
+            grouped.setdefault(rgb.hex, []).append(series.name or f"series {index + 1}")
+        return grouped
+
+
+@register
 class UnapprovedTypeface(Rule):
     """Reports a resolved typeface that is not in the learned approved set.
 

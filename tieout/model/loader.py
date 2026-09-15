@@ -1100,8 +1100,11 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
             with contextlib.suppress(ValueError):
                 count = int(str(point_count_el.get("val")))
         series.append(
-            ChartSeries(name=_chart_text(name_el) if name_el is not None else None,
-                        point_count=count)
+            ChartSeries(
+                name=_chart_text(name_el) if name_el is not None else None,
+                point_count=count,
+                fill_hex=_series_fill(ser, context),
+            )
         )
 
     # Take the category labels from the first series only. Every series repeats
@@ -1162,6 +1165,23 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
         fonts=fonts,
         text_strings=text_strings,
     )
+
+
+def _series_fill(ser: etree._Element, context: SlideContext) -> str | None:
+    """A chart series' own fill colour, resolved to sRGB.
+
+    Only the series' explicit ``c:spPr`` fill. A series with no fill of its own
+    takes its colour from the theme's chart colour cycle, which depends on the
+    series index and the chart style and is not modelled here -- it is chosen by
+    the template rather than typed by the author, and reporting a colour nobody
+    picked is worse than reporting none.
+
+    Resolved through the slide's own context, so a series painted in a scheme
+    colour comes back as the hex that scheme slot actually holds rather than as
+    the token.
+    """
+    fill = ser.find("c:spPr/a:solidFill", _CHART_NS)
+    return context.resolve_color(fill) if fill is not None else None
 
 
 def _chart_text_strings(

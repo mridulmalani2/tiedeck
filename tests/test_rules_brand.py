@@ -18,7 +18,7 @@ from tieout.fixtures.spec import ReferenceSpec
 from tieout.profile.schema import NotLearned
 from tieout.rules.base import REGISTRY, clear_caches, load_all_rules, run_rules
 
-BRAND_RULE_IDS = [f"BR-{n:03d}" for n in range(1, 11)]
+BRAND_RULE_IDS = [f"BR-{n:03d}" for n in range(1, 12)]
 
 
 @pytest.fixture(autouse=True)
@@ -378,3 +378,94 @@ def test_every_brand_rule_documents_itself():
         doc = rule.__doc__ or ""
         assert "Measures" in doc or "Measures:" in doc, f"{rule_id} does not say what it measures"
         assert "false positive" in doc, f"{rule_id} does not state its false-positive mode"
+
+
+# --------------------------------------------------------------------------------------
+# BR-011 chart series colour
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_chart(path, series_colours):
+    """A one-slide deck with a bar chart whose series carry explicit fills."""
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.dml.color import RGBColor
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    data = CategoryChartData()
+    data.categories = ["FY24A", "FY25E"]
+    for index, _ in enumerate(series_colours):
+        data.add_series(f"Series {index + 1}", (10.0 + index, 12.0 + index))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Pt(60), Pt(90), Pt(600), Pt(300), data
+    )
+    frame.name = "Chart 1"
+    for plot_series, hex_value in zip(frame.chart.plots[0].series, series_colours, strict=True):
+        fill = plot_series.format.fill
+        fill.solid()
+        fill.fore_color.rgb = RGBColor.from_string(hex_value.lstrip("#"))
+    presentation.save(str(path))
+
+    from tieout.model.loader import load_deck
+
+    return load_deck(path)
+
+
+def test_br011_catches_a_series_recoloured_off_the_palette(tmp_path, reference_profile):
+    """Chart series colours were never collected into the palette and never
+    checked against it, so a bar recoloured by hand to an off-brand gold was
+    invisible to the whole tool. The README said so; this closes it."""
+    on_palette = reference_profile.brand.palette_hex[0]
+    deck = _deck_with_chart(tmp_path / "chart.pptx", [on_palette, "#B08D3F"])
+
+    findings = findings_for(check(deck, reference_profile, "BR-011"), "BR-011")
+
+    assert len(findings) == 1, "one finding per chart per offending colour"
+    assert "#B08D3F" in findings[0].measured
+    assert "Series 2" in findings[0].message
+    assert findings[0].remedy and findings[0].remedy.startswith("Recolour the series")
+
+
+def test_br011_is_silent_when_every_series_is_on_the_palette(tmp_path, reference_profile):
+    palette = reference_profile.brand.palette_hex[:2]
+    deck = _deck_with_chart(tmp_path / "clean-chart.pptx", list(palette))
+    assert findings_for(check(deck, reference_profile, "BR-011"), "BR-011") == []
+
+
+def test_br011_says_nothing_about_a_series_with_no_fill_of_its_own(
+    tmp_path, reference_profile
+):
+    """Such a series takes the theme's chart colour cycle, which the template
+    chose and TieOut does not model. Reporting a colour nobody in the deck
+    picked would be worse than reporting none."""
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    data = CategoryChartData()
+    data.categories = ["FY24A", "FY25E"]
+    data.add_series("Revenue", (10.0, 12.0))
+    slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Pt(60), Pt(90), Pt(600), Pt(300), data
+    ).name = "Chart 1"
+    presentation.save(str(tmp_path / "themed.pptx"))
+
+    deck = load_deck(tmp_path / "themed.pptx")
+    chart = deck.slides[0].shapes[0].chart
+    assert chart is not None
+    assert chart.series[0].fill_hex is None
+    assert findings_for(check(deck, reference_profile, "BR-011"), "BR-011") == []

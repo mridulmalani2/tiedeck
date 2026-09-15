@@ -202,6 +202,12 @@ class TableModel:
 class ChartSeries:
     name: str | None
     point_count: int
+    #: The series' explicit fill, resolved to sRGB. ``None`` where the series
+    #: carries no fill of its own and takes the theme's chart colour cycle,
+    #: which TieOut does not model: it is set by the template rather than
+    #: chosen by the author, and guessing at it would report a deck for a
+    #: colour nobody in it picked.
+    fill_hex: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

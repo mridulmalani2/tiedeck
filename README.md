@@ -155,7 +155,7 @@ $ tieout check decks/reference_clean.pptx --client demo
 
 No findings.
 
-0 findings from 37 rules across 26 slides.
+0 findings from 38 rules across 26 slides.
 
 rules not run
   LO-006  disabled in the profile
@@ -197,7 +197,7 @@ slide 7
                        table on slide 6
 ...
 
-47 finding(s): 6 blocker, 23 major, 18 minor — from 37 rules across 26 slides.
+47 finding(s): 6 blocker, 23 major, 18 minor — from 38 rules across 26 slides.
 $ echo $?
 1
 ```
@@ -420,7 +420,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-39 rules across five categories. Each one is an independent class — rules never
+40 rules across five categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -432,7 +432,7 @@ Severity drives `--fail-on`. "Default" is whether the rule runs out of the box.
 input was never learned does not run at all**, because the only findings it could
 produce would be measured against a default the client never agreed to.
 
-### Brand (10 rules)
+### Brand (11 rules)
 
 | Rule | Severity | Default | What it measures | Expectation derived from |
 |---|---|---|---|---|
@@ -446,6 +446,7 @@ produce would be measured against a default the client never agreed to.
 | **BR-008** | minor | on | Title geometry drifts from its layout placeholder | `brand.title_geometry_tolerance_pt` |
 | **BR-009** | blocker | on | Slide dimensions do not match the profile | `slide` |
 | **BR-010** | major | on | Required boilerplate text absent | `brand.footer.boilerplate` |
+| **BR-011** | major | on | Chart series drawn in a colour off the learned palette | `brand.palette_hex` |
 
 ### Layout (8 rules)
 
@@ -1253,10 +1254,15 @@ nonsense.
 
 **Chart internals are partially inspected.** Chart text — series names, category
 labels, titles, axis titles — is read and checked for typefaces, placeholder
-markers and terminology. Chart *series colours* are not collected into the
-palette: TieOut does not model chart geometry, so there is no area to weight them
-by, and they are set by the theme rather than typed by the author. A chart in
-off-brand colours will not be reported by BR-004.
+markers and terminology. Chart series colours are *checked* by BR-011 but never
+*learned*: they are not collected into the palette, because TieOut does not model
+chart geometry and so has no area to weight them by. BR-011 measures only a
+series with an explicit fill of its own — a series taking the theme's chart
+colour cycle was coloured by the template rather than by the author, and
+reporting a colour nobody in the deck chose would be confident nonsense.
+Gridlines, plot area and data-label backgrounds are not measured. A house style
+whose charts legitimately use a wider data palette than its slide palette should
+add those colours to `brand.palette_hex` or disable BR-011.
 
 **No slide rendering in the HTML report.** The UI renders thumbnails where
 LibreOffice is installed, but the standalone report does not: nothing in it is
@@ -1386,7 +1392,7 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **39 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **40 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
    tested. A fifth category, **consistency** (3 rules), is then added beyond the
