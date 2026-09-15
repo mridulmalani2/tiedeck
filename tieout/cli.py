@@ -47,8 +47,13 @@ app = typer.Typer(
 profile_app = typer.Typer(no_args_is_help=True, help="Inspect and edit a learned profile.")
 app.add_typer(profile_app, name="profile")
 
-_err = Console(stderr=True)
-_out = Console()
+#: Emoji substitution is off on both consoles. Rich rewrites ``:chart:`` and
+#: ``:table:`` to pictographs, and TieOut's own profile keys are written that
+#: way -- ``layout.recurring.name:chart`` printed as "layout.recurring.name"
+#: followed by a chart emoji, which is neither the key the user must edit nor
+#: anything they could search for.
+_err = Console(stderr=True, emoji=False)
+_out = Console(emoji=False)
 
 #: Exit code when findings at or above the threshold are present.
 EXIT_FINDINGS: Final[int] = 1
@@ -159,6 +164,41 @@ def _report_learned(result: object, target: Path) -> None:
             f"answer them with:"
         )
         _out.print(f"  tieout learn --review --client {result.profile.client}")
+
+    review = result.reference_review
+    _out.print()
+    if review.clean:
+        _out.print("[green]The reference deck passes its own profile.[/green]")
+        return
+    colour = "yellow" if review.blocking_count else "dim"
+    _out.print(
+        f"[{colour}]Reference deck review[/{colour}] \u2014 "
+        f"{len(review.findings)} finding(s) the profile does not cover"
+    )
+    _out.print(
+        "  Either fix these in the reference deck before it becomes the house "
+        "standard, or accept them: every one is about to be the bar every future "
+        "deck is measured against.",
+        markup=False,
+        highlight=False,
+    )
+    for rule_id, findings in review.by_rule.items():
+        slides = sorted({f.slide_index for f in findings if f.slide_index})
+        where = ", ".join(str(index) for index in slides[:8])
+        if len(slides) > 8:
+            where += f", +{len(slides) - 8} more"
+        _out.print(
+            f"  [{findings[0].severity}] {rule_id} \u00d7{len(findings)} on "
+            f"slide(s) {where}: {findings[0].message}",
+            markup=False,
+            highlight=False,
+        )
+    _out.print(
+        f"  Run `tieout check <reference deck> --client {result.profile.client}` "
+        "for the full detail.",
+        markup=False,
+        highlight=False,
+    )
 
 
 def _add(client: str, deck_path: Path, out: Path | None, *, interactive: bool) -> None:

@@ -289,7 +289,17 @@ def _comment_before(parent: CommentedMap, key: str, *lines: str) -> None:
 
 
 def _existing_comment(parent: CommentedMap, key: str) -> list[str]:
-    """Comment lines already sitting above a key, so user notes are not lost."""
+    """Comment lines already sitting above a key, so user notes are not lost.
+
+    A generated block is recognised and dropped, because the caller is about to
+    write it again. Recognising only the *first* line of one -- the line opening
+    with ``why:`` or ``QUESTION:`` -- is not enough: a long note wraps, and its
+    continuation lines open with ordinary prose. Read as user comments, they
+    were kept and the regenerated block was appended after them, so every
+    re-learn left another orphaned fragment behind. Continuations are marked by
+    :data:`_CONTINUATION_INDENT` when they are written, which is how they are
+    told apart here.
+    """
     token = parent.ca.items.get(key)
     if not token:
         return []
@@ -300,12 +310,24 @@ def _existing_comment(parent: CommentedMap, key: str) -> list[str]:
         for comment in entry if isinstance(entry, list) else [entry]:
             value = getattr(comment, "value", "")
             for line in str(value).splitlines():
-                stripped = line.strip().lstrip("#").strip()
+                body = line.strip()
+                if not body.startswith("#"):
+                    continue
+                body = body[1:]
+                if body.strip() and _is_generated_continuation(body):
+                    continue
+                stripped = body.strip()
                 if stripped and not stripped.startswith(
                     (PROVENANCE_PREFIX, QUESTION_PREFIX, "Options:", "Defaulted to:")
                 ):
                     out.append(stripped)
     return out
+
+
+def _is_generated_continuation(body: str) -> bool:
+    """Whether a comment body is the wrapped continuation of a generated block."""
+    without_gap = body[1:] if body.startswith(" ") else body
+    return without_gap.startswith(_CONTINUATION_INDENT)
 
 
 #: Map node -> indent column, populated by :func:`annotate_indents`.
@@ -325,10 +347,20 @@ def _indent_of(parent: CommentedMap) -> int:
     return _INDENTS.get(id(parent), 0)
 
 
+#: Indent on the second and later lines of a wrapped generated comment. It makes
+#: a long note read as one block, and it is what
+#: :func:`_is_generated_continuation` uses to tell a regenerated block from a
+#: note the user wrote by hand.
+_CONTINUATION_INDENT: Final[str] = "  "
+
+
 def _wrap(text: str, width: int) -> list[str]:
     import textwrap
 
-    return textwrap.wrap(text, width=width) or [text]
+    return (
+        textwrap.wrap(text, width=width, subsequent_indent=_CONTINUATION_INDENT)
+        or [text]
+    )
 
 
 def annotate_indents(data: Any, depth: int = 0) -> None:

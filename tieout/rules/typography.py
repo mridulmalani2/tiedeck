@@ -32,6 +32,7 @@ from tieout.model.furniture import Furniture
 from tieout.profile.schema import Profile, Severity
 from tieout.rules.base import Finding, Rule, cluster_findings, register
 from tieout.text import (
+    TRAILING_PUNCTUATION,
     NumberReading,
     WhitespaceDefect,
     bullet_terminal,
@@ -46,6 +47,7 @@ from tieout.text import (
     spell_tokens,
     spell_variants,
     whitespace_defects,
+    word_windows,
 )
 
 # --------------------------------------------------------------------------------------
@@ -478,20 +480,10 @@ class TitleCapitalisation(Rule):
 # TY-005 terminology
 # --------------------------------------------------------------------------------------
 
-#: One word, keeping the internal punctuation that ``canon_key`` later strips, so
-#: that "U.S." and "Board's" stay single tokens.
-_WORD_SPAN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’&.\-]*")
-
-#: Sentence punctuation a window may have swallowed from the end of a sentence.
-#: Left attached, the canonical form itself would read as a variant.
-_TRAILING_PUNCTUATION: Final[str] = ".,;:!?)]'\"’”"
-
-
-def _windows(text: str, length: int) -> Iterator[str]:
-    """Every run of ``length`` consecutive words, exactly as it appears."""
-    spans = [(match.start(), match.end()) for match in _WORD_SPAN.finditer(text)]
-    for start in range(len(spans) - length + 1):
-        yield text[spans[start][0] : spans[start + length - 1][1]]
+#: Both re-exported so this module reads the way it did, while the deriver that
+#: records accepted spellings scans with exactly the same code.
+_TRAILING_PUNCTUATION: Final[str] = TRAILING_PUNCTUATION
+_windows = word_windows
 
 
 @register
@@ -507,16 +499,19 @@ class CanonicalTerms(Rule):
     shares no key with what it abbreviates. One finding per slide per variant,
     reporting the canonical form in ``expected``.
 
-    **Casing is not terminology.** A window differing from the canonical form
-    only in capitalisation is not reported unless the term appears in
-    ``typography.canon_case_sensitive``. Investment banking decks set the same
-    term in caps in an eyebrow, in title case on an agenda and in sentence case
-    in prose; all three are the house style, and ``typography.title_case`` is
-    the rule that governs which belongs where. Reporting them here fires once
-    per occurrence of an ordinary convention -- on a twenty-slide deck, dozens of
-    times -- and buries the misspelling the rule exists to find. Nothing derives
-    the opt-in list; a mark that genuinely must never be recased is added to it
-    by hand.
+    **A form the reference deck uses is not a variant.** Investment banking
+    decks set the same term in caps in an eyebrow, in title case on an agenda
+    and in sentence case in prose, and all three are the house style. Those
+    forms are recorded in ``typography.canon_accepted`` when the profile is
+    learned, and are not reported. Without it the rule fires once per occurrence
+    of an ordinary convention -- on a twenty-slide deck, dozens of times -- and
+    buries the misspelling it exists to find.
+
+    This is evidence, not a blanket exemption for capitalisation: a form the
+    reference deck never carried is still reported, so "Ashcombe partners" on a
+    deck whose approved reference only ever wrote "Ashcombe Partners" is caught.
+    ``canon_terms`` wins where a form appears in both lists, which is how the
+    loser of an answered terminology question stays reportable.
 
     Known false positive: a canonical term whose words are ordinary prose is
     reported where it is spelled differently for grammatical reasons.
@@ -533,8 +528,9 @@ class CanonicalTerms(Rule):
         canon_terms = profile.typography.canon_terms
         if not canon_terms:  # pragma: no cover - the engine skips on requires
             return self.skip("the profile does not define typography.canon_terms")
-        case_sensitive = {
-            term.casefold() for term in profile.typography.canon_case_sensitive
+        accepted = {
+            canonical: frozenset(forms)
+            for canonical, forms in profile.typography.canon_accepted.items()
         }
 
         # Compiled once per deck rather than once per passage: a literal matcher
@@ -561,7 +557,7 @@ class CanonicalTerms(Rule):
                         passage.text,
                         canonical,
                         literals[canonical],
-                        cased=canonical.casefold() in case_sensitive,
+                        accepted=accepted.get(canonical, frozenset()),
                     ):
                         key = (canonical, variant)
                         shape, count = seen.get(key, (passage.shape, 0))
@@ -592,13 +588,16 @@ def _variants_in(
     canonical: str,
     literals: list[tuple[str, re.Pattern[str]]],
     *,
-    cased: bool,
+    accepted: frozenset[str],
 ) -> Iterator[str]:
     """Surface forms in ``text`` that should have been ``canonical``.
 
-    ``cased`` says whether a difference of capitalisation alone counts. It is
-    False for every term unless the profile opts the term in.
+    ``accepted`` holds the other spellings the reference deck itself uses; a
+    window matching one of them is the house style rather than a slip. A form
+    recorded in ``canon_terms`` is reported even if it is also accepted, since
+    recording it there is a deliberate statement that it is wrong.
     """
+    declared = {variant for variant, _ in literals}
     key = canon_key(canonical)
     length = len(key.split())
     if length:
@@ -606,12 +605,10 @@ def _variants_in(
             surface = window.rstrip(_TRAILING_PUNCTUATION)
             if surface == canonical or canon_key(surface) != key:
                 continue
-            if not cased and surface.casefold() == canonical.casefold():
+            if surface in accepted and surface not in declared:
                 continue
             yield surface
     for variant, pattern in literals:
-        if not cased and variant.casefold() == canonical.casefold():
-            continue
         if pattern.search(text):
             yield variant
 

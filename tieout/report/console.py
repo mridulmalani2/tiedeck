@@ -41,7 +41,7 @@ def render(
     show_provenance: bool = True,
 ) -> None:
     """Print the audit to the console."""
-    output = console or Console()
+    output = console or Console(emoji=False)
 
     if quiet:
         _summary_line(result, output)
@@ -190,7 +190,7 @@ def render_rules_table(console: Console | None = None, client: str = "") -> None
     """``tieout rules``: every rule, its state, severity and where it comes from."""
     from tieout.rules.base import load_all_rules
 
-    output = console or Console()
+    output = console or Console(emoji=False)
     registry = load_all_rules()
 
     table = Table(box=SIMPLE_HEAD, title=f"tieout rules{f' for {client}' if client else ''}")

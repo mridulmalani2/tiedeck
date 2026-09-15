@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import re
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -481,6 +482,29 @@ def clean_term(phrase: str) -> str:
         if word:
             words.append(word)
     return " ".join(words)
+
+
+#: One word, keeping the internal punctuation that :func:`canon_key` later
+#: strips, so that "U.S." and "Board's" stay single tokens.
+_WORD_SPAN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9\'\u2019&.\-]*")
+
+#: Sentence punctuation a window may have swallowed from the end of a sentence.
+#: Left attached, the canonical form itself would read as a variant.
+TRAILING_PUNCTUATION: Final[str] = ".,;:!?)]\'\"\u2019\u201d"
+
+
+def word_windows(text: str, length: int) -> Iterator[str]:
+    """Every run of ``length`` consecutive words, exactly as it appears.
+
+    Shared by TY-005 and by the deriver that records which spellings the
+    reference deck uses. They have to scan identically: a deriver that only sees
+    capitalised runs cannot record "FY26E revenue" in prose, while the rule
+    scanning every window finds it and reports the reference deck for a spelling
+    the deriver had no way to accept.
+    """
+    spans = [(match.start(), match.end()) for match in _WORD_SPAN.finditer(text)]
+    for start in range(len(spans) - length + 1):
+        yield text[spans[start][0] : spans[start + length - 1][1]]
 
 
 def canon_key(phrase: str) -> str:

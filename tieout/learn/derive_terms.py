@@ -22,7 +22,14 @@ from tieout.learn.classify import Derivation, QuestionDraft
 from tieout.learn.observe import iter_runs, learnable_slides
 from tieout.model.deck import DeckModel
 from tieout.model.furniture import Furniture
-from tieout.text import canon_key, capitalised_ngrams, clean_term, is_common_word
+from tieout.text import (
+    TRAILING_PUNCTUATION,
+    canon_key,
+    capitalised_ngrams,
+    clean_term,
+    is_common_word,
+    word_windows,
+)
 
 #: A phrase must occur at least this often to be worth considering.
 MIN_OCCURRENCES: Final[int] = 3
@@ -97,6 +104,9 @@ class TermsDerivation:
     #: Canonical form -> variants. Empty values mean "canonical, no variants seen",
     #: which still earns an entry so TY-005 can catch a future misspelling.
     canon_terms: dict[str, list[str]] = field(default_factory=dict)
+    #: Canonical form -> the other spellings the reference deck itself uses.
+    #: Accepted rather than reported: see ``TypographyProfile.canon_accepted``.
+    canon_accepted: dict[str, list[str]] = field(default_factory=dict)
     candidates: list[CanonCandidate] = field(default_factory=list)
     #: Words from the reference deck that a general dictionary rejects, offered
     #: to ``hygiene.dictionary`` so the spell check does not report the client's
@@ -156,6 +166,7 @@ def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
         result.derivation.ask(_canon_question(candidate))
 
     result.canon_terms = _drop_subsumed(result.canon_terms, groups)
+    result.canon_accepted = _accepted_forms(deck, furniture, result.canon_terms)
     result.vocabulary = _client_vocabulary(groups)
     if result.vocabulary:
         result.derivation.note(
@@ -174,6 +185,56 @@ def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
             f"no capitalised phrase occurs at least {MIN_OCCURRENCES} times",
         )
     return result
+
+
+def _accepted_forms(
+    deck: DeckModel,
+    furniture: Furniture,
+    canon: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Every other spelling of a canonical term that the reference deck uses.
+
+    Chrome is included here although it is excluded from term *derivation*. The
+    logo wordmark is furniture and must not vote on what the deck's terms are --
+    admitting it would make the confidentiality line the most frequent phrase in
+    any deck by an order of magnitude. But it is text on the slide, TY-005 reads
+    it, and a house that sets its own name in capitals in its logo and in title
+    case in its disclaimer uses both spellings. Leaving the wordmark out here
+    reports it on every slide in the deck it was learned from.
+    """
+    by_length: dict[int, dict[str, str]] = {}
+    for term in canon:
+        key = canon_key(term)
+        length = len(key.split())
+        if length:
+            by_length.setdefault(length, {})[key] = term
+    if not by_length:
+        return {}
+    observed: dict[str, set[str]] = {term: set() for term in canon}
+
+    def ingest(text: str) -> None:
+        for length, keys in by_length.items():
+            for window in word_windows(text, length):
+                surface = window.rstrip(TRAILING_PUNCTUATION)
+                canonical = keys.get(canon_key(surface))
+                if canonical is not None and surface != canonical:
+                    observed[canonical].add(surface)
+
+    for context in iter_runs(deck, furniture, include_furniture=True):
+        ingest(context.run.text)
+    for slide in deck.slides:
+        for shape in slide.charts:
+            if shape.chart is not None:
+                for text in shape.chart.text_strings:
+                    ingest(text)
+
+    # A spelling the interview declared wrong stays wrong, however often the
+    # reference deck uses it: that is what answering the question decided.
+    return {
+        canonical: sorted(forms - set(canon.get(canonical, ())))
+        for canonical, forms in observed.items()
+        if forms - set(canon.get(canonical, ()))
+    }
 
 
 def _client_vocabulary(

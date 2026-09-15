@@ -36,7 +36,7 @@ import math
 from dataclasses import dataclass
 from typing import Final
 
-from tieout.model.deck import ShapeModel, SlideModel, TextParagraph
+from tieout.model.deck import ShapeModel, SlideModel, TextParagraph, TextRun
 
 #: Upper bound on one character's advance, in ems. The widest glyph in a bold
 #: proportional Latin face runs about 0.95 em; PowerPoint's ``spc`` tracking
@@ -86,7 +86,7 @@ class InkExtent:
         return self.narrowed_x or self.narrowed_y
 
 
-def _run_size(run) -> float:
+def _run_size(run: TextRun) -> float:
     size = run.font.size_pt if run.font is not None else None
     return float(size) if size and size > 0 else ASSUMED_SIZE_PT
 

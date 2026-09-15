@@ -515,3 +515,56 @@ def test_every_rule_documents_what_it_measures_and_how_it_misfires():
         assert "false positive" in docstring, (
             f"{rule_cls.id} does not state its false-positive mode"
         )
+
+
+# --------------------------------------------------------------------------------------
+# TY-005 and the spellings the reference deck itself uses
+# --------------------------------------------------------------------------------------
+
+
+def test_ty005_accepts_a_spelling_the_reference_deck_uses(clean_deck, reference_profile):
+    """A form in ``canon_accepted`` is the house style, not a variant.
+
+    A deck sets the same term in caps in an eyebrow, in title case on an agenda
+    and in sentence case in prose. Reporting the other two fires once per
+    occurrence of an ordinary convention and buries the misspelling the rule
+    exists to find.
+    """
+    reference_profile.typography.canon_terms = {"Ashcombe Partners": []}
+    reference_profile.typography.canon_accepted = {
+        "Ashcombe Partners": ["ASHCOMBE PARTNERS"]
+    }
+    result = run_rules(clean_deck, reference_profile, include=["TY-005"])
+    findings = findings_for(result, "TY-005")
+    assert all("ASHCOMBE PARTNERS" not in f.measured for f in findings)
+
+
+def test_ty005_still_reports_a_spelling_the_reference_deck_never_used(
+    dirty_deck, reference_profile
+):
+    """Acceptance is evidence, not a blanket exemption for capitalisation."""
+    reference_profile.typography.canon_terms = {"Ashcombe Partners": []}
+    reference_profile.typography.canon_accepted = {
+        "Ashcombe Partners": ["ASHCOMBE PARTNERS"]
+    }
+    result = run_rules(dirty_deck, reference_profile, include=["TY-005"])
+    assert findings_for(result, "TY-005")
+
+
+def test_ty005_reports_an_accepted_form_that_canon_terms_declares_wrong(
+    dirty_deck, reference_profile
+):
+    """Answering the terminology question is what makes a form wrong.
+
+    A spelling can be both used by the deck and declared the loser of a
+    terminology question; the declaration wins, or answering the question would
+    have no effect.
+    """
+    reference_profile.typography.canon_terms = {
+        "Ashcombe Partners": ["Ashcombe partners"]
+    }
+    reference_profile.typography.canon_accepted = {
+        "Ashcombe Partners": ["Ashcombe partners"]
+    }
+    result = run_rules(dirty_deck, reference_profile, include=["TY-005"])
+    assert findings_for(result, "TY-005")

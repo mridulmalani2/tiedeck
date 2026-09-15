@@ -136,6 +136,19 @@ class PaletteCluster:
     def slides(self) -> tuple[int, ...]:
         return tuple(sorted({slide for _, slide in self.members}))
 
+    @property
+    def radius(self) -> float:
+        """The furthest any member sits from this cluster's representative.
+
+        BR-004 measures every colour in the deck against the representative, so
+        this is the distance the tolerance has to admit for the reference deck
+        to pass its own palette.
+        """
+        return max(
+            (delta_e_76(self.rgb, member) for member, _ in self.members),
+            default=0.0,
+        )
+
 
 @dataclass
 class BrandDerivation:
@@ -267,15 +280,46 @@ def cluster_palette(
 
 
 def derive_palette_tolerance(clusters: list[PaletteCluster]) -> tuple[float, str]:
-    """Half the minimum inter-cluster distance, floored and capped.
+    """Half the minimum inter-cluster distance, floored to admit the deck.
+
+    Two constraints pull in opposite directions and both have to hold.
+
+    *Discrimination*: the tolerance must stay below half the distance between
+    two palette entries, or a colour would read as "on the palette" for two
+    entries at once and the rule would stop telling them apart.
+
+    *Admission*: the tolerance must be at least each cluster's radius -- the
+    furthest a member sits from the representative BR-004 measures against.
+    Clustering gathers colours within :data:`PALETTE_CLUSTER_DELTA_E` of each
+    other, so a cluster can be 3 Delta-E wide while the derived tolerance is 2;
+    the rim of every cluster then fails a check against the palette it is part
+    of. That is not a deck with off-palette colours, it is a profile that
+    disagrees with itself, and on a real deck it was ten of the seventeen
+    colour findings a clean deck produced against its own profile.
+
+    Admission wins where they conflict, and the reason says so: a tolerance that
+    fails the deck it was learned from is wrong in a way no user can act on,
+    while one that is slightly generous merely reports less.
 
     Returns the tolerance and the sentence explaining it.
     """
+    radius = max((cluster.radius for cluster in clusters), default=0.0)
+    # A hair above the radius: at exactly the radius the comparison is an
+    # equality on floating point, and the member on the rim can fall either way.
+    admission = round(radius + 0.1, 2)
+
     if len(clusters) < 2:
+        floor = max(PALETTE_TOLERANCE_FLOOR, admission)
         return (
-            PALETTE_TOLERANCE_FLOOR,
-            f"floored at {PALETTE_TOLERANCE_FLOOR:g}: fewer than two palette "
-            f"clusters, so no inter-cluster distance to derive from",
+            floor,
+            f"floored at {floor:g}: fewer than two palette clusters, so no "
+            f"inter-cluster distance to derive from"
+            + (
+                f"; raised to admit the widest cluster, whose members reach "
+                f"{radius:.1f} Delta-E from it"
+                if admission > PALETTE_TOLERANCE_FLOOR
+                else ""
+            ),
         )
 
     minimum = min(
@@ -285,6 +329,15 @@ def derive_palette_tolerance(clusters: list[PaletteCluster]) -> tuple[float, str
     )
     half = minimum / 2.0
     tolerance = max(PALETTE_TOLERANCE_FLOOR, min(half, PALETTE_TOLERANCE_CEILING))
+    if admission > tolerance:
+        tolerance = min(admission, PALETTE_TOLERANCE_CEILING)
+        return (
+            round(tolerance, 2),
+            f"half the minimum inter-cluster distance is {half:.1f}, raised to "
+            f"{tolerance:g} so the palette admits the deck it was learned from: "
+            f"the widest cluster's members reach {radius:.1f} Delta-E from the "
+            f"colour that represents them",
+        )
     if half > PALETTE_TOLERANCE_CEILING:
         reason = (
             f"half the minimum inter-cluster distance is {half:.1f}, capped at "

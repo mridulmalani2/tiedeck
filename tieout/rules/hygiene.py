@@ -361,10 +361,17 @@ class DocumentMetadataRule(Rule):
     not expose all of them. Empty and whitespace-only fields are not reported.
     One finding for the deck, listing every leaking field as ``field=value``.
 
-    False-positive mode: a client whose own name is the legitimate value of
-    ``company`` on a deck they authored themselves. The rule cannot distinguish
-    the bank's analyst from the client's own administrator, so a deck circulated
-    internally will report metadata that is not in fact a leak.
+    A value the reference deck itself carries is not reported.
+    ``hygiene.document_metadata_allowed`` holds those values, so the firm's own
+    name on the firm's own deck reads as authorship rather than as a leak, while
+    a named individual, a counterparty or a codename that the reference deck
+    never carried still blocks. Without it the check fires on the deck the
+    profile was learned from, which tells the user only that the tool cannot
+    tell whose deck it is looking at.
+
+    False-positive mode: a second deck from the same house, authored by a named
+    individual whose name the reference deck never carried, is reported -- which
+    is the intended behaviour and will occasionally be unwelcome.
     ``hygiene.allow_document_metadata`` turns the whole check off.
     """
 
@@ -380,9 +387,18 @@ class DocumentMetadataRule(Rule):
             return self.skip("the profile allows document metadata")
 
         package = deck.package
+        allowed = {
+            value.strip().casefold()
+            for value in profile.hygiene.document_metadata_allowed
+            if value and value.strip()
+        }
         leaking: dict[str, str] = {
-            **package.core.identifying_fields(),
-            **package.app.identifying_fields(),
+            name: value
+            for name, value in {
+                **package.core.identifying_fields(),
+                **package.app.identifying_fields(),
+            }.items()
+            if value.strip().casefold() not in allowed
         }
         if not leaking:
             return []

@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tieout.learn.classify import Derivation, QuestionDraft
 from tieout.learn.derive_brand import derive_brand
@@ -38,6 +39,9 @@ from tieout.learn.interview import (
 from tieout.model.deck import DeckModel
 from tieout.model.furniture import detect_furniture
 from tieout.model.loader import load_deck
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, annotation only
+    from tieout.rules.base import Finding
 from tieout.profile.schema import (
     HygieneProfile,
     NotLearned,
@@ -58,6 +62,70 @@ DEFAULT_DISABLED_RULES: tuple[str, ...] = ("TY-009", "LO-006")
 
 
 @dataclass
+class ReferenceReview:
+    """What the learned profile still reports about the deck it was learned from.
+
+    A profile derived from a deck and then run against that same deck should
+    find nothing: that is the tool's own acceptance criterion, and every
+    deviation is one of exactly two things.
+
+    Either the profile is wrong -- it derived a central value where the deck
+    holds a range, and now reports the deck's own spread -- which is a defect in
+    TieOut and belongs in its test suite. Or the reference deck really does
+    contain what the rule says: a typeface nobody meant to use, a colour used
+    once, a double space. That is worth knowing *before* the profile goes into
+    service, because every one of those defects is about to become the standard
+    every future deck is measured against, or a finding on every future deck
+    that inherits it.
+
+    So this is reported, never silently absorbed. Widening the profile to cover
+    a defect would make the invariant hold by making the tool useless, and
+    recording blanket exemptions would do the same more quietly.
+    """
+
+    findings: list[Finding] = field(default_factory=list)
+
+    @property
+    def clean(self) -> bool:
+        return not self.findings
+
+    @property
+    def by_rule(self) -> dict[str, list[Finding]]:
+        grouped: dict[str, list[Finding]] = {}
+        for finding in sorted(self.findings, key=lambda f: f.sort_key):
+            grouped.setdefault(finding.rule_id, []).append(finding)
+        return grouped
+
+    @property
+    def blocking_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity in ("blocker", "major"))
+
+    def describe(self) -> str:
+        """One line per rule, with the slides and the first example."""
+        if self.clean:
+            return (
+                "The reference deck passes its own profile: every rule in the "
+                "catalogue is silent on the deck it was learned from."
+            )
+        lines = [
+            f"{len(self.findings)} finding(s) remain on the reference deck itself. "
+            "The profile does not cover these, so they are either defects in the "
+            "deck worth fixing before it becomes the house standard, or "
+            "conventions to accept:"
+        ]
+        for rule_id, findings in self.by_rule.items():
+            slides = sorted({f.slide_index for f in findings if f.slide_index})
+            where = ", ".join(str(index) for index in slides[:8])
+            if len(slides) > 8:
+                where += f", +{len(slides) - 8} more"
+            lines.append(
+                f"  [{findings[0].severity}] {rule_id} on slide(s) {where}: "
+                f"{findings[0].message}"
+            )
+        return "\n".join(lines)
+
+
+@dataclass
 class LearnResult:
     """A learned profile and an account of how it was produced."""
 
@@ -65,6 +133,7 @@ class LearnResult:
     interview: InterviewResult = field(default_factory=InterviewResult)
     derivation: Derivation = field(default_factory=Derivation)
     decks: list[DeckModel] = field(default_factory=list)
+    reference_review: ReferenceReview = field(default_factory=ReferenceReview)
 
     @property
     def summary(self) -> str:
@@ -124,7 +193,30 @@ def learn_from_decks(
         primary.profile = merged.profile
         primary.derivation.merge(addition.derivation)
     primary.decks = decks
+    primary.reference_review = review_reference(decks, primary.profile)
     return primary
+
+
+def review_reference(decks: list[DeckModel], profile: Profile) -> ReferenceReview:
+    """Run the catalogue against the decks the profile was learned from.
+
+    The tool's own acceptance criterion, made part of the command rather than
+    left to a test. See :class:`ReferenceReview` for why the findings are
+    reported rather than absorbed.
+
+    Imported here rather than at module scope: the rules import the profile
+    schema and the deck model, and pulling them in at the top of the learning
+    package makes a cycle out of what is really a one-way dependency.
+    """
+    from tieout.rules.base import clear_caches, load_all_rules, run_rules
+
+    load_all_rules()
+    review = ReferenceReview()
+    for deck in decks:
+        clear_caches()
+        review.findings.extend(run_rules(deck, profile).findings)
+    clear_caches()
+    return review
 
 
 def _derive_one(
@@ -161,11 +253,19 @@ def _derive_one(
         brand=brand.profile,
         layout=layout.profile,
         typography=typography.profile,
-        hygiene=HygieneProfile(dictionary=list(terms.vocabulary)),
+        hygiene=HygieneProfile(
+            dictionary=list(terms.vocabulary),
+            document_metadata_allowed=_reference_metadata(deck),
+        ),
         rules=RulesProfile(disabled=list(DEFAULT_DISABLED_RULES)),
     )
 
     profile.typography.canon_terms = apply_canon_answers(terms, interview.answers)
+    profile.typography.canon_accepted = {
+        canonical: sorted(set(forms) - set(profile.typography.canon_terms.get(canonical, ())))
+        for canonical, forms in terms.canon_accepted.items()
+        if set(forms) - set(profile.typography.canon_terms.get(canonical, ()))
+    }
     for path, value in apply_hygiene_answers(interview.answers).items():
         _set_path(profile, path, value)
 
@@ -186,6 +286,22 @@ def _derive_one(
     return LearnResult(profile=profile, interview=interview, derivation=derivation)
 
 
+def _reference_metadata(deck: DeckModel) -> list[str]:
+    """The identifying docProps values the reference deck carries.
+
+    These belong to the client whose approved deck this is, so HY-004 treats
+    them as authorship rather than as a leak. Anything else in a later deck --
+    a named individual, a counterparty, a codename -- still blocks. Without
+    this the rule fires on the deck the profile was learned from, which tells a
+    user only that TieOut cannot tell whose deck it is looking at.
+    """
+    values = {
+        **deck.package.core.identifying_fields(),
+        **deck.package.app.identifying_fields(),
+    }
+    return sorted({value.strip() for value in values.values() if value.strip()})
+
+
 def _note_defaults(profile: Profile, derivation: Derivation) -> None:
     """Record provenance for the values that are defaults rather than derived.
 
@@ -200,6 +316,14 @@ def _note_defaults(profile: Profile, derivation: Derivation) -> None:
         "notes, hidden slides or document metadata are acceptable",
         "medium",
     )
+    if profile.hygiene.document_metadata_allowed:
+        profile.set_provenance(
+            "hygiene.document_metadata_allowed",
+            "the identifying document properties the reference deck carries, "
+            "recorded as the client's own so HY-004 reports only other names: "
+            + ", ".join(profile.hygiene.document_metadata_allowed),
+            "high",
+        )
     profile.set_provenance(
         "hygiene.placeholder_markers",
         "default marker list, not inferred from the reference deck",

@@ -292,19 +292,26 @@ class TypographyProfile(_Model):
     unit_pattern: str | None = None
     #: Canonical surface form -> the variants that must be rewritten to it.
     canon_terms: dict[str, list[str]] = Field(default_factory=dict)
-    #: Terms whose capitalisation is itself a house rule. TY-005 ignores a
-    #: case-only deviation from a canonical term unless the term is listed here,
-    #: because a deck legitimately sets the same term in caps in an eyebrow, in
-    #: title case on an agenda and in sentence case in prose. Nothing derives
-    #: this: it is an opt-in, edited by hand when a mark really must not be
-    #: recased.
-    canon_case_sensitive: list[str] = Field(default_factory=list)
+    #: Canonical form -> the other surface forms the reference deck itself uses.
+    #: These are **accepted**: a deck sets the same term in caps in an eyebrow,
+    #: in title case on an agenda and in sentence case in prose, and all of them
+    #: are the house style precisely because the approved deck contains them.
+    #: A form that is *not* here and not the canonical one is still reported,
+    #: so a miscapitalised proper noun the reference deck never carried is
+    #: caught. ``canon_terms`` wins where a form appears in both, which is how
+    #: an answered terminology question keeps its loser reportable.
+    canon_accepted: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class HygieneProfile(_Model):
     allow_speaker_notes: bool = False
     allow_hidden_slides: bool = False
     allow_document_metadata: bool = False
+    #: Values of the identifying docProps fields that belong to the client, taken
+    #: from the reference deck. HY-004 reports a field whose value is not one of
+    #: these, so the client's own name on their own deck is not a leak while a
+    #: named individual from another house still is.
+    document_metadata_allowed: list[str] = Field(default_factory=list)
     allow_comments: bool = False
     allow_external_relationships: bool = False
     placeholder_markers: list[str] = Field(

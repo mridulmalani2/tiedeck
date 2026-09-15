@@ -139,10 +139,12 @@ def hygiene_questions(deck: DeckModel) -> list[QuestionDraft]:
                 question=(
                     "The reference deck's document properties name "
                     + ", ".join(f"{k}={v!r}" for k, v in sorted(leaking.items()))
-                    + ". Should TieOut flag metadata like this in future decks?"
+                    + ". These are recorded as the client's own and will not be "
+                    "flagged. Should TieOut still check for other names in future "
+                    "decks?"
                 ),
-                options=["yes, flag it", "no, allow it"],
-                default="yes, flag it",
+                options=["yes, flag other names", "no, ignore metadata entirely"],
+                default="yes, flag other names",
                 impact=len(leaking) * 3,
                 kind="hygiene",
             )
