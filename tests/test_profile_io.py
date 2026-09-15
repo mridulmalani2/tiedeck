@@ -9,6 +9,7 @@ earlier, which is the worst way to discover a bug of this kind.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from tieout.learn.emit import (
     PROVENANCE_PREFIX,
@@ -360,3 +361,44 @@ def test_a_severity_override_takes_effect():
     assert profile.severity_of("BR-002", "major") == "major"
     profile.rules.severity_overrides["BR-002"] = "blocker"
     assert profile.severity_of("BR-002", "major") == "blocker"
+
+
+def test_a_field_path_carrying_deck_text_still_loads_back(tmp_path):
+    """The defect this guards is the worst kind a writer can have: `learn` wrote
+    a profile that `check` could not read, and said so with a YAML parse error
+    pointing into the generated provenance block.
+
+    A field path can carry deck text in its last segment -- the footer
+    boilerplate is part of the key -- and a real confidentiality line pushes that
+    key past the emitter's width. The emitter folds a long plain scalar across
+    lines; a value may span lines, but a YAML simple key may not. The reference
+    decks never caught it because their boilerplate is short.
+    """
+    boilerplate = (
+        "Project Meridian  |  Strictly private and confidential  |  Ashcombe Partners LLP"
+    )
+    path = f"brand.footer.boilerplate.{boilerplate}"
+    profile = _profile()
+    profile.set_provenance(path, "repeated verbatim on 5 of 5 slides", "high")
+
+    target = tmp_path / "meridian.yaml"
+    write(profile, target)
+    reloaded = load(target)
+
+    assert reloaded.provenance[path] == "repeated verbatim on 5 of 5 slides"
+
+
+def test_a_palette_entry_that_is_not_a_colour_is_refused():
+    """The palette is hand-editable, in the YAML and now in the UI, so the
+    schema is where a typo has to stop. Without this it reached the rule as a
+    ColorParseError mid-audit: a traceback in place of a report, naming neither
+    the profile nor which swatch was wrong."""
+    profile = _profile()
+    with pytest.raises(ValidationError):
+        profile.brand.palette_hex = ["#1F3864", "octarine"]
+
+
+def test_palette_spellings_are_normalised_on_the_way_in():
+    profile = _profile()
+    profile.brand.palette_hex = ["#1f3864", "abc123", "#fff"]
+    assert profile.brand.palette_hex == ["#1F3864", "#ABC123", "#FFFFFF"]

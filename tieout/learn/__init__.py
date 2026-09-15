@@ -242,11 +242,17 @@ def _downgrade_defaulted_answers(profile: Profile, interview: InterviewResult) -
         if question.answered:
             continue
         current = profile.provenance.get(question.field_path, "")
+        # Worded without reference to where it sits. This note is read in three
+        # places -- beside the value in the YAML, in the House style tab, and as
+        # the evidence under a finding -- and "the question above this field"
+        # is only true in the first of them. In the review note it told a reader
+        # to look above a finding for a question that is not there.
         note = (
-            f"{current}; the question above it was not answered, so the default "
+            f"{current}; the question about it was not answered, so the default "
             f"was applied"
             if current
-            else "defaulted: the question above this field was not answered"
+            else "no answer was given to the question about this field, so the "
+            "default was applied"
         )
         profile.set_provenance(question.field_path, note, "medium")
 

@@ -38,11 +38,16 @@ from typing import Any, Final
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from tieout.profile.schema import Profile
 
 #: Column the value-explaining comments are wrapped at.
 _COMMENT_WIDTH: Final[int] = 84
+
+#: Column the emitter folds scalars at. Named because :func:`_safe_key` has to
+#: know it: a plain key folded at this column would not load back.
+_WIDTH: Final[int] = 100
 
 #: Prefix marking a question the interview deferred. Section 8.4 requires these
 #: to appear above the field they concern so the user can find them.
@@ -56,7 +61,7 @@ PROVENANCE_PREFIX: Final[str] = "why:"
 def _yaml() -> YAML:
     handler = YAML()
     handler.default_flow_style = False
-    handler.width = 100
+    handler.width = _WIDTH
     handler.indent(mapping=2, sequence=4, offset=2)
     handler.preserve_quotes = True
     return handler
@@ -133,19 +138,43 @@ def _header(profile: Profile, *, questions_deferred: int) -> str:
 # --------------------------------------------------------------------------------------
 
 
-def _commented(value: Any) -> Any:
+def _commented(value: Any, depth: int = 0) -> Any:
     """Recursively convert plain containers to ruamel's commentable ones."""
     if isinstance(value, dict):
         out = CommentedMap()
         for key, item in value.items():
-            out[key] = _commented(item)
+            out[_safe_key(key, depth)] = _commented(item, depth + 1)
         return out
     if isinstance(value, list):
         seq = CommentedSeq()
         for item in value:
-            seq.append(_commented(item))
+            seq.append(_commented(item, depth + 1))
         return seq
     return value
+
+
+def _safe_key(key: Any, depth: int) -> Any:
+    """Quote a mapping key long enough that the emitter would fold it.
+
+    ``provenance`` and ``confidence`` are keyed by field path, and a field path
+    can carry deck text in its last segment --
+    ``brand.footer.boilerplate.<the boilerplate itself>``. A real confidentiality
+    footer is easily long enough to push that key past :data:`_WIDTH`, and the
+    emitter folds a long *plain* scalar across lines. A value may span lines; a
+    YAML simple key may not. So the profile ``learn`` had just written failed to
+    load back, with a parse error naming a line in the generated ``provenance``
+    block -- the one part of the file nobody hand-edits.
+
+    Quoting is what keeps such a key on one line. It is applied only where it is
+    needed, so the rest of the file stays the plain, readable document the
+    profile is meant to be.
+    """
+    if not isinstance(key, str):
+        return key
+    # ``depth * 2`` is the emitted indent; ``+ 2`` covers the ": " that follows.
+    if depth * 2 + len(key) + 2 <= _WIDTH:
+        return key
+    return DoubleQuotedScalarString(key)
 
 
 def _navigate(root: CommentedMap, path: str) -> tuple[CommentedMap, str] | None:

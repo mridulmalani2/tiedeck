@@ -18,7 +18,7 @@ from typing import Any
 from tieout.model.deck import DeckModel
 from tieout.profile.schema import Profile
 from tieout.rules.base import SEVERITY_ORDER, AuditResult, load_all_rules
-from tieout_ui.edit import can_clear
+from tieout_ui.edit import can_clear, editable
 
 __all__ = ["audit_view", "profile_view", "rules_view"]
 
@@ -42,6 +42,12 @@ def _fact(
         # something. A tolerance resets to its default rather than vanishing,
         # and a required field with no default cannot be dropped at all.
         "droppable": can_clear(profile, path),
+        # The controls to draw for retyping this value: one per editable member
+        # for a margin set or a size band, one for a scalar, none at all for a
+        # shape a form cannot carry. Resolved from the schema rather than listed
+        # here, so a new field on the profile gets an editor without this file
+        # having to hear about it.
+        "edit": editable(profile, path),
     }
 
 

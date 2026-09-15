@@ -760,3 +760,161 @@ def test_the_page_presents_findings_as_a_note_not_as_cards(client):
     page = client.get("/").text
     for expected in ("Review note", "plainNote", "slide-head", "class=\"item\""):
         assert expected in page, expected
+
+
+# --------------------------------------------------------------------------- #
+# Editing a derived value
+# --------------------------------------------------------------------------- #
+
+
+def test_the_view_offers_a_control_per_editable_member():
+    """A margin set is four decisions, not one string. Editing "30 / 42 / 64 /
+    42pt" as a single field is how the third number gets a typo nobody sees."""
+    from tieout.profile.schema import Margins, Profile, SlideProfile
+    from tieout_ui.edit import editable
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    profile.layout.safe_margin_pt["content"] = Margins(
+        top=30.0, right=42.0, bottom=64.0, left=42.0
+    )
+    controls = editable(profile, "layout.safe_margin_pt.content")
+
+    assert [c["label"] for c in controls] == ["top", "right", "bottom", "left"]
+    assert {c["type"] for c in controls} == {"number"}
+    # Prefilled, so a control submitted untouched is never recorded as an edit.
+    assert [c["value"] for c in controls] == ["30", "42", "64", "42"]
+
+
+def test_a_shape_a_form_cannot_carry_is_not_offered():
+    """Silence is the honest answer where a control would be a lie. The page
+    must not draw an input that cannot take what is typed into it."""
+    from tieout.profile.schema import Profile, SlideProfile
+    from tieout_ui.edit import editable
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    profile.typography.canon_terms = {"EBITDA": ["ebitda"]}
+    assert editable(profile, "typography.canon_terms") == []
+
+
+def test_a_list_of_words_is_not_read_as_a_list_of_numbers():
+    """``list[str] is list[str]`` is False -- parameterised generics are not
+    interned -- so an identity test silently made every list numeric and the
+    typeface field rejected 'Calibri'."""
+    from tieout.profile.schema import Profile, SlideProfile
+    from tieout_ui.edit import editable
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    profile.brand.fonts.allowed = ["Calibri"]
+    assert [c["type"] for c in editable(profile, "brand.fonts.allowed")] == ["list"]
+
+
+def test_an_edit_is_applied_marked_as_hand_set_and_locked():
+    from tieout.profile.schema import Margins, Profile, SlideProfile
+    from tieout_ui.edit import apply_edits
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    profile.layout.safe_margin_pt["content"] = Margins(
+        top=30.0, right=42.0, bottom=64.0, left=42.0
+    )
+    profile.set_provenance("layout.safe_margin_pt.content.top", "measured", "high")
+
+    applied, rejected = apply_edits(profile, {"layout.safe_margin_pt.content.top": "36"})
+
+    assert applied == ["layout.safe_margin_pt.content.top"] and rejected == []
+    assert profile.layout.safe_margin_pt["content"].top == 36.0
+    # The provenance must stop claiming the deck said so, and the lock must stop
+    # a later `learn --add` from quietly measuring over it.
+    assert "set by hand" in profile.provenance["layout.safe_margin_pt.content.top"]
+    assert "layout.safe_margin_pt.content.top" in profile.locks
+
+
+def test_one_bad_value_does_not_discard_the_good_ones():
+    """Twelve fields go up in one save. Rejecting the form because one of them
+    is wrong loses eleven corrections and says nothing useful about any of
+    them."""
+    from tieout.profile.schema import Profile, SlideProfile
+    from tieout_ui.edit import apply_edits
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    applied, rejected = apply_edits(
+        profile,
+        {
+            "brand.palette_tolerance_delta_e": "4.5",
+            "brand.palette_hex": "#1F3864, octarine",
+            "layout.grid.tolerance_pt": "not a number",
+            "typography.nonexistent": "x",
+        },
+    )
+
+    assert applied == ["brand.palette_tolerance_delta_e"]
+    assert profile.brand.palette_tolerance_delta_e == 4.5
+    reasons = {entry["path"]: entry["reason"] for entry in rejected}
+    assert "not a number" in reasons["layout.grid.tolerance_pt"]
+    assert "sRGB" in reasons["brand.palette_hex"]
+    assert reasons["typography.nonexistent"] == "no such field in this profile"
+
+
+def test_a_list_path_that_is_not_an_index_is_a_miss_not_a_crash():
+    """``layout.recurring`` is a list whose members the view names by key, so
+    ``layout.recurring.name:footnote`` reaches the resolver as a non-numeric
+    segment under a list. It used to raise ValueError out of the request."""
+    from tieout.profile.schema import Profile, SlideProfile
+    from tieout_ui.edit import apply_edits, editable
+
+    profile = Profile(client="acme", slide=SlideProfile(width_pt=960.0, height_pt=540.0))
+    assert editable(profile, "layout.recurring.name:footnote") == []
+    applied, rejected = apply_edits(profile, {"layout.recurring.name:footnote": "1"})
+    assert applied == [] and rejected[0]["reason"] == "no such field in this profile"
+
+
+def test_the_house_style_is_derived_on_upload_without_being_asked(client, uploaded):
+    """The House style tab must have an answer in it by the time anyone opens
+    it, and nothing may be written until a person names it."""
+    import time
+
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        payload = client.get(f"/api/decks/{uploaded['deck_id']}/draft").json()
+        if payload.get("ready"):
+            break
+        time.sleep(0.2)
+
+    assert payload["ready"] is True and payload["draft"] is True
+    assert payload["groups"], "the draft must carry the same facts a profile does"
+    assert client.get("/api/profiles").json()["clients"] == [], (
+        "a draft is a candidate, not a profile: nothing is written until it is named"
+    )
+
+
+def test_an_edit_survives_the_round_trip_through_confirm(client, onboarded):
+    response = client.post(
+        "/api/confirm",
+        json={
+            "client": "demo",
+            "edits": {"brand.palette_tolerance_delta_e": "4.5"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["edited"] == ["brand.palette_tolerance_delta_e"]
+    assert payload["rejected"] == []
+
+    reloaded = client.get("/api/profiles/demo").json()
+    tolerance = next(
+        fact
+        for group in reloaded["groups"]
+        for fact in group["facts"]
+        if fact["path"] == "brand.palette_tolerance_delta_e"
+    )
+    assert tolerance["value"] == 4.5
+    assert "set by hand" in tolerance["why"]
+
+
+def test_a_refused_edit_is_reported_rather_than_raised(client, onboarded):
+    response = client.post(
+        "/api/confirm",
+        json={"client": "demo", "edits": {"brand.palette_hex": "#1F3864, octarine"}},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["edited"] == []
+    assert "sRGB" in response.json()["rejected"][0]["reason"]

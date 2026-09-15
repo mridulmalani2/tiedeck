@@ -239,6 +239,31 @@
   .fact .why { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
   .fact.off .k, .fact.off .v { opacity: .4; text-decoration: line-through; }
   .fact .fixed { font-size: 10.5px; color: var(--ink-3); }
+
+  /* Retyping a derived value. The controls sit under the measured value rather
+     than replacing it, so the number a person is overriding stays on screen
+     while they override it. */
+  .fact .edit { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+  .fact .ctl { display: flex; flex-direction: column; gap: 2px; }
+  .fact .ctl .el {
+    font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em;
+  }
+  .fact .ctl input, .fact .ctl select {
+    font-size: 12px; padding: 3px 6px; min-width: 0; width: 88px;
+  }
+  .fact .ctl input[data-wide], .fact .ctl select { width: 176px; }
+  .fact .ctl input.changed, .fact .ctl select.changed {
+    border-color: var(--accent); background: var(--accent-wash);
+  }
+  .fact.off .edit { display: none; }
+  .hint { font-size: 11.5px; color: var(--ink-3); margin: 0; }
+
+  /* One message slot, rewritten in place. It used to be prepended into the
+     pane, so a second failed run stacked a second copy of the same error above
+     the first and the pane grew a history of its own mistakes. */
+  #flash:empty { display: none; }
+  #flash { flex: 0 0 auto; border-bottom: 1px solid var(--line); padding: 10px 16px; }
+  #flash .msg { margin: 0; }
   .sw { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
   .sw figure { margin: 0; text-align: center; }
   .sw i {
@@ -307,33 +332,42 @@
       </div>
       <div class="name">File</div>
     </div>
-    <div class="grp">
+    <div class="grp" id="grp-choose" hidden>
       <div class="row">
-        <label class="stack">Existing client
+        <button class="big" id="pick-existing"><span class="ico">&#128193;</span>Use existing profile</button>
+        <button class="big" id="pick-new"><span class="ico">&#10010;</span>Create profile</button>
+      </div>
+      <div class="name">House style</div>
+    </div>
+    <div class="grp" id="grp-existing" hidden>
+      <div class="row">
+        <label class="stack">Saved profiles
           <select id="client"></select>
         </label>
-        <button class="small" id="useclient" disabled>Use profile</button>
+        <button class="small primary" id="useclient">Use this profile</button>
+        <button class="small" id="back-existing">Back</button>
       </div>
-      <div class="name">Audit against</div>
+      <div class="name">Audit against a client already onboarded</div>
     </div>
-    <div class="grp">
+    <div class="grp" id="grp-new" hidden>
       <div class="row">
-        <label class="stack">Learn a new client from this deck
+        <label class="stack">Name this client
           <input type="text" id="newclient" placeholder="e.g. acme" autocomplete="off">
         </label>
-        <button class="small" id="learn">Learn</button>
+        <button class="small primary" id="learn">Create profile</button>
+        <button class="small" id="back-new">Back</button>
       </div>
-      <div class="name">Onboard</div>
+      <div class="name">Learn the house style from this deck</div>
     </div>
   </div>
 
   <div class="panel" data-tab="style">
     <div class="grp">
       <div class="row">
-        <button class="big" id="save"><span class="ico">&#10003;</span>Save changes</button>
-        <button class="big" id="revert"><span class="ico">&#8635;</span>Reload</button>
+        <button class="big" id="save" disabled><span class="ico">&#10003;</span>Save changes</button>
+        <button class="big" id="revert" disabled><span class="ico">&#8635;</span>Discard changes</button>
       </div>
-      <div class="name">Profile</div>
+      <div class="name" id="savestate">No unsaved changes</div>
     </div>
     <div class="grp">
       <div class="row"><span class="mono" id="stylestat" style="font-size:12px;color:var(--ink-2)"></span></div>
@@ -390,6 +424,7 @@
   </div>
   <aside class="pane">
     <header><h2 id="panetitle">Review note</h2><span class="sub" id="panesub"></span></header>
+    <div id="flash"></div>
     <div class="scroll" id="pane"></div>
   </aside>
 </div>
@@ -412,7 +447,20 @@
 if (location.search) history.replaceState(null, "", location.pathname);
 
 const TOKEN = "__TIEOUT_TOKEN__";
-const S = { deck: null, client: null, profile: null, audit: null, plan: null, approved: false, slide: 1 };
+const S = {
+  deck: null, client: null, profile: null, audit: null, plan: null,
+  approved: false, slide: 1,
+  // The house style derived from the open deck on upload, before anyone has
+  // named it. Shown on the House style tab so that tab is never empty and never
+  // makes someone wait for work the server has already done.
+  draft: null,
+  // Which onboarding choice is open on the Deck tab: null, "existing" or "new".
+  // The two panels used to sit side by side with no indication that they were
+  // alternatives, which is the question people actually arrived with.
+  mode: null,
+  dirty: false,
+  checking: false,
+};
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -438,7 +486,7 @@ function tab(name) {
   document.querySelectorAll('.ribbon > .panel').forEach((p) => {
     if (p.dataset.tab === name) p.setAttribute("data-active", ""); else p.removeAttribute("data-active");
   });
-  if (name === "style" && S.profile) renderStyle();
+  if (name === "style") renderStyle();
   if (name === "review") renderNote();
   if (name === "deck" && !S.audit) renderIntro();
 }
@@ -464,12 +512,42 @@ async function upload(file) {
   try { S.deck = await api("/api/decks", { method: "POST", form }); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
   busy("");
-  S.audit = null; S.slide = 1;
+  // A new deck invalidates everything measured about the last one. Leaving the
+  // tally up made the status bar read "16 blocker" under a deck that had not
+  // been checked.
+  S.audit = null; S.draft = null; S.slide = 1; S.mode = null;
+  $("tally").textContent = "";
+  $("openreport").disabled = true;
+  $("tab-style").disabled = !S.client;
+  $("tab-review").disabled = !S.client;
   $("doc").textContent = S.deck.filename;
   $("pos").textContent = `Slide 1 of ${S.deck.slide_count}`;
-  renderRail(); renderSlide(); renderIntro(); thumbState();
+  clearFlash();
+  renderRail(); renderSlide(); renderIntro(); thumbState(); deckPanel();
   loadClients();
   pollThumbs();
+  pollDraft();
+}
+
+// The house style is derived the moment the deck lands, not when someone asks
+// for it, so the House style tab has an answer in it by the time they open it.
+async function pollDraft() {
+  const id = S.deck?.deck_id;
+  for (let i = 0; i < 90 && S.deck?.deck_id === id; i++) {
+    let d;
+    try { d = await api(`/api/decks/${id}/draft`); }
+    catch (e) { S.draft = { error: e.message }; break; }
+    if (d.ready) { S.draft = d; break; }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  if (S.deck?.deck_id !== id) return;
+  if (S.draft && !S.draft.error) $("tab-style").disabled = false;
+  if (current() === "style") renderStyle();
+}
+
+function current() {
+  const on = document.querySelector('.tabs button[aria-selected="true"]');
+  return on ? on.dataset.tab : "deck";
 }
 
 function thumbState() {
@@ -492,11 +570,31 @@ async function pollThumbs() {
 async function loadClients() {
   let d;
   try { d = await api("/api/profiles"); } catch (e) { return; }
-  $("client").innerHTML = d.clients.length
-    ? d.clients.map((c) => `<option>${esc(c)}</option>`).join("")
-    : `<option value="">none onboarded yet</option>`;
+  $("client").innerHTML = d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
   $("useclient").disabled = !d.clients.length;
 }
+
+// The Deck tab shows one decision at a time: open a deck, then choose between
+// an existing house style and a new one, then fill in only that choice.
+function deckPanel() {
+  const open = !!S.deck;
+  $("grp-choose").hidden = !open || S.mode !== null;
+  $("grp-existing").hidden = S.mode !== "existing";
+  $("grp-new").hidden = S.mode !== "new";
+}
+
+function setMode(mode) { S.mode = mode; deckPanel(); }
+
+$("pick-existing").onclick = async () => {
+  await loadClients();
+  if (!$("client").options.length || !$("client").value)
+    return paneMessage("warn",
+      "No client has been onboarded yet. Use Create profile to learn one from an approved deck.");
+  clearFlash(); setMode("existing"); $("client").focus();
+};
+$("pick-new").onclick = () => { clearFlash(); setMode("new"); $("newclient").focus(); };
+$("back-existing").onclick = () => setMode(null);
+$("back-new").onclick = () => setMode(null);
 
 $("useclient").onclick = async () => {
   const c = $("client").value;
@@ -504,38 +602,61 @@ $("useclient").onclick = async () => {
   busy(`Loading ${c}`);
   try { S.profile = await api(`/api/profiles/${encodeURIComponent(c)}`); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
-  busy(""); S.client = c; onProfile();
+  busy(""); S.client = c; setMode(null); onProfile();
 };
 
 $("learn").onclick = async () => {
   const c = $("newclient").value.trim();
-  if (!c) return paneMessage("warn", "Name the client first.");
+  if (!c) { paneMessage("warn", "Name the client first."); return $("newclient").focus(); }
+  if (!S.deck) return paneMessage("warn", "Open a deck first.");
   busy(`Deriving the house style for ${c}`);
   try {
     S.profile = await api("/api/learn", { method: "POST", body: { deck_id: S.deck.deck_id, client: c } });
   } catch (e) { busy(""); return paneMessage("bad", e.message); }
-  busy(""); S.client = c;
+  busy(""); S.client = c; setMode(null);
   await loadClients();
   const where = String(S.profile.written_to || "").split("/").slice(-2).join("/");
-  onProfile(`Learned ${c} from ${S.deck.filename}, written to ${where}.`);
+  onProfile(`Created ${c} from ${S.deck.filename}, written to ${where}. You can edit any value below.`);
 };
 
 function onProfile(note) {
   $("tab-style").disabled = false;
   $("tab-review").disabled = false;
   $("guarantee").textContent = `Profile: ${S.client}`;
+  setDirty(false);
   tab("style");
-  if (note) paneMessage("good", note, true);
+  if (note) paneMessage("good", note); else clearFlash();
 }
 
 /* ---------- 2. house style ---------- */
 
+function styleSource() { return S.profile || (S.draft && !S.draft.error ? S.draft : null); }
+
+function setDirty(on) {
+  S.dirty = on && !!S.client;
+  $("save").disabled = !S.dirty;
+  $("revert").disabled = !S.dirty;
+  if (!S.client) $("savestate").textContent = S.draft ? "Draft — not saved anywhere" : "No profile";
+  else $("savestate").textContent = S.dirty ? "Unsaved changes" : "No unsaved changes";
+}
+
 function renderStyle() {
-  const p = S.profile;
+  const p = styleSource();
   $("panetitle").textContent = "House style";
-  $("panesub").textContent = `${p.client} · v${p.version}`;
+  if (!p) {
+    $("panesub").textContent = "";
+    $("stylestat").textContent = "";
+    $("pane").innerHTML = `<div class="block"><p>${S.deck
+      ? (S.draft?.error
+          ? "The house style could not be derived from this deck: " + esc(S.draft.error)
+          : "Deriving the house style from this deck\u2026")
+      : "Open a deck, or choose a saved profile on the Deck tab."}</p></div>`;
+    return;
+  }
+  const draft = !S.client;
+  $("panesub").textContent = draft ? "draft \u00b7 unsaved" : `${p.client} \u00b7 v${p.version}`;
   $("stylestat").textContent =
-    `${p.sources.join(", ")} · ${Object.keys(p.archetypes).length} slide types`;
+    `${p.sources.join(", ")} \u00b7 ${Object.keys(p.archetypes).length} slide types`;
 
   const outstanding = (p.questions || []).filter((q) => !q.answered);
   const questions = outstanding.length ? `
@@ -543,7 +664,7 @@ function renderStyle() {
       <h3>${outstanding.length} question${outstanding.length === 1 ? "" : "s"} the evidence did not settle</h3>
       ${outstanding.map((q) => `
         <label class="stack">${esc(q.question)}
-          <select data-question="${esc(q.id)}">
+          <select data-question="${esc(q.id)}"${draft ? " disabled" : ""}>
             ${(q.options.length ? q.options : [q.default]).map((o) =>
               `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
           </select>
@@ -554,71 +675,155 @@ function renderStyle() {
 
   const groups = (p.groups || []).map((g) => `
     <div class="slide-head">${esc(g.title)}</div>
-    ${g.facts.map(fact).join("")}`).join("");
+    ${g.facts.map((f) => fact(f, draft)).join("")}`).join("");
 
   const unlearned = (p.not_learned || []).length ? `
     <div class="slide-head">Deliberately not derived</div>
     <div class="block"><p>${p.not_learned.map((n) =>
-      `<span class="mono">${esc(n.key)}</span> — ${esc(n.reason)}`).join("<br>")}</p></div>` : "";
+      `<span class="mono">${esc(n.key)}</span> \u2014 ${esc(n.reason)}`).join("<br>")}</p></div>` : "";
 
-  $("pane").innerHTML = `
+  const preamble = draft ? `
+    <div class="block">
+      <div class="msg warn"><b>This is a draft, derived from the open deck.</b>
+        Nothing has been written. Name it with <b>Create profile</b> on the Deck tab to
+        keep it and to edit any of these values.</div>
+      <p class="hint">Derive the house style from a deck the client has <i>already approved</i>.
+         Learning it from the deck you are about to check tells you nothing.</p>
+    </div>` : `
     <div class="block">
       <p>Every line below was measured from the reference deck, with the evidence
-         for it. Clear anything that is not really a house rule: the rule that
-         reads it stops running, and the profile records that you decided so.</p>
-      <p>Values are not editable here on purpose — a number the client's own
-         approved deck does not support would report their material as wrong.
-         Edit the YAML for that.</p>
-    </div>
-    ${questions}${groups}${unlearned}`;
+         for it. Clear the checkbox on anything that is not really a house rule:
+         the rule that reads it stops running, and the profile records that you
+         decided so.</p>
+      <p>You can also retype a value. A value you set by hand is validated, marked
+         in the profile as yours rather than measured, and locked so a later
+         re-learn cannot overwrite it \u2014 but it is no longer evidence from the
+         deck, so a number the client's own approved material does not support
+         will report that material as wrong.</p>
+    </div>`;
+
+  $("pane").innerHTML = preamble + questions + groups + unlearned;
 
   $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
-    b.onchange = () => b.closest(".fact").classList.toggle("off", !b.checked);
+    b.onchange = () => { b.closest(".fact").classList.toggle("off", !b.checked); setDirty(true); };
   });
+  $("pane").querySelectorAll("[data-edit]").forEach((el) => {
+    const mark = () => {
+      el.classList.toggle("changed", el.value !== el.dataset.original);
+      setDirty(true);
+    };
+    el.oninput = mark; el.onchange = mark;
+  });
+  $("pane").querySelectorAll("select[data-question]").forEach((el) => {
+    el.onchange = () => setDirty(true);
+  });
+  setDirty(false);
 }
 
-function fact(f) {
+function fact(f, draft) {
   const value = f.kind === "swatches"
     ? `<div class="sw">${f.value.map((s) =>
         `<figure><i style="background:${esc(s.hex)}"></i>
          <figcaption>${esc(s.label)}</figcaption></figure>`).join("")}</div>`
-    : f.kind === "list" ? `<div class="v mono">${f.value.map(esc).join(", ") || "—"}</div>`
+    : f.kind === "list" ? `<div class="v mono">${f.value.map(esc).join(", ") || "\u2014"}</div>`
     : `<div class="v">${esc(f.value)}</div>`;
   const box = f.droppable
-    ? `<input type="checkbox" checked data-path="${esc(f.path)}">`
+    ? `<input type="checkbox" checked data-path="${esc(f.path)}"${draft ? " disabled" : ""}>`
     : `<span class="fixed" title="This field cannot be cleared: it has no meaningful empty value.">&middot;</span>`;
+  const edit = draft || !f.edit?.length ? ""
+    : `<div class="edit">${f.edit.map(control).join("")}</div>`;
   return `<div class="fact">${box}<div>
       <div class="k">${esc(f.label)}${f.confidence !== "high"
         ? ` <span class="fixed">(${esc(f.confidence)} confidence)</span>` : ""}</div>
       ${value}
+      ${edit}
       ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
     </div></div>`;
 }
 
+// One control per editable member, prefilled with what is there now. The
+// original is kept on the element so that only fields a person actually changed
+// are sent, and only those are recorded as hand-set.
+function control(c) {
+  const label = c.label ? `<span class="el">${esc(c.label)}</span>` : "";
+  const common = `data-edit="${esc(c.path)}" data-original="${esc(c.value)}"`;
+  if (c.type === "choice") {
+    const opts = (c.optional ? [""] : []).concat(c.options);
+    return `<label class="ctl">${label}<select ${common}>${opts.map((o) =>
+      `<option value="${esc(o)}"${o === c.value ? " selected" : ""}>${esc(o || "\u2014")}</option>`
+    ).join("")}</select></label>`;
+  }
+  const wide = c.type === "text" || c.type === "list" || c.type === "numbers";
+  const hint = c.type === "list" ? "comma separated"
+    : c.type === "numbers" ? "numbers, comma separated" : "";
+  return `<label class="ctl">${label}<input
+    type="${c.type === "number" ? "number" : "text"}"${c.type === "number" ? ' step="any"' : ""}
+    ${wide ? "data-wide" : ""} ${common}
+    value="${esc(c.value)}" placeholder="${esc(hint)}"></label>`;
+}
+
 $("save").onclick = async () => {
+  if (!S.client) return paneMessage("warn",
+    "This is an unsaved draft. Use Create profile on the Deck tab to name it first.");
+
   const answers = {};
-  $("pane").querySelectorAll("select[data-question]").forEach((s) => { answers[s.dataset.question] = s.value; });
+  $("pane").querySelectorAll("select[data-question]").forEach((el) => {
+    answers[el.dataset.question] = el.value;
+  });
+
   const dropped = [];
   $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
     if (!b.checked) dropped.push(b.dataset.path);
   });
+
+  // Only what actually changed, and nothing under a fact being dropped in the
+  // same save -- sending both would record a hand-set value on a field that is
+  // about to be cleared.
+  const edits = {};
+  $("pane").querySelectorAll("[data-edit]").forEach((el) => {
+    if (el.value === el.dataset.original) return;
+    if (el.closest(".fact")?.classList.contains("off")) return;
+    edits[el.dataset.edit] = el.value;
+  });
+
   busy("Saving the profile");
-  try { S.profile = await api("/api/confirm", { method: "POST", body: { client: S.client, answers, dropped } }); }
-  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  $("save").disabled = true;
+  try {
+    S.profile = await api("/api/confirm", { method: "POST", body: {
+      client: S.client, answers, dropped, edits,
+    }});
+  } catch (e) { busy(""); setDirty(true); return paneMessage("bad", e.message); }
   busy("");
+
   const bits = [];
+  if (S.profile.edited?.length) bits.push(`${S.profile.edited.length} value(s) set by hand`);
+  if (S.profile.dropped?.length) bits.push(`${S.profile.dropped.length} field(s) cleared`);
   if (S.profile.applied?.length) bits.push(`applied ${S.profile.applied.join(", ")}`);
-  if (S.profile.dropped?.length) bits.push(`cleared ${S.profile.dropped.length} field(s)`);
   if (S.profile.recorded_only?.length)
     bits.push(`recorded and locked, but needing a re-learn to take effect: ${S.profile.recorded_only.join(", ")}`);
+
   renderStyle();
-  paneMessage("good", `Saved. ${bits.join("; ") || "No changes."}`, true);
+  setDirty(false);
+  $("savestate").textContent = `Saved ${new Date().toLocaleTimeString()}`;
+
+  const where = String(S.profile.written_to || "").split("/").slice(-2).join("/");
+  const rejected = S.profile.rejected || [];
+  if (rejected.length) {
+    paneMessage("warn", `Saved to ${where}, but ${rejected.length} change(s) were refused: `
+      + rejected.map((r) => `${r.path} — ${r.reason}`).join("; "));
+  } else {
+    paneMessage("good", `Saved to ${where}. ${bits.join("; ") || "Nothing had changed."}`);
+  }
 };
 
 $("revert").onclick = async () => {
   if (!S.client) return;
-  S.profile = await api(`/api/profiles/${encodeURIComponent(S.client)}`);
+  busy("Reloading the saved profile");
+  try { S.profile = await api(`/api/profiles/${encodeURIComponent(S.client)}`); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy("");
   renderStyle();
+  paneMessage("good", "Reloaded from the saved profile. Unsaved changes were discarded.");
 };
 
 /* ---------- 3. review ---------- */
@@ -672,10 +877,20 @@ function renderPlan(plan) {
 }
 
 $("check").onclick = async () => {
-  if (!S.client) return paneMessage("warn", "Choose or learn a client profile first.");
+  // A second click while the first run is in flight used to start a second
+  // audit and render both. The button is disabled below, but a disabled button
+  // is a suggestion during the await before it; the flag is the actual guard.
+  if (S.checking) return;
+  if (!S.client) return paneMessage("warn",
+    "Choose an existing profile or create one on the Deck tab first.");
   const semantic = $("semantic").checked;
   if (semantic && !$("apikey").value.trim())
     return paneMessage("warn", "Content review needs an API key, or turn it off.");
+  S.checking = true;
+  clearFlash();
+  // Drop the previous run before starting this one, so nothing on screen is
+  // left describing a check that is no longer the current one.
+  S.audit = null; $("tally").textContent = ""; renderRail(); renderNote();
   busy(semantic ? "Auditing, then reviewing the content" : "Auditing");
   $("check").disabled = true;
   try {
@@ -684,8 +899,12 @@ $("check").onclick = async () => {
       forbidden: $("forbidden").value, include_notes: $("notes").checked,
       approved: S.approved, api_key: semantic ? $("apikey").value.trim() : null,
     }});
-  } catch (e) { $("check").disabled = false; busy(""); return paneMessage("bad", e.message); }
-  $("check").disabled = false; busy("");
+  } catch (e) {
+    S.checking = false; $("check").disabled = false; busy("");
+    renderNote();
+    return paneMessage("bad", e.message);
+  }
+  S.checking = false; $("check").disabled = false; busy("");
   $("openreport").disabled = false;
   tab("review"); renderRail(); renderNote();
 };
@@ -707,8 +926,11 @@ function renderNote() {
   if (!S.audit) {
     $("panesub").textContent = "";
     $("pane").innerHTML = `<div class="block">
-      <p>Run <b>Check deck</b> to produce the note. Every finding states what it
-         measured, what it expected, and the evidence behind the expectation.</p></div>`;
+      <p>${S.client
+        ? `Run <b>Check deck</b> to audit this deck against <b>${esc(S.client)}</b>.`
+        : "Choose an existing profile or create one on the Deck tab, then run <b>Check deck</b>."}
+         Every finding states what it measured, what it expected, and the evidence
+         behind the expectation.</p></div>`;
     return;
   }
   const a = S.audit, s = a.summary;
@@ -901,9 +1123,12 @@ function renderIntro() {
       <h3>1. Open the deck you want checked</h3>
       <p>Drop it on the slide area, or use <b>Open deck</b>.</p>
       <h3>2. Choose a house style</h3>
-      <p>Audit against a client already onboarded, or learn a new one. Learn from a
-         deck the client has <i>already approved</i> — learning from the deck you are
-         about to check tells you nothing.</p>
+      <p><b>Use existing profile</b> audits against a client already onboarded.
+         <b>Create profile</b> learns a new one from the open deck — do that only from a
+         deck the client has <i>already approved</i>, because learning from the deck you
+         are about to check tells you nothing.</p>
+      <p>Either way the derived style is waiting on the <b>House style</b> tab, where you
+         can clear anything that is not a house rule and correct anything that is.</p>
       <h3>3. Check</h3>
       <p>The findings arrive as a review note, slide by slide, each with the
          measurement and the evidence behind what was expected.</p>
@@ -916,13 +1141,19 @@ function renderIntro() {
     </div>`;
 }
 
-function paneMessage(kind, text, keep) {
-  const html = `<div class="block"><div class="msg ${kind}">${esc(text)}</div></div>`;
-  if (keep) $("pane").insertAdjacentHTML("afterbegin", html);
-  else $("pane").innerHTML = html + $("pane").innerHTML;
+// One message, in its own slot above the pane. The previous version prepended
+// into the pane itself and kept whatever was already there, so two failed runs
+// left two copies of the same error stacked above the content -- the "it
+// repeats itself if you press it twice" defect. Writing to a dedicated node
+// makes that impossible rather than merely unlikely.
+function paneMessage(kind, text) {
+  $("flash").innerHTML = `<div class="msg ${kind}">${esc(text)}</div>`;
 }
+function clearFlash() { $("flash").innerHTML = ""; }
 
 renderIntro();
+deckPanel();
+setDirty(false);
 // The client list does not depend on a deck being open, and someone arriving at
 // this page usually wants to know which clients are already onboarded.
 loadClients();

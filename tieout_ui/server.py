@@ -10,7 +10,8 @@ The route list is short on purpose:
 
 * ``POST /api/decks``            upload, load, start rendering
 * ``GET  /api/profiles``         the clients already onboarded
-* ``POST /api/learn``            derive a profile from an uploaded deck
+* ``POST /api/learn``            name and save the house style derived from a deck
+* ``GET  /api/decks/{id}/draft`` the house style derived on upload, unnamed
 * ``GET  /api/profiles/{name}``  what was derived, with provenance
 * ``POST /api/confirm``          answer the questions, drop facts, write the YAML
 * ``POST /api/redact``           what would be sent, offline and without a key
@@ -33,8 +34,9 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Resp
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from tieout.learn import apply_answers, learn_from_decks
+from tieout.learn import LearnResult, apply_answers, learn_from_decks
 from tieout.learn.emit import write as write_profile
+from tieout.model.deck import DeckModel
 from tieout.model.loader import DeckLoadError, load_deck
 from tieout.profile.loader import (
     ProfileError,
@@ -46,7 +48,7 @@ from tieout.profile.loader import (
 from tieout.profile.schema import Profile
 from tieout.report import html as html_report
 from tieout.rules.base import clear_caches, run_rules
-from tieout_ui.edit import drop
+from tieout_ui.edit import apply_edits, drop
 from tieout_ui.session import Deck, SessionStore
 from tieout_ui.view import audit_view, profile_view, rules_view
 
@@ -144,10 +146,18 @@ class ConfirmRequest(BaseModel):
     client: str = Field(min_length=1, max_length=120)
     #: Question id -> the chosen option.
     answers: dict[str, str] = Field(default_factory=dict)
-    #: Profile paths the person disagreed with. Dropping is the only edit the UI
-    #: offers, because it is the only one that cannot create a profile the
-    #: reference deck itself would fail.
+    #: Profile paths the person disagreed with. Dropping removes the fact and
+    #: stops the rule that read it.
     dropped: list[str] = Field(default_factory=list)
+    #: Profile paths the person retyped, as ``path -> value``. Validated against
+    #: the schema before anything lands, and recorded in the provenance as
+    #: hand-set rather than measured. Applied before ``dropped``, so clearing a
+    #: field and editing it in the same save resolves to cleared.
+    edits: dict[str, Any] = Field(default_factory=dict)
+    #: Naming an unsaved draft. The House style tab derives a candidate from the
+    #: uploaded deck before anyone presses anything; this is what turns it into
+    #: ``profiles/NAME.yaml``.
+    deck_id: str = ""
 
 
 class RedactRequest(BaseModel):
@@ -216,11 +226,34 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         except DeckLoadError as exc:
             raise HTTPException(status_code=400, detail=f"unreadable deck: {exc}") from exc
         store.render_in_background(deck)
+        # Derivation starts here rather than when the House style tab is opened,
+        # so that by the time anyone gets there the answer is already waiting.
+        store.derive_in_background(deck, _derive)
         return JSONResponse(_deck_payload(deck))
 
     @app.get("/api/decks/{deck_id}")
     def deck_status(store: Guard, deck_id: str) -> JSONResponse:
         return JSONResponse(_deck_payload(_require(store, deck_id)))
+
+    @app.get("/api/decks/{deck_id}/draft")
+    def draft(store: Guard, deck_id: str) -> JSONResponse:
+        """The house style derived from this deck, named by nobody yet.
+
+        Polled by the page while derivation runs. Returning ``ready: false``
+        rather than blocking keeps the upload response immediate and lets the
+        tab say what it is waiting for.
+        """
+        deck = _require(store, deck_id)
+        if deck.draft_error:
+            raise HTTPException(status_code=422, detail=deck.draft_error)
+        if deck.draft is None:
+            return JSONResponse({"ready": False, "deriving": deck.deriving})
+        view = profile_view(deck.draft.profile)
+        view["ready"] = True
+        view["deriving"] = False
+        view["draft"] = True
+        view["question_summary"] = deck.draft.summary
+        return JSONResponse(view)
 
     @app.get("/api/thumbnails/{deck_id}/{index}")
     def thumbnail(store: Guard, deck_id: str, index: int) -> Response:
@@ -252,8 +285,16 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
     @app.post("/api/learn")
     def learn(store: Guard, request: LearnRequest) -> JSONResponse:
+        """Name the derived house style and write it.
+
+        The derivation itself has usually already happened -- it starts on
+        upload -- so this is normally just a rename and a write. Falling back to
+        deriving here keeps the route correct on its own, for a draft that
+        failed or has not finished.
+        """
         deck = _require(store, request.deck_id)
-        result = learn_from_decks([deck.model], request.client)
+        result = deck.draft if deck.draft is not None else _derive(deck.model)
+        result.profile.client = request.client
         write_profile(
             result.profile,
             profile_path(request.client),
@@ -281,6 +322,10 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             )
 
         applied, recorded_only = apply_answers(profile)
+        # Edits first: a field that is both retyped and cleared in one save
+        # should end up cleared, which is the reading that loses no information
+        # the person did not deliberately discard.
+        edited, rejected = apply_edits(profile, request.edits)
         dropped = drop(profile, request.dropped)
 
         write_profile(profile, profile_path(request.client))
@@ -288,6 +333,9 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         view["applied"] = applied
         view["recorded_only"] = recorded_only
         view["dropped"] = dropped
+        view["edited"] = edited
+        view["rejected"] = rejected
+        view["written_to"] = str(profile_path(request.client))
         return JSONResponse(view)
 
     @app.get("/api/rules")
@@ -340,6 +388,16 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 # --------------------------------------------------------------------------- #
 
 
+def _derive(model: DeckModel) -> LearnResult:
+    """Derive a house style from one deck, without naming or writing it.
+
+    The client name is a label the person supplies at save time, so the draft
+    carries a placeholder. Named here rather than inlined because the session
+    store is handed this as a callable and must not import the learner itself.
+    """
+    return learn_from_decks([model], "draft")
+
+
 def _deck_payload(deck: Deck) -> dict[str, Any]:
     return {
         "deck_id": deck.deck_id,
@@ -347,6 +405,11 @@ def _deck_payload(deck: Deck) -> dict[str, Any]:
         "slide_count": deck.slide_count,
         "width_pt": deck.model.width_pt,
         "height_pt": deck.model.height_pt,
+        "draft": {
+            "ready": deck.draft is not None,
+            "deriving": deck.deriving,
+            "reason": deck.draft_error,
+        },
         "thumbnails": {
             "rendering": deck.rendering,
             "available": deck.thumbnails.available,

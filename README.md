@@ -825,13 +825,18 @@ when the server stops.
 ### The six steps
 
 1. **Deck.** Drag a `.pptx` in. Nothing is uploaded anywhere; the file is copied
-   into a temporary directory on your machine.
-2. **House style.** Audit against a client already onboarded, or learn a new one
-   from this deck.
+   into a temporary directory on your machine. Deriving a house style from it
+   starts immediately, in the background, so step 3 has an answer in it by the
+   time you get there.
+2. **House style.** One choice, not two panels: **Use existing profile** audits
+   against a client already onboarded, **Create profile** names and keeps the
+   style derived from this deck. Only the one you pick opens.
 3. **Confirm.** Every derived fact, with the evidence for it — the palette as
    swatches, the size band per text role, the logo box per slide type, the safe
    margins, the grid, the typographic conventions — plus any questions the
-   evidence did not settle. Untick anything that is not really a house rule.
+   evidence did not settle. Untick anything that is not really a house rule, and
+   correct anything that is. **Save changes** is lit only when something has
+   changed, and tells you what it wrote and where.
 4. **Content review** (optional, off by default). A key field and a forbidden
    words box, then **Show me what would be sent**: the redaction table, the
    residual list, and the payload verbatim. Nothing is sent until you have read
@@ -841,22 +846,34 @@ when the server stops.
    slide in the rail. Plus **Copy note** for the plain-text version and the same
    self-contained HTML report `tieout check --format html` produces.
 
-### Editing is deliberately only dropping
+### Editing: dropping, and correcting
 
-Step 3 lets you remove a derived fact. It does not let you retype one, and it
-only offers the control where removing means something: a list empties, an
-optional setting clears, a tolerance returns to its default — it is a parameter,
-not a claim about the client — and a required field with no default shows a dot
-instead of a checkbox.
+Step 3 lets you remove a derived fact, and lets you correct one.
 
-Typing a value into a form is how you get a profile the client's own approved
-deck would fail, and then a tool that reports their reference material as
-wrong — which is the one failure this design cannot recover from, because
-everything downstream treats the profile as ground truth. Dropping is always
-safe: the rule that read the field stops running, and `not_learned` records
-that a person decided so, with the field locked so a later `learn --add` cannot
-quietly put it back. For anything else, edit the YAML; it is a document meant
-to be read and edited, and that is the supported path.
+**Dropping** is the safe edit. The rule that read the field stops running, and
+`not_learned` records that a person decided so, with the field locked so a later
+`learn --add` cannot quietly put it back. It is offered only where removing means
+something — a list empties, an optional setting clears, a tolerance returns to its
+default — and a required field with no default shows a dot instead of a checkbox.
+
+**Correcting** is the other one, and it carries a risk the first does not. A
+margin measured at 28.4pt is 30pt because someone decided it should be, and an
+analyst who can see the measurement wants to round it. So each fact that a form
+can carry gets one control per member — a margin set is four numbers, not one
+string — prefilled with what is there now, validated against the schema before
+anything lands, recorded in the provenance as *set by hand* rather than measured,
+and locked. What cannot be typed into gets no control at all rather than a dead
+one.
+
+The risk is stated next to the controls rather than designed away: **a value the
+client's own approved deck does not support will report their material as wrong**,
+and everything downstream treats the profile as ground truth. That is a judgement
+to put in front of the person making it. Refusing the edit does not remove the
+judgement — it moves it into a text editor, where nothing validates the value and
+nothing records that a person chose it.
+
+A bad value is refused on its own. One mistyped number out of twelve does not
+throw away the other eleven; the save reports exactly which one it was and why.
 
 ### Slide images
 
@@ -1222,11 +1239,19 @@ palette: TieOut does not model chart geometry, so there is no area to weight the
 by, and they are set by the theme rather than typed by the author. A chart in
 off-brand colours will not be reported by BR-004.
 
-**No slide rendering.** There are no thumbnails, so nothing is verified visually
-and no finding can be confirmed by eye inside the report. The HTML report
+**No slide rendering in the HTML report.** The UI renders thumbnails where
+LibreOffice is installed, but the standalone report does not: nothing in it is
+verified visually and no finding can be confirmed by eye inside it. The report
 reserves a fixed-aspect slot per slide and carries a `data-bbox` attribute on
 each finding, so images and overlays can be added later without template
 changes.
+
+**A hand-set value is no longer evidence.** Correcting a derived fact in the UI
+replaces a measurement with a decision. TieOut records which is which — the
+provenance says *set by hand*, and the field is locked against re-learning — but
+it cannot tell you that the number you typed is wrong, and a rule reading it
+reports the client's own approved deck as wrong if it does not support it. The
+audit is only ever as good as the profile behind it.
 
 **No auto-fix.** TieOut reports; it does not edit your deck.
 
@@ -1245,7 +1270,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,101 tests
+.venv/bin/python -m pytest              # 1,115 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

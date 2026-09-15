@@ -15,6 +15,8 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tieout.model.color import ColorParseError, parse_hex
+
 SEVERITIES: Final[tuple[str, ...]] = ("blocker", "major", "minor", "info")
 CONFIDENCES: Final[tuple[str, ...]] = ("high", "medium", "low")
 
@@ -183,6 +185,26 @@ class BrandProfile(_Model):
     #: Colours seen once or twice and judged likely errors in the reference deck.
     #: Recorded so the user can see what was discarded, never enforced.
     palette_discarded: list[str] = Field(default_factory=list)
+
+    @field_validator("palette_hex", "palette_discarded")
+    @classmethod
+    def _normalised_hex(cls, value: list[str]) -> list[str]:
+        """Reject a colour that is not a colour, and settle on one spelling.
+
+        The deriver only ever puts ``#RRGGBB`` here, so this guards the two
+        inputs a person controls: the YAML, which is meant to be hand-edited,
+        and the UI's palette field. Without it a typo reaches the rule as a
+        ``ColorParseError`` mid-audit -- a traceback in place of a report, and
+        nothing to say which of the six swatches was wrong.
+        """
+        out: list[str] = []
+        for entry in value:
+            try:
+                rgb = parse_hex(entry)
+            except ColorParseError as exc:
+                raise ValueError(str(exc)) from exc
+            out.append(rgb.hex)
+        return out
     logo: LogoProfile | None = None
     footer: FooterProfile = Field(default_factory=FooterProfile)
     title_geometry_tolerance_pt: float = 2.0

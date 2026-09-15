@@ -21,13 +21,16 @@ import secrets
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from tieout.model.deck import DeckModel
 from tieout_ui.render import Renderer, RenderResult
+
+if TYPE_CHECKING:  # the learner is imported for its type only, never at runtime
+    from tieout.learn import LearnResult
 
 __all__ = ["Deck", "SessionStore"]
 
@@ -53,6 +56,15 @@ class Deck:
     #: one slot on the app: with two decks open, checking the second used to
     #: make the first one's report link answer 404.
     report: str = ""
+
+    #: What deriving a house style from this deck produces, computed on upload
+    #: so the House style tab is populated by the time anyone opens it. Held
+    #: unnamed and unwritten: it becomes a profile only when a person names it
+    #: and saves. ``draft_error`` carries the reason when derivation failed, so
+    #: the page can say so instead of spinning.
+    draft: LearnResult | None = None
+    draft_error: str = ""
+    deriving: bool = False
 
     @property
     def slide_count(self) -> int:
@@ -160,6 +172,39 @@ class SessionStore:
                 deck.rendering = False
 
         threading.Thread(target=work, daemon=True, name=f"render-{deck.deck_id}").start()
+
+    # -- the draft house style ------------------------------------------- #
+
+    def derive_in_background(
+        self, deck: Deck, derive: Callable[[DeckModel], LearnResult]
+    ) -> None:
+        """Derive a house style from this deck, and return immediately.
+
+        Started on upload rather than on demand. Deriving takes a few seconds on
+        a real deck, and making someone press a button and then watch a spinner
+        for the answer the tool could already have had is the difference between
+        a tool that feels finished and one that does not.
+
+        Nothing is written. The draft is a candidate the person can look at,
+        edit and discard; it becomes ``profiles/NAME.yaml`` only when they name
+        it and save.
+        """
+        if deck.deriving or deck.draft is not None or deck.draft_error:
+            return
+        deck.deriving = True
+
+        def work() -> None:
+            try:
+                deck.draft = derive(deck.model)
+            except Exception as exc:
+                # A deck the deriver cannot read is not a reason to lose the
+                # upload: the rest of the UI still works against a saved
+                # profile, so the failure belongs on the House style tab.
+                deck.draft_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                deck.deriving = False
+
+        threading.Thread(target=work, daemon=True, name=f"derive-{deck.deck_id}").start()
 
 
 def _safe_name(filename: str) -> str:

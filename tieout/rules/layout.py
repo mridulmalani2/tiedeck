@@ -1158,6 +1158,17 @@ class InconsistentGutters(Rule):
                         axis.lead(later) - axis.trail(earlier)
                         for earlier, later in itertools.pairwise(group)
                     ]
+                    # A negative gutter means consecutive members overlap, so
+                    # they are stacked rather than set out in a row: a KPI card
+                    # and the text box drawn over it agree in position and size
+                    # and so pass the sibling test, then produce gutters like
+                    # (-20.2pt, 427.2pt, -20.2pt). Reporting that as uneven
+                    # spacing is nonsense on its face, and the overlap itself is
+                    # LO-004's to report. Measured against the same tolerance
+                    # that decided they were siblings, so shapes merely touching
+                    # still count as a row.
+                    if min(gutters) < -tolerance:
+                        continue
                     spread = statistics.stdev(gutters)
                     if spread <= limit:
                         continue

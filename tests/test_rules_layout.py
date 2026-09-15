@@ -392,3 +392,67 @@ def test_every_layout_rule_reaches_a_verdict_on_the_dirty_deck(
         s.rule_id == rule_id for s in result.rules_skipped
     )
     assert accounted, f"{rule_id} neither ran nor reported why not"
+
+
+# --------------------------------------------------------------------------------------
+# LO-008's overlap false positive
+# --------------------------------------------------------------------------------------
+
+
+def _deck_of_boxes(path, boxes):
+    """A one-slide deck of text boxes at the given ``(left, top, w, h)`` points."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, (left, top, width, height) in enumerate(boxes):
+        shape = slide.shapes.add_textbox(Pt(left), Pt(top), Pt(width), Pt(height))
+        shape.name = f"Box {index + 1}"
+        shape.text_frame.text = f"Box {index + 1}"
+    presentation.save(str(path))
+
+    from tieout.model.loader import load_deck
+
+    return load_deck(path)
+
+
+def test_lo008_does_not_read_a_label_over_a_card_as_its_neighbour(tmp_path, reference_profile):
+    """A KPI card and the text box drawn on top of it share a top edge and a
+    size, so they pass the sibling test and are read as consecutive members of a
+    row. Their "gutter" is then negative, and a real deck produced
+    "gutters across a 4-shape row vary by 258.3pt (-20.2pt, 427.2pt, -20.2pt)"
+    — a sentence with no meaning for the reader to act on.
+
+    Shapes that overlap are stacked, not set out in a row, and the overlap
+    itself is LO-004's to report.
+    """
+    deck = _deck_of_boxes(
+        tmp_path / "stacked.pptx",
+        [
+            (36.0, 100.0, 400.0, 80.0),   # card
+            (56.0, 100.0, 400.0, 80.0),   # its label, drawn over it
+            (520.0, 100.0, 400.0, 80.0),  # second card
+            (540.0, 100.0, 400.0, 80.0),  # its label
+        ],
+    )
+    assert findings_for(_run(deck, reference_profile, "LO-008"), "LO-008") == []
+
+
+def test_lo008_still_reports_a_genuinely_uneven_row(tmp_path, reference_profile):
+    """The guard above must not have turned the rule off: four same-sized cards
+    laid out in a row with one gap wrong is exactly what LO-008 is for."""
+    deck = _deck_of_boxes(
+        tmp_path / "uneven.pptx",
+        [
+            (36.0, 100.0, 180.0, 80.0),
+            (236.0, 100.0, 180.0, 80.0),   # gutter 20pt
+            (436.0, 100.0, 180.0, 80.0),   # gutter 20pt
+            (736.0, 100.0, 180.0, 80.0),   # gutter 120pt
+        ],
+    )
+    findings = findings_for(_run(deck, reference_profile, "LO-008"), "LO-008")
+    assert findings, "an unevenly guttered row of siblings must still be reported"
+    assert "vary by" in findings[0].message
