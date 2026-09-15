@@ -27,12 +27,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from tieout.model.deck import DeckModel
+from tieout.rules.base import Finding
+from tieout_fix import Delta
 from tieout_ui.render import Renderer, RenderResult
 
 if TYPE_CHECKING:  # the learner is imported for its type only, never at runtime
     from tieout.learn import LearnResult
 
-__all__ = ["Deck", "SessionStore"]
+__all__ = ["Correction", "Deck", "SessionStore"]
 
 #: Decks are a few megabytes; a cap keeps a mistyped upload from filling a disk.
 MAX_UPLOAD_BYTES: Final[int] = 64 * 1024 * 1024
@@ -40,6 +42,19 @@ MAX_UPLOAD_BYTES: Final[int] = 64 * 1024 * 1024
 #: Enough for a desk session, small enough to bound memory when thumbnails are
 #: being held for each one.
 MAX_DECKS: Final[int] = 8
+
+
+@dataclass
+class Correction:
+    """One correction applied to a deck, and what it changed.
+
+    ``delta`` is attached after the re-audit rather than passed in, because what
+    a correction changed is only knowable once the deck has been read again. It
+    is None only for the moment between the two.
+    """
+
+    summary: str
+    delta: Delta | None = None
 
 
 @dataclass
@@ -78,8 +93,18 @@ class Deck:
     working: Path | None = None
     #: Earlier versions, newest last. Popping one is the undo.
     history: list[Path] = field(default_factory=list)
-    #: What was applied, so the page can list it and the export can be described.
-    applied: list[str] = field(default_factory=list)
+    #: What was applied and what each one changed, so the page can list it and
+    #: the export can be described.
+    log: list[Correction] = field(default_factory=list)
+
+    #: The deterministic findings the page is currently showing. Held so the
+    #: next audit can be diffed against it and the person told what changed
+    #: rather than handed a new total to compare from memory.
+    #:
+    #: Deterministic only, deliberately. A semantic pass runs on an explicit
+    #: check and not on the re-audit after a correction, so keeping its findings
+    #: here would make a recolour appear to have fixed every one of them.
+    last_findings: tuple[Finding, ...] | None = None
     #: Whether any correction on this deck has moved a shape. Only geometry
     #: changes what a rendered slide looks like enough to be worth a second
     #: LibreOffice conversion, and undo has to re-render for the same reason the
@@ -91,6 +116,11 @@ class Deck:
     #: to leave one deck's colour alone is not a decision about the client's
     #: house style, and writing it to the profile would make it one.
     rejected: set[str] = field(default_factory=set)
+
+    @property
+    def applied(self) -> list[str]:
+        """The corrections made, as sentences."""
+        return [entry.summary for entry in self.log]
 
     @property
     def slide_count(self) -> int:
@@ -187,8 +217,13 @@ class SessionStore:
 
     def record(self, deck: Deck, version: Path, summary: str) -> None:
         deck.history.append(deck.current)
-        deck.applied.append(summary)
+        deck.log.append(Correction(summary=summary))
         deck.working = version
+
+    def note_delta(self, deck: Deck, delta: Delta) -> None:
+        """Attach what the last correction changed, once the re-audit knows."""
+        if deck.log:
+            deck.log[-1].delta = delta
 
     def undo(self, deck: Deck) -> str | None:
         """Step back one correction. Returns what was undone, or None."""
@@ -196,7 +231,7 @@ class SessionStore:
             return None
         previous = deck.history.pop()
         deck.working = previous
-        return deck.applied.pop() if deck.applied else None
+        return deck.log.pop().summary if deck.log else None
 
     def _forget(self, deck_id: str) -> None:
         deck = self._decks.pop(deck_id, None)

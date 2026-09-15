@@ -54,7 +54,7 @@ from tieout.profile.loader import (
 from tieout.profile.schema import Profile
 from tieout.report import html as html_report
 from tieout.rules.base import AuditResult, clear_caches, run_rules
-from tieout_fix import Fix, apply_fix, move_fix, plan_fixes
+from tieout_fix import Delta, Fix, apply_fix, delta, move_fix, plan_fixes
 from tieout_ui.edit import apply_edits, drop
 from tieout_ui.session import Deck, SessionStore
 from tieout_ui.view import audit_view, find_shape, movable, profile_view, rules_view
@@ -410,10 +410,13 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         )
 
         review: dict[str, Any] | None = None
+        before_semantic = len(result.findings)
         if request.semantic:
             review = _semantic(store, request, deck, profile, result)
 
-        view = _audit_payload(deck, profile, result)
+        view, _ = _audit_payload(
+            deck, profile, result, semantic=len(result.findings) - before_semantic
+        )
         view["review"] = review
         deck.report = html_report.render(result, deck.model)
         return JSONResponse(view)
@@ -438,7 +441,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
         store.record(deck, version, chosen.summary)
         _reload(deck)
-        payload = _recheck(deck, profile)
+        payload = _recheck(store, deck, profile, correction=True)
         payload["fixed"] = chosen.summary
         payload["changes"] = report.changes
         return JSONResponse(payload)
@@ -502,7 +505,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         # whose result is a position, and a canvas still showing the old one
         # would read as the move having failed.
         store.render_in_background(deck, force=True)
-        payload = _recheck(deck, profile)
+        payload = _recheck(store, deck, profile, correction=True)
         payload["moved"] = chosen.summary
         return JSONResponse(payload)
 
@@ -519,7 +522,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             # tool applies is a recolour or a text substitution, which is not
             # worth a LibreOffice conversion between a click and its result.
             store.render_in_background(deck, force=True)
-        payload = _recheck(deck, profile)
+        payload = _recheck(store, deck, profile)
         payload["undone"] = undone
         return JSONResponse(payload)
 
@@ -531,7 +534,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             deck.rejected.add(request.key)
         else:
             deck.rejected.discard(request.key)
-        return JSONResponse(_recheck(deck, profile))
+        return JSONResponse(_recheck(store, deck, profile))
 
     @app.get("/api/export/{deck_id}")
     def export(store: Guard, deck_id: str) -> Response:
@@ -624,25 +627,62 @@ def _reload(deck: Deck) -> None:
     deck.model = load_deck(deck.current)
 
 
-def _recheck(deck: Deck, profile: Profile) -> dict[str, Any]:
+def _recheck(
+    store: SessionStore, deck: Deck, profile: Profile, *, correction: bool = False
+) -> dict[str, Any]:
+    """Re-audit, and say what changed since the audit the page is showing.
+
+    ``correction`` attributes the change to the entry just added to the deck's
+    log, which is what lets the export summary say what each correction cost as
+    well as what it achieved. An undo passes False: it removes a log entry
+    rather than adding one, and its own delta belongs only in the reply.
+    """
     clear_caches()
     result = run_rules(
         deck.model, profile, suppressions=load_suppressions(profile.client)
     )
     deck.report = html_report.render(result, deck.model)
-    return _audit_payload(deck, profile, result)
+    payload, change = _audit_payload(deck, profile, result)
+    if correction and deck.log:
+        store.note_delta(deck, change)
+        payload["corrections"][-1]["delta"] = _delta_payload(change)
+    return payload
 
 
 def _audit_payload(
-    deck: Deck, profile: Profile, result: AuditResult
-) -> dict[str, Any]:
+    deck: Deck, profile: Profile, result: AuditResult, *, semantic: int = 0
+) -> tuple[dict[str, Any], Delta]:
     """The audit, with each action told whether it can be corrected.
 
     Assembled here rather than in the view, which stays a pure function of the
     model: whether a correction can be applied is a fact about this session's
     deck, not about the audit.
+
+    ``semantic`` is how many of ``result``'s findings came from the content
+    review rather than from the rules. They are excluded from the comparison
+    with the previous audit and sit at the end of ``result.findings``: a
+    semantic pass runs on an explicit check and not on the re-audit after a
+    correction, so counting them would make a recolour appear to have fixed
+    every one of them.
     """
+    deterministic = (
+        result.findings[: len(result.findings) - semantic]
+        if semantic
+        else result.findings
+    )
+    change = delta(deck.last_findings, deterministic)
+    deck.last_findings = tuple(deterministic)
+
     view = audit_view(result, deck.model)
+    _mark_change(view, change)
+    view["delta"] = _delta_payload(change)
+    view["corrections"] = [
+        {
+            "summary": entry.summary,
+            "delta": _delta_payload(entry.delta) if entry.delta else None,
+        }
+        for entry in deck.log
+    ]
     planned = plan_fixes(result, profile)
     for action in view["actions"]:
         fix = planned.get(action["key"])
@@ -669,7 +709,52 @@ def _audit_payload(
         for action in view["actions"]
         if action["fixable"] and not action["rejected"]
     )
-    return view
+    return view, change
+
+
+def _delta_payload(change: Delta) -> dict[str, Any]:
+    return {
+        "fixed": change.fixed,
+        "remaining": change.remaining,
+        "new": change.new,
+        "before": change.before,
+        "after": change.after,
+        "sentence": change.sentence,
+        "worst_new": change.worst_new,
+        "arrived": [
+            {
+                "id": entry.key,
+                "rule_id": entry.rule_id,
+                "severity": entry.severity,
+                "slide": entry.slide,
+                "shape": entry.shape,
+                "message": entry.message,
+            }
+            for entry in change.arrived
+        ],
+    }
+
+
+def _mark_change(view: dict[str, Any], change: Delta) -> None:
+    """Flag the findings this correction exposed, wherever they appear.
+
+    Counting them is not enough. A correction that trades one finding for
+    another has to be visible as *which* finding arrived, on the slide it
+    arrived on, or the person cannot judge whether to keep the correction or
+    undo it -- which is the whole reason the count is broken out.
+    """
+    arrived = {entry.key for entry in change.arrived}
+    if not arrived:
+        return
+    for slide in view["slides"]:
+        for finding in slide["findings"]:
+            if finding["id"] in arrived:
+                finding["arrived"] = True
+    for action in view["actions"]:
+        hits = [i for i in action["instances"] if i["id"] in arrived]
+        for instance in hits:
+            instance["arrived"] = True
+        action["arrived"] = len(hits)
 
 
 def _derive(model: DeckModel) -> LearnResult:

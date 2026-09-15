@@ -552,3 +552,145 @@ def test_the_core_never_imports_the_fixer():
             if any(name.startswith("tieout_fix") for name in names):
                 offenders.append(str(source.relative_to(root)))
     assert not offenders, f"tieout must not import the fixer: {offenders}"
+
+
+# --------------------------------------------------------------------------- #
+# What a correction changed
+#
+# The three counts are the point, and "new" is the one worth testing hardest: a
+# correction can legitimately expose a finding that was masked before, and a
+# total that merely went down hides it.
+# --------------------------------------------------------------------------- #
+
+
+def _findings(deck, profile):
+    return _audit(deck, profile).findings
+
+
+def test_a_delta_against_nothing_is_everything_merely_present(dirty_deck, reference_profile):
+    """The first check of a deck has changed nothing, so nothing is fixed and
+    nothing is new."""
+    from tieout_fix import delta
+
+    found = _findings(dirty_deck, reference_profile)
+    first = delta(None, found)
+    assert (first.fixed, first.new) == (0, 0)
+    assert first.remaining == len(found) == first.before == first.after
+
+
+def test_an_unchanged_deck_reports_no_change(dirty_deck, reference_profile):
+    """Identity has to survive a re-audit of the same file, or every correction
+    would report the whole deck as fixed and re-arrived."""
+    from tieout_fix import delta
+
+    before = _findings(dirty_deck, reference_profile)
+    after = _findings(dirty_deck, reference_profile)
+    change = delta(before, after)
+    assert (change.fixed, change.new) == (0, 0)
+    assert change.remaining == len(before)
+
+
+def test_the_three_counts_always_reconcile(tmp_path, dirty_path, dirty_deck, reference_profile):
+    """``fixed + remaining`` is the total before and ``remaining + new`` the
+    total after, at every step. A delta whose numbers do not add up is worse
+    than no delta, because it is read as arithmetic."""
+    from tieout_fix import delta
+
+    current = tmp_path / "step0.pptx"
+    shutil.copyfile(dirty_path, current)
+    before = _findings(load_deck(current), reference_profile)
+
+    for step in range(1, 8):
+        deck = load_deck(current)
+        fixes = plan_fixes(_audit(deck, reference_profile), reference_profile)
+        if not fixes:
+            break
+        nxt = tmp_path / f"step{step}.pptx"
+        assert apply_fix(current, nxt, next(iter(fixes.values()))).applied
+        current = nxt
+        after = _findings(load_deck(current), reference_profile)
+
+        change = delta(before, after)
+        assert change.fixed + change.remaining == len(before) == change.before
+        assert change.remaining + change.new == len(after) == change.after
+        before = after
+
+
+def test_a_correction_that_exposes_a_finding_reports_it_as_new(tmp_path, house):
+    """The case the whole feature exists for.
+
+    Moving a shape onto a grid line can put it over its neighbour — which is
+    exactly how automatic snapping damaged a real deck. The overlap was not
+    reported before the move and is reported after it, and a delta that only
+    said the total had changed would hide that from the person who would
+    otherwise undo it.
+    """
+    from tieout_fix import delta
+
+    source = tmp_path / "before.pptx"
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, left in enumerate((60, 500)):
+        box = slide.shapes.add_textbox(Pt(left), Pt(200), Pt(300), Pt(80))
+        box.name = f"Column {index}"
+        box.text_frame.text = f"Column {index} carries a sentence of body copy."
+    presentation.save(str(source))
+
+    deck = load_deck(source)
+    before = _findings(deck, house)
+    assert not [f for f in before if f.rule_id == "LO-004"], "they do not overlap yet"
+
+    # Put the second box on top of the first, the way a person could.
+    mover = _shape(deck, 1, "Column 1")
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _move(mover, 1, 70 * 12700, 200 * 12700)).applied
+
+    after = _findings(load_deck(target), house)
+    change = delta(before, after)
+
+    assert change.new >= 1, "the overlap is new"
+    assert "LO-004" in {entry.rule_id for entry in change.arrived}
+    assert change.worst_new is not None
+    # And it reconciles, so the counts can be printed beside each other.
+    assert change.remaining + change.new == len(after)
+
+
+def test_the_sentence_names_new_findings_only_when_there_are_some():
+    from tieout.model.deck import ShapeRef
+    from tieout.rules.base import Finding
+    from tieout_fix import delta
+
+    def finding(rule_id, message):
+        return Finding(
+            rule_id=rule_id, category="layout", severity="major", confidence="high",
+            where=ShapeRef(slide_index=1, shape_id=3, name="Box"),
+            message=message, remedy=f"do something about {rule_id}",
+        )
+
+    a, b = finding("LO-002", "one"), finding("LO-004", "two")
+    assert delta([a, b], [a]).sentence == "1 fixed, 1 remain"
+    assert delta([a], [a, b]).sentence == "0 fixed, 1 remain, 1 new"
+
+
+def test_two_findings_sharing_an_identity_are_counted_twice():
+    """Counted rather than set-differenced, so the arithmetic holds even where a
+    rule reports the same remedy twice about one shape."""
+    from tieout.model.deck import ShapeRef
+    from tieout.rules.base import Finding
+    from tieout_fix import delta, finding_key
+
+    def finding(message):
+        return Finding(
+            rule_id="LO-003", category="layout", severity="minor", confidence="high",
+            where=ShapeRef(slide_index=4, shape_id=9, name="Panel"),
+            message=message, remedy="Snap the edge to the grid line it is nearly on",
+        )
+
+    twice = [finding("left edge"), finding("right edge")]
+    assert finding_key(twice[0]) == finding_key(twice[1]), "the fixture shares an identity"
+
+    change = delta(twice, [twice[0]])
+    assert (change.fixed, change.remaining, change.new) == (1, 1, 0)
+    assert change.fixed + change.remaining == 2

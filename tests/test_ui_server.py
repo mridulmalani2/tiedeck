@@ -771,7 +771,9 @@ def test_the_page_presents_findings_as_a_note_not_as_cards(client):
     """The layout is the feature: bankers read decks in PowerPoint, and a review
     note in a task pane is the idiom they already use for marked-up slides."""
     page = client.get("/").text
-    for expected in ("Review note", "plainNote", "slide-head", "class=\"item\""):
+    # ``class="item`` rather than the closed attribute: a finding the last
+    # correction exposed carries a second class beside it.
+    for expected in ("Review note", "plainNote", "slide-head", "class=\"item"):
         assert expected in page, expected
 
 
@@ -1511,3 +1513,169 @@ def test_moving_needs_the_token_like_everything_else(store, tmp_path, monkeypatc
                   "x_emu": 0, "y_emu": 0},
         )
     assert response.status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# What a correction changed
+#
+# A new total is a number to compare from memory. These tests are about the
+# three counts being distinct, reconciling, and — the part that matters — a
+# correction that exposed a finding saying so loudly enough to act on.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_first_check_reports_no_change(client, dirty_uploaded, onboarded):
+    """Nothing has been done to the deck yet, so nothing is fixed and nothing is
+    new: every finding is merely present."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    change = view["delta"]
+    assert (change["fixed"], change["new"]) == (0, 0)
+    assert change["remaining"] == view["summary"]["total"]
+    assert view["corrections"] == []
+
+
+def test_every_finding_carries_an_identity_that_survives_a_re_audit(
+    client, dirty_uploaded, onboarded
+):
+    first = _check(client, dirty_uploaded["deck_id"])
+    again = _check(client, dirty_uploaded["deck_id"])
+    ids = lambda view: sorted(f["id"] for s in view["slides"] for f in s["findings"])  # noqa: E731
+    assert ids(first) == ids(again)
+    assert all(ids(first)), "an empty identity would collapse unrelated findings"
+    assert again["delta"]["fixed"] == 0 and again["delta"]["new"] == 0
+
+
+def test_a_correction_says_what_it_fixed_and_what_is_left(
+    client, dirty_uploaded, onboarded
+):
+    view = _check(client, dirty_uploaded["deck_id"])
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    assert fixable, "the seeded deck has mechanical corrections"
+    before = view["summary"]["total"]
+
+    after = client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo",
+              "key": fixable[0]["key"]},
+    ).json()
+    change = after["delta"]
+
+    assert change["fixed"] > 0
+    assert change["fixed"] + change["remaining"] == before == change["before"]
+    assert change["remaining"] + change["new"] == change["after"]
+    assert change["sentence"].startswith(f"{change['fixed']} fixed")
+
+
+def test_the_correction_log_carries_what_each_one_changed(
+    client, dirty_uploaded, onboarded
+):
+    """The summary that goes out with the export. "Three corrections made" does
+    not say whether they helped."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    fixable = [a for a in view["actions"] if a["fixable"]][:2]
+    assert len(fixable) == 2
+
+    for action in fixable:
+        latest = client.post(
+            "/api/fix",
+            json={"deck_id": dirty_uploaded["deck_id"], "client": "demo",
+                  "key": action["key"]},
+        ).json()
+
+    log = latest["corrections"]
+    assert len(log) == 2
+    assert [entry["summary"] for entry in log] == latest["applied"]
+    for entry in log:
+        assert entry["delta"] is not None, "every applied correction knows its delta"
+        assert entry["delta"]["fixed"] + entry["delta"]["remaining"] == entry["delta"]["before"]
+
+
+def test_an_undo_reports_the_findings_coming_back(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    assert fixable
+    fixed = client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo",
+              "key": fixable[0]["key"]},
+    ).json()
+
+    undone = client.post(
+        "/api/undo", json={"deck_id": dirty_uploaded["deck_id"], "client": "demo"}
+    ).json()
+    assert undone["delta"]["new"] == fixed["delta"]["fixed"]
+    assert undone["delta"]["after"] == view["summary"]["total"]
+    assert undone["corrections"] == []
+
+
+def _overlapping_deck(path):
+    """Two columns that do not overlap, so that moving one over the other makes
+    a finding that was not there before."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, left in enumerate((60, 500)):
+        box = slide.shapes.add_textbox(Pt(left), Pt(200), Pt(300), Pt(80))
+        box.name = f"Column {index}"
+        box.text_frame.text = f"Column {index} carries a sentence of body copy."
+    presentation.save(str(path))
+    return path
+
+
+def test_a_move_that_exposes_a_finding_marks_it_new_where_it_is_read(
+    client, onboarded, store, tmp_path
+):
+    """The hard case, end to end.
+
+    Moving a shape onto its neighbour reports an overlap that was not there
+    before. Counting it is not enough — the finding itself is flagged on the
+    slide it arrived on, so the person can see what the correction cost and
+    decide whether to undo it.
+    """
+    path = _overlapping_deck(tmp_path / "columns.pptx")
+    deck_id = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()["deck_id"]
+
+    before = _check(client, deck_id)
+    assert not [
+        f for s in before["slides"] for f in s["findings"] if f["rule_id"] == "LO-004"
+    ], "the columns do not overlap yet"
+
+    mover = next(
+        shape
+        for _, shape in store.require(deck_id).model.all_shapes()
+        if shape.ref.name == "Column 1"
+    )
+    moved = client.post(
+        "/api/move",
+        json={"deck_id": deck_id, "client": "demo", "slide": 1,
+              "shape_id": mover.ref.shape_id,
+              "x_emu": 70 * 12700, "y_emu": 200 * 12700},
+    )
+    assert moved.status_code == 200, moved.text
+    view = moved.json()
+
+    change = view["delta"]
+    assert change["new"] >= 1
+    assert "LO-004" in {entry["rule_id"] for entry in change["arrived"]}
+    assert change["worst_new"] is not None
+
+    # Named where it is read, not only counted at the top.
+    flagged = [f for s in view["slides"] for f in s["findings"] if f.get("arrived")]
+    assert {f["rule_id"] for f in flagged} >= {"LO-004"}
+    assert {f["id"] for f in flagged} == {e["id"] for e in change["arrived"]}
+    assert any(a.get("arrived") for a in view["actions"])
+
+    # And it can be taken back.
+    assert view["can_undo"] is True
+    undone = client.post(
+        "/api/undo", json={"deck_id": deck_id, "client": "demo"}
+    ).json()
+    assert not [
+        f for s in undone["slides"] for f in s["findings"] if f["rule_id"] == "LO-004"
+    ]

@@ -19,7 +19,7 @@ from tieout.model.deck import DeckModel, ShapeModel
 from tieout.model.units import pt_to_emu
 from tieout.profile.schema import Profile
 from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding, load_all_rules
-from tieout_fix import action_key
+from tieout_fix import action_key, finding_key
 from tieout_ui.edit import can_clear, editable
 
 __all__ = [
@@ -343,6 +343,9 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
     for finding in sorted(result.findings, key=lambda f: f.sort_key):
         by_slide.setdefault(finding.slide_index, []).append(
             {
+                # Stable across a re-audit, so the page can say which findings
+                # a correction cleared and which it exposed.
+                "id": finding_key(finding),
                 "rule_id": finding.rule_id,
                 "category": finding.category,
                 "severity": finding.severity,
@@ -487,6 +490,7 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 action["slides"].append(slide["index"])
             action["instances"].append(
                 {
+                    "id": finding["id"],
                     "slide": slide["index"],
                     "shape": finding["shape"],
                     "message": finding["message"],

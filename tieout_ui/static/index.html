@@ -394,6 +394,48 @@
   }
   .empty strong { display: block; color: var(--ok); font-size: 14px; margin-bottom: 4px; }
 
+  /* ---- what the last correction changed ----
+     A new total is a number to compare from memory. These are the three counts
+     that answer "did that help": what went, what is left, and — the one that
+     cannot be inferred from a total going down — what the correction exposed. */
+  .delta { padding: 11px 16px; border-bottom: 1px solid var(--line); background: #fbfbfa; }
+  .delta.exposed { background: #fff8f0; border-left: 3px solid var(--major); }
+  .delta .what { font-size: 12px; color: var(--ink-2); margin-bottom: 7px; }
+  .delta .what b { color: var(--ink); font-weight: 600; }
+  .delta .counts { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .delta .c {
+    display: flex; align-items: baseline; gap: 5px; font-size: 11.5px;
+    padding: 3px 9px; border-radius: 3px; background: var(--chrome-2); color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .delta .c b { font-size: 13px; font-weight: 650; color: var(--ink); }
+  .delta .c.fixed { background: #e9f5e9; } .delta .c.fixed b { color: #0b6a0b; }
+  .delta .c.new { background: #fde7d9; } .delta .c.new b { color: #a4262c; }
+  .delta .arrived { margin-top: 9px; }
+  .delta .arrived .head {
+    font-size: 11.5px; font-weight: 600; color: #8a3b0b; margin-bottom: 4px;
+  }
+  .delta .arrived .one {
+    font-size: 11.5px; color: var(--ink-2); padding: 3px 0 3px 9px;
+    border-left: 2px solid var(--major); cursor: pointer; margin-bottom: 2px;
+  }
+  .delta .arrived .one:hover { color: var(--accent); }
+  .delta .arrived .one .at { font: 11px var(--mono); color: var(--ink-3); }
+  .delta .act { margin-top: 9px; display: flex; gap: 7px; align-items: center; }
+  .delta .act button {
+    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 2px;
+    border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+    cursor: pointer;
+  }
+  .delta .act button:hover { background: var(--chrome-2); }
+  .delta .act .note { font-size: 11px; color: var(--ink-3); }
+
+  /* A finding the last correction brought into existence. */
+  .item.arrived, .action .inst.arrived { background: #fff8f0; }
+  .tag.now {
+    background: var(--major) !important; color: #fff; font-weight: 700;
+  }
+
   /* ---- pane content: forms, tables, prose ---- */
   .block { padding: 14px 16px; border-bottom: 1px solid var(--line); }
   .block h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 4px; }
@@ -655,6 +697,9 @@ const S = {
   // Whether dragging pulls onto the learned grid. A preference, so it survives
   // moving from one shape to the next.
   snap: true,
+  // What the last correction or undo changed: {what, kind, delta}. Null until
+  // something has been done to the deck, because a first check changes nothing.
+  lastChange: null,
 };
 
 // OOXML's unit. Declared once here for the same reason model/units.py declares
@@ -715,6 +760,7 @@ async function upload(file) {
   // tally up made the status bar read "16 blocker" under a deck that had not
   // been checked.
   S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
+  S.lastChange = null;
   $("tally").textContent = "";
   $("openreport").disabled = true;
   $("undo").disabled = true;
@@ -1091,7 +1137,8 @@ $("check").onclick = async () => {
   clearFlash();
   // Drop the previous run before starting this one, so nothing on screen is
   // left describing a check that is no longer the current one.
-  S.audit = null; S.edit = null; $("tally").textContent = ""; renderRail(); renderNote();
+  S.audit = null; S.edit = null; S.lastChange = null;
+  $("tally").textContent = ""; renderRail(); renderNote();
   busy(semantic ? "Auditing, then reviewing the content" : "Auditing");
   $("check").disabled = true;
   try {
@@ -1158,6 +1205,7 @@ function renderNote() {
       <div class="line">${a.slide_count} slides checked against ${a.rules_run.length}
         rule${a.rules_run.length === 1 ? "" : "s"}${a.suppressed ? `, ${a.suppressed} previously accepted` : ""}.</div>
     </div>
+    ${deltaBlock()}
     ${reviewBanner(a.review)}`;
 
   if (!s.total) {
@@ -1181,6 +1229,64 @@ function renderNote() {
   wireNote();
 }
 
+/* ---------- what the last correction changed ----------
+
+   A correction that takes the count from 24 to 22 has not necessarily fixed
+   two things. It may have fixed three and exposed one — moving a shape onto
+   its grid line can put it over its neighbour, which is exactly how automatic
+   snapping damaged a real deck. A total going down hides that, and the person
+   who would have undone it never knows there was anything to undo.
+
+   So the three counts are shown separately, and the findings that arrived are
+   named and linked rather than counted. */
+
+function deltaBlock() {
+  // Only after something has been done to the deck. On a first check the
+  // "delta" is every finding merely being present, which is not a change.
+  if (!S.lastChange || !S.audit) return "";
+  const d = S.lastChange.delta, what = S.lastChange.what;
+  if (!d) return "";
+
+  // An undo restores the findings the correction had cleared, so its "new"
+  // count is those coming back rather than anything exposed. Calling that
+  // exposure would cry wolf on every undo, and the warning has to mean
+  // something the first time it is seen.
+  if (S.lastChange.kind === "undo") {
+    return `<div class="delta">
+      <div class="what">Undone: <b>${esc(what)}</b></div>
+      <div class="counts">
+        <span class="c"><b>${d.new}</b> back</span>
+        <span class="c"><b>${d.after}</b> now reported</span>
+        ${d.fixed ? `<span class="c fixed"><b>${d.fixed}</b> it had exposed, gone</span>` : ""}
+      </div></div>`;
+  }
+
+  const exposed = d.new > 0;
+  const arrived = !exposed ? "" : `
+    <div class="arrived">
+      <div class="head">${d.new === 1
+        ? "This correction exposed a finding that was not reported before:"
+        : `This correction exposed ${d.new} findings that were not reported before:`}</div>
+      ${d.arrived.map((f) => `<div class="one" data-goto="${f.slide}"
+          data-label="${esc(f.rule_id)}">
+          <span class="at">Slide ${f.slide} · ${esc(f.rule_id)} · ${esc(f.severity)}</span>
+          — ${esc(sentence(f.message))}</div>`).join("")}
+    </div>
+    <div class="act">
+      <button id="undodelta">Undo this correction</button>
+      <span class="note">Nothing else is changed by undoing it.</span>
+    </div>`;
+  return `<div class="delta${exposed ? " exposed" : ""}">
+    <div class="what"><b>${esc(what)}</b></div>
+    <div class="counts">
+      <span class="c fixed"><b>${d.fixed}</b> fixed</span>
+      <span class="c"><b>${d.remaining}</b> remain</span>
+      ${exposed ? `<span class="c new"><b>${d.new}</b> new</span>` : ""}
+    </div>
+    ${arrived}
+  </div>`;
+}
+
 // Grouped by what a person would actually do. One off-palette colour used on
 // four slides is one job, and reading it as four problems is how a reader
 // learns to skim the note.
@@ -1196,7 +1302,7 @@ function byFix(actions) {
     const instances = a.count > 1 || a.instances[0].shape ? `
       <details>
         <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
-        ${a.instances.map((i, k) => `<div class="inst" data-goto="${i.slide}"
+        ${a.instances.map((i, k) => `<div class="inst${i.arrived ? " arrived" : ""}" data-goto="${i.slide}"
             data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
             data-label="${esc(a.rule_id)}">
             <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
@@ -1211,6 +1317,8 @@ function byFix(actions) {
         <div class="meta">
           <span class="n">${index + 1}. ${esc(a.rule_id)}</span>
           <span class="tag b-${esc(a.severity)}">${esc(a.severity)}</span>
+          ${a.arrived ? `<span class="tag now" title="Not reported before the last correction">${
+            a.arrived === a.count ? "new" : `${a.arrived} new`}</span>` : ""}
           ${a.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
         </div>
         <div class="k">${esc(a.title)}</div>
@@ -1294,24 +1402,45 @@ async function correct(path, body, working) {
   catch (e) { S.checking = false; busy(""); return paneMessage("bad", e.message); }
   S.checking = false; busy("");
   S.audit = next;
+  if (next.fixed) S.lastChange = { what: next.fixed, kind: "fix", delta: next.delta };
+  else if (next.undone) S.lastChange = { what: next.undone, kind: "undo", delta: next.delta };
   renderRail(); renderNote(); editState();
-  if (next.fixed) paneMessage("good",
-    `${next.fixed}. ${next.changes} change${next.changes === 1 ? "" : "s"} made — `
-    + `${next.summary.total} finding${next.summary.total === 1 ? "" : "s"} left. `
-    + `Undo is on the ribbon.`);
-  else if (next.undone) paneMessage("good", `Undone: ${next.undone}.`);
+  if (next.fixed) flashChange(next.fixed, next.delta);
+  else if (next.undone) paneMessage("good",
+    `Undone: ${next.undone}. ${next.summary.total} finding${
+      next.summary.total === 1 ? "" : "s"} reported.`);
   else clearFlash();
 }
 
-// The ribbon's account of what has been done to the deck.
+// One line in the flash, saying what the correction cost as well as what it
+// achieved. A correction that exposed something is not good news reported in
+// the good-news colour.
+function flashChange(what, d) {
+  if (!d) return paneMessage("good", `${what}.`);
+  if (!d.new)
+    return paneMessage("good", `${what}. ${d.fixed} fixed, ${d.remaining} remain.`);
+  paneMessage("warn",
+    `${what}. ${d.fixed} fixed, ${d.remaining} remain, and ${d.new} `
+    + `${d.new === 1 ? "finding was" : "findings were"} exposed that had not been `
+    + `reported before. They are listed at the top of the note, and Undo is on the `
+    + `ribbon.`);
+}
+
+// The ribbon's account of what has been done to the deck — and what it cost.
+// This is the summary that goes out with the export, so a correction that
+// traded one finding for another has to be countable here too.
 function editState() {
   const a = S.audit;
   const applied = (a && a.applied) || [];
+  const log = (a && a.corrections) || [];
   $("undo").disabled = !(a && a.can_undo);
   $("export").disabled = !S.deck;
+  const exposed = log.reduce((n, c) => n + ((c.delta && c.delta.new) || 0), 0);
+  const fixed = log.reduce((n, c) => n + ((c.delta && c.delta.fixed) || 0), 0);
   $("editstate").textContent = !applied.length
     ? "No corrections made"
-    : `${applied.length} correction${applied.length === 1 ? "" : "s"} made`;
+    : `${applied.length} correction${applied.length === 1 ? "" : "s"}, `
+      + `${fixed} fixed${exposed ? `, ${exposed} exposed` : ""}`;
 }
 
 function wireNote() {
@@ -1336,6 +1465,10 @@ function wireNote() {
   // Picking a shape up. The group's button takes the first shape it can move,
   // which is the one a reader means by "this"; each instance carries its own so
   // a finding on six shapes is six separate decisions rather than one.
+  const undoHere = $("undodelta");
+  if (undoHere) undoHere.onclick = () => {
+    correct("/api/undo", { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
+  };
   $("pane").querySelectorAll("[data-move]").forEach((el) => {
     el.onclick = (event) => {
       event.stopPropagation();
@@ -1372,13 +1505,14 @@ function item(n, slide, f) {
   const delta = f.measured || f.expected
     ? `<div class="ev">${esc(f.measured || "")}${f.expected
         ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
-  return `<div class="item" data-slide="${slide.index}"
+  return `<div class="item${f.arrived ? " arrived" : ""}" data-slide="${slide.index}"
     data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}">
     <div class="bar b-${f.severity}"></div>
     <div>
       <div class="meta">
         <span class="n">${n}. ${esc(f.rule_id)}</span>
         <span class="tag b-${f.severity}">${esc(f.severity)}</span>
+        ${f.arrived ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
         ${f.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
         ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
       </div>
@@ -1435,6 +1569,26 @@ function plainNote() {
       : "Nothing to address.",
     "",
   ];
+
+  // What was done to the deck, and what each one cost. This is the summary that
+  // travels with the exported file, so a correction that traded one finding for
+  // another has to be legible here and not only on screen.
+  const log = a.corrections || [];
+  if (log.length) {
+    lines.push(`Corrections applied to the exported deck (${log.length})`, "");
+    log.forEach((entry, index) => {
+      const d = entry.delta;
+      lines.push(`${index + 1}. ${entry.summary}`);
+      if (d) {
+        lines.push(`   ${d.fixed} fixed, ${d.remaining} remain`
+          + (d.new ? `, ${d.new} newly exposed` : ""));
+        d.arrived.forEach((f) =>
+          lines.push(`   exposed: [${f.severity}] ${f.rule_id} slide ${f.slide} — `
+            + sentence(f.message)));
+      }
+    });
+    lines.push("");
+  }
 
   const actions = a.actions || [];
   if (actions.length) {
@@ -1810,14 +1964,14 @@ async function applyMove() {
   }
   busy("");
   S.audit = next;
+  S.lastChange = { what: next.moved, kind: "fix", delta: next.delta };
   S.edit = null;
   // The move changes what a slide looks like, so the images are being made
   // again in the background. Everything else — the note, the counts, the mark —
   // is already right.
   refreshThumbs();
   renderRail(); renderNote(); editState(); renderSlide();
-  paneMessage("good", `${next.moved}. ${next.summary.total} finding${
-    next.summary.total === 1 ? "" : "s"} left. Undo is on the ribbon.`);
+  flashChange(next.moved, next.delta);
 }
 
 // Poll until the re-render lands, then redraw. Separate from pollThumbs, which

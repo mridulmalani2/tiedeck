@@ -50,6 +50,8 @@ import posixpath
 import re
 import shutil
 import zipfile
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -58,16 +60,20 @@ from lxml import etree
 
 from tieout.model.units import EMU_PER_POINT
 from tieout.profile.schema import Profile
-from tieout.rules.base import AuditResult, Finding
+from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding
 
 __all__ = [
     "MOVE_KIND",
     "MOVE_RULE_ID",
+    "Changed",
+    "Delta",
     "Fix",
     "FixReport",
     "MoveFailed",
     "action_key",
     "apply_fix",
+    "delta",
+    "finding_key",
     "move_fix",
     "move_key",
     "plan_fixes",
@@ -182,6 +188,154 @@ def action_key(
 def _action_key(finding: Finding) -> str:
     return action_key(
         finding.rule_id, finding.remedy, finding.expected, finding.message
+    )
+
+
+# --------------------------------------------------------------------------------------
+# What a correction changed
+# --------------------------------------------------------------------------------------
+
+
+def finding_key(finding: Finding) -> str:
+    """One finding's identity, stable across a re-audit.
+
+    :func:`action_key` and the place it was found. The action key is already the
+    tool's notion of one decision -- the review note groups on it and a
+    correction is offered per group -- and it is built from the remedy, which
+    every rule states in terms of the *expectation* rather than the measurement.
+    "Move the logo to left 852pt, top 24pt" is the same sentence before and after
+    the logo moves, so the finding keeps its identity while its measurement
+    changes. A key built from the measurement would call every partial
+    improvement a finding fixed and a different finding arrived.
+
+    The location is appended because the action key is deliberately coarser than
+    a finding: one off-palette gold on four slides is one decision and four
+    findings, and a delta counts findings.
+    """
+    return (
+        f"{_action_key(finding)}@{finding.slide_index}"
+        f"#{finding.shape_name or ''}"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Changed:
+    """One finding that arrived or left between two audits."""
+
+    key: str
+    rule_id: str
+    severity: str
+    slide: int
+    shape: str | None
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class Delta:
+    """What changed between the audit on screen and the one after a correction.
+
+    Three counts, kept distinct because they answer different questions. *Fixed*
+    is what the correction achieved, *remaining* is what is left, and *new* is
+    the one that matters most: applying a correction can legitimately expose a
+    finding that was masked before -- moving a shape onto its grid line can put
+    it over its neighbour, which is precisely how automatic snapping damaged a
+    real deck. Reporting only a total would hide that behind a number that went
+    down, and the person would never know there was something to undo.
+    """
+
+    fixed: int
+    remaining: int
+    new: int
+    before: int
+    after: int
+    #: The new findings in full, so the page can name them rather than count them.
+    arrived: tuple[Changed, ...] = ()
+    #: What left, for the record.
+    cleared: tuple[Changed, ...] = ()
+
+    @property
+    def sentence(self) -> str:
+        """The three counts as a person would say them."""
+        parts = [f"{self.fixed} fixed", f"{self.remaining} remain"]
+        if self.new:
+            parts.append(f"{self.new} new")
+        return ", ".join(parts)
+
+    @property
+    def worst_new(self) -> str | None:
+        """The severity of the most serious finding the correction exposed."""
+        if not self.arrived:
+            return None
+        return min(self.arrived, key=lambda c: SEVERITY_ORDER.get(c.severity, 9)).severity
+
+
+def _changed(finding: Finding) -> Changed:
+    return Changed(
+        key=finding_key(finding),
+        rule_id=finding.rule_id,
+        severity=finding.severity,
+        slide=finding.slide_index,
+        shape=finding.shape_name,
+        message=finding.message,
+    )
+
+
+def delta(before: Sequence[Finding] | None, after: Sequence[Finding]) -> Delta:
+    """Diff two audits by finding identity.
+
+    Takes findings rather than whole results, because the two sides have to be
+    like for like and a caller sometimes holds only part of a result. The
+    motivating case is content review: a semantic pass runs on an explicit check
+    and not on a re-audit after a correction, so diffing whole results would
+    report every semantic finding as fixed by a recolour that never touched
+    them. The UI therefore keeps the deterministic findings and compares those.
+
+    Counted with a :class:`~collections.Counter` rather than a set, so two
+    findings that genuinely share an identity -- one rule reporting the same
+    remedy twice about one shape -- are two findings in the arithmetic rather
+    than one. That keeps the three counts reconciling: ``fixed + remaining`` is
+    always the total before, and ``remaining + new`` always the total after. A
+    delta whose numbers do not add up is worse than no delta.
+
+    ``before`` is None for the first check of a deck, where nothing has changed
+    yet and every finding is simply present.
+    """
+    after_findings = {finding_key(f): f for f in after}
+    counted_after = Counter(finding_key(f) for f in after)
+    if before is None:
+        return Delta(
+            fixed=0,
+            remaining=len(after),
+            new=0,
+            before=len(after),
+            after=len(after),
+        )
+
+    before_findings = {finding_key(f): f for f in before}
+    counted_before = Counter(finding_key(f) for f in before)
+
+    gone = counted_before - counted_after
+    arrived = counted_after - counted_before
+    return Delta(
+        fixed=sum(gone.values()),
+        remaining=sum((counted_before & counted_after).values()),
+        new=sum(arrived.values()),
+        before=len(before),
+        after=len(after),
+        arrived=tuple(
+            _changed(after_findings[key])
+            for key in sorted(
+                arrived,
+                key=lambda k: SEVERITY_ORDER.get(after_findings[k].severity, 9),
+            )
+        ),
+        cleared=tuple(
+            _changed(before_findings[key])
+            for key in sorted(
+                gone,
+                key=lambda k: SEVERITY_ORDER.get(before_findings[k].severity, 9),
+            )
+        ),
     )
 
 

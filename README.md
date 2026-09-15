@@ -841,10 +841,10 @@ pane, so that is where the note goes.
 ### Fixing what can be fixed
 
 Each point in the note carries **Fix it** and **Set aside**, and the ribbon
-carries **Undo** and **Export deck**. Applying a correction re-runs the audit, so
-the count moves as you work; undo steps back one correction at a time; export
-hands back the deck with everything you accepted applied and nothing else
-changed.
+carries **Undo** and **Export deck**. Applying a correction re-runs the audit and
+says what changed — what it fixed, what is left, and anything it exposed that was
+not reported before; undo steps back one correction at a time; export hands back
+the deck with everything you accepted applied and nothing else changed.
 
 **A fix is offered only where the change has exactly one right answer.** A colour
 to the palette colour it is nearest, a typeface to the approved one, a variant
@@ -879,6 +879,51 @@ itself is never written over. **Set aside** is held for the session only: decidi
 to leave one deck's colour alone is not a decision about the client's house
 style, and writing it to the profile would make it one. For that, `tieout check
 --accept` writes a suppression.
+
+### What each correction changed
+
+A count that goes from 24 to 22 does not mean two things were fixed. It can mean
+three were fixed and one was exposed — and the one that was exposed is the thing
+worth knowing, because it is the only reason you would undo the correction.
+So every correction and every undo reports three counts rather than a new total:
+
+```
+Recolour #B08D3F to the palette's #6B7280
+  16 fixed     8 remain
+
+Move Logo on slide 5 to 852.0, 24.0pt
+  1 fixed      8 remain     2 new
+  This correction exposed 2 findings that were not reported before:
+    Slide 5 · LO-004 · major — Logo overlaps Footnote across 31% of the smaller shape
+    Slide 5 · LO-002 · minor — Logo intrudes 4.0pt into the safe margin
+  [ Undo this correction ]   Nothing else is changed by undoing it.
+```
+
+**Applying a correction can legitimately expose a finding that was masked**, and
+that is not a defect in the correction. Moving a shape onto its grid line can put
+it over its neighbour; that is precisely how automatic snapping damaged a real
+deck. What would be a defect is letting it happen silently. So the new findings
+are named rather than counted, linked to the slide they arrived on, tagged **new**
+in the note where they are read, and the undo is offered beside them rather than
+only on the ribbon.
+
+Findings are matched between the two audits by the same identity the review note
+groups on — the rule and its remedy, plus where it was found. Every rule states
+its remedy in terms of the *expectation* rather than the measurement, so "Move
+the logo to left 852pt, top 24pt" is the same sentence before and after the logo
+moves: a finding keeps its identity while its measurement changes. An identity
+built from the measurement would call every partial improvement one finding fixed
+and a different finding arrived.
+
+The counts always reconcile — `fixed + remaining` is the total before and
+`remaining + new` the total after — and the whole log travels with the deck:
+**Copy note** carries every correction applied and what each one cost, so the
+person receiving the exported file reads the same account as the person who made
+it. The ribbon keeps the running total: *3 corrections, 19 fixed, 2 exposed*.
+
+Content review is deliberately outside this arithmetic. A semantic pass runs on an
+explicit check and not on the re-audit after a correction, so counting its
+findings would make a recolour appear to have fixed every one of them.
 
 ### Moving a shape yourself
 
@@ -1003,7 +1048,9 @@ when the server stops.
 5. **Run.**
 6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
    can correct exactly, **Move it** where the answer is a position rather than a
-   substitution, and **Export deck** when you are done. **Copy note** puts the same thing on
+   substitution, and **Export deck** when you are done. Each correction reports
+   what it fixed, what is left and what it exposed — see
+   [What each correction changed](#what-each-correction-changed). **Copy note** puts the same thing on
    the clipboard as plain text, and the self-contained HTML report is the one
    `tieout check --format html` produces.
 
