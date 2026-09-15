@@ -39,6 +39,7 @@ from PIL import ImageFont
 
 from tieout.cluster import cluster_values
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel, TextParagraph
+from tieout.model.extent import ink_bbox_pt, ink_extent, is_decorative_bleed
 from tieout.model.furniture import Furniture, content_shapes, detect_furniture, font_role
 from tieout.model.units import rect_intersection_area_pt2
 from tieout.profile.schema import (
@@ -154,10 +155,19 @@ class ShapeOffCanvas(Rule):
     a shape is reported in one finding, and findings cluster per slide, because
     a group dragged off the right edge is one drag.
 
-    Known false-positive mode: a shape deliberately bled off the canvas -- a
-    half-visible background graphic, a photograph cropped by the slide edge -- is
-    reported, because nothing in the file distinguishes that intent from an
-    accident.
+    Two overhangs are real but invisible, and both are reported at ``info`` so
+    they stay auditable without gating a send:
+
+    * a **deliberate bleed** -- an untexted graphic crossing a slide edge behind
+      the content, which is how a cover device is drawn, not how a mistake
+      looks. See :func:`tieout.model.extent.is_decorative_bleed`.
+    * a **frame that overhangs while its ink does not** -- a text box sized far
+      wider than the few words in it. Measured with
+      :func:`tieout.model.extent.ink_extent`, which narrows a frame only to a
+      rectangle that provably contains the glyphs, so the downgrade is never a
+      guess: a text box whose text really does run off the slide still blocks.
+
+    Everything else is a blocker, including a shape wholly off the canvas.
     """
 
     id: ClassVar[str] = "LO-001"
@@ -177,20 +187,10 @@ class ShapeOffCanvas(Rule):
             for shape in slide.leaf_shapes():
                 if shape.width_pt <= 0 or shape.height_pt <= 0:
                     continue
-                left, top, box_width, box_height = shape.visual_bbox_pt
-                spills = [
-                    (edge, overflow, measured, limit)
-                    for edge, overflow, measured, limit in (
-                        ("left", -left, left, 0.0),
-                        ("top", -top, top, 0.0),
-                        ("right", left + box_width - width, left + box_width, width),
-                        ("bottom", top + box_height - height, top + box_height, height),
-                    )
-                    if overflow > CANVAS_EPSILON_PT
-                ]
+                spills = _canvas_spills(shape.visual_bbox_pt, width, height)
                 if not spills:
                     continue
-                spills.sort(key=lambda item: -item[1])
+                severity, qualifier = _overhang_kind(shape, slide, (width, height))
                 edge, _, measured, limit = spills[0]
                 described = ", ".join(f"{name} by {over:.1f}pt" for name, over, _, _ in spills)
                 rotated = f", rotated {shape.rotation:g} degrees" if shape.rotation else ""
@@ -199,17 +199,72 @@ class ShapeOffCanvas(Rule):
                         where=shape.ref,
                         profile=profile,
                         provenance_path="slide",
+                        severity=severity,
                         message=(
                             f"{shape.ref.name} extends off the {width:g}x{height:g}pt "
-                            f"canvas: {described}{rotated}"
+                            f"canvas: {described}{rotated}{qualifier}"
                         ),
                         measured=f"{edge} edge at {measured:.1f}pt",
                         expected=f"{edge} edge within {limit:g}pt",
-                        remedy="Move the shape back onto the canvas",
+                        remedy=_overhang_remedy(severity),
                         bbox_pt=shape.visual_bbox_pt,
                     )
                 )
-        return cluster_findings(findings)
+        # Clustered within severity: the backstop takes the worst severity in a
+        # group but the first message in it, so mixing an info bleed with a real
+        # blocker would file the blocker under the bleed's description.
+        return cluster_findings(findings, key="severity")
+
+
+def _canvas_spills(
+    bbox: tuple[float, float, float, float], width: float, height: float
+) -> list[tuple[str, float, float, float]]:
+    """Every edge of ``bbox`` that leaves the canvas, worst first."""
+    left, top, box_width, box_height = bbox
+    spills = [
+        (edge, overflow, measured, limit)
+        for edge, overflow, measured, limit in (
+            ("left", -left, left, 0.0),
+            ("top", -top, top, 0.0),
+            ("right", left + box_width - width, left + box_width, width),
+            ("bottom", top + box_height - height, top + box_height, height),
+        )
+        if overflow > CANVAS_EPSILON_PT
+    ]
+    spills.sort(key=lambda item: -item[1])
+    return spills
+
+
+def _overhang_kind(
+    shape: ShapeModel, slide: SlideModel, canvas: tuple[float, float]
+) -> tuple[Severity, str]:
+    """The severity a canvas overhang deserves, and how to describe it.
+
+    Invisible overhangs -- a deliberate bleed, and a frame whose ink stays on
+    the canvas -- are reported at ``info``. A reader should be able to see that
+    TieOut noticed, without a blocker standing between them and a send over
+    something nobody can see on the slide.
+    """
+    if is_decorative_bleed(shape, slide, canvas):
+        return (
+            "info",
+            ", which reads as a deliberate bleed: it carries no text and sits "
+            "behind the content",
+        )
+    extent = ink_extent(shape)
+    if extent is not None and not _canvas_spills(extent.bbox, *canvas):
+        return (
+            "info",
+            ", though its text stays on the canvas: the frame is oversized "
+            "rather than the content misplaced",
+        )
+    return (ShapeOffCanvas.severity, "")
+
+
+def _overhang_remedy(severity: Severity) -> str:
+    if severity == "info":
+        return "Nothing to do unless this was not intended"
+    return "Move the shape back onto the canvas"
 
 
 # --------------------------------------------------------------------------------------
@@ -230,6 +285,12 @@ class MarginIntrusion(Rule):
     design -- and so are full-bleed shapes covering at least
     :data:`FULL_BLEED_AREA_SHARE` of the slide, which are backgrounds rather
     than content.
+
+    Measured against the shape's ink rather than its frame where the two differ
+    provably (:func:`tieout.model.extent.ink_extent`), and a deliberate bleed is
+    reported at ``info`` for the reason LO-001 gives: a cover device crossing
+    the slide edge is not a margin mistake, but saying nothing about it would
+    hide one.
 
     Known false-positive mode: a deliberate full-width device that is not quite
     full-bleed -- a tinted band spanning the slide at a third of its height --
@@ -262,7 +323,7 @@ class MarginIntrusion(Rule):
             for shape in content_shapes(slide, furniture):
                 if full_bleed > 0 and shape.area_pt2 >= full_bleed:
                     continue
-                left, top, box_width, box_height = shape.visual_bbox_pt
+                left, top, box_width, box_height = ink_bbox_pt(shape)
                 breaches = [
                     (edge, intrusion, measured, limit)
                     for edge, intrusion, measured, limit in (
@@ -288,22 +349,33 @@ class MarginIntrusion(Rule):
                 breaches.sort(key=lambda item: -item[1])
                 edge, _, measured, limit = breaches[0]
                 described = ", ".join(f"{name} by {by:.1f}pt" for name, by, _, _ in breaches)
+                bleed = is_decorative_bleed(shape, slide, (width, height))
+                qualifier = (
+                    ", which reads as a deliberate bleed rather than misplaced content"
+                    if bleed
+                    else ""
+                )
                 findings.append(
                     self.finding(
                         where=shape.ref,
                         profile=profile,
                         provenance_path=f"layout.safe_margin_pt.{slide.archetype}",
+                        severity="info" if bleed else MarginIntrusion.severity,
                         message=(
                             f"{shape.ref.name} intrudes into the safe margin for "
-                            f"{slide.archetype} slides: {described}"
+                            f"{slide.archetype} slides: {described}{qualifier}"
                         ),
                         measured=f"{edge} edge at {measured:.1f}pt",
                         expected=f"{edge} edge at {limit:g}pt",
-                        remedy=f"Move the {edge} edge to {limit:g}pt or further in",
+                        remedy=(
+                            "Nothing to do unless this was not intended"
+                            if bleed
+                            else f"Move the {edge} edge to {limit:g}pt or further in"
+                        ),
                         bbox_pt=shape.visual_bbox_pt,
                     )
                 )
-        return cluster_findings(findings)
+        return cluster_findings(findings, key="severity")
 
 
 # --------------------------------------------------------------------------------------
@@ -346,14 +418,33 @@ class NearMissAlignment(Rule):
     the comparison is the grid line itself -- a learned position that shapes
     across the deck demonstrably do sit on. An edge is reported when it
 
+    * belongs to a shape that is **not already aligned on that axis**, either to
+      a learned grid line or to a line the slide establishes for itself -- a
+      coordinate at least :data:`LOCAL_ALIGNMENT_SUPPORT` shapes on that slide
+      share. A shape whose left edge sits exactly on a column has been placed
+      deliberately, and its centre-x landing 2pt from some other column is a
+      consequence of its width, not a second decision to get wrong. Without this
+      test every shape offers six chances to coincide with one of dozens of
+      learned lines, and the rule buries its real findings under its own noise.
+
+      The slide's own lines count because a deck-wide grid cannot describe a
+      one-off layout. An agenda that sets its second column at 498pt where the
+      rest of the deck uses 500pt has aligned eight shapes deliberately; the
+      deck grid has never seen that column, and measuring those eight against
+      the nearest one it has knows only that they are not on it.
     * is **not** on any learned grid line, that is, further than
       ``profile.layout.grid.tolerance_pt`` from the nearest one, and
     * misses that nearest line by a distance inside
-      ``profile.layout.near_miss_alignment_pt``.
+      ``profile.layout.near_miss_alignment_pt``, and
+    * misses it **unambiguously**: where a second line lies within the same
+      window on the other side, the edge sits between two learned positions and
+      there is no single one it was meant to be on.
 
     The off-grid shape is the offender and the grid line is the expectation.
     Like is compared with like: horizontal edges only against grid columns,
     vertical edges only against grid rows, never a left against a right.
+    Decorative bleeds are excluded: a graphic placed to run off the slide edge
+    has no alignment to miss.
 
     Observations are grouped by slide and grid line, so a row of five cards
     nudged together yields one finding; groups on the same slide sharing the same
@@ -381,12 +472,24 @@ class NearMissAlignment(Rule):
 
         observed: list[_NearMiss] = []
         for slide in deck.slides:
-            for shape in content_shapes(slide, furniture):
+            canvas = _canvas(slide, deck)
+            shapes = [
+                shape
+                for shape in content_shapes(slide, furniture)
+                if not is_decorative_bleed(shape, slide, canvas)
+            ]
+            local = _local_alignments(shapes, grid.tolerance_pt)
+            for shape in shapes:
+                aligned = _aligned_axes(grid, shape, local)
                 for edge in _edge_values(shape):
+                    if edge.axis in aligned:
+                        continue
                     if _on_grid(grid, edge.axis, edge.value):
                         continue
                     line = _nearest_grid_line(grid, edge.axis, edge.value)
                     if line is None or not window.contains(edge.value - line):
+                        continue
+                    if _ambiguous(grid, edge.axis, edge.value, line, window.max):
                         continue
                     observed.append(
                         _NearMiss(
@@ -441,6 +544,68 @@ class NearMissAlignment(Rule):
         )
 
 
+#: Shapes sharing a coordinate on one slide before it counts as an alignment
+#: that slide established for itself. Two shapes share an edge by chance often
+#: enough to matter; three is a decision.
+LOCAL_ALIGNMENT_SUPPORT: Final[int] = 3
+
+
+def _local_alignments(
+    shapes: Sequence[ShapeModel], tolerance: float
+) -> dict[str, list[float]]:
+    """Coordinates this slide aligns its own shapes to, per axis."""
+    out: dict[str, list[float]] = {}
+    for axis in ("x", "y"):
+        values = [
+            edge.value
+            for shape in shapes
+            for edge in _edge_values(shape)
+            if edge.axis == axis
+        ]
+        out[axis] = [
+            cluster.centre
+            for cluster in cluster_values(values, tolerance)
+            if cluster.support >= LOCAL_ALIGNMENT_SUPPORT
+        ]
+    return out
+
+
+def _aligned_axes(
+    grid: GridProfile, shape: ShapeModel, local: dict[str, list[float]]
+) -> frozenset[str]:
+    """The axes on which ``shape`` already sits on a line something aligns to.
+
+    One edge on a line settles the axis. The line may be the deck's grid or one
+    the slide establishes for itself.
+    """
+    aligned: set[str] = set()
+    for edge in _edge_values(shape):
+        if edge.axis in aligned:
+            continue
+        if _on_grid(grid, edge.axis, edge.value):
+            aligned.add(edge.axis)
+            continue
+        if any(
+            abs(line - edge.value) <= grid.tolerance_pt
+            for line in local.get(edge.axis, ())
+        ):
+            aligned.add(edge.axis)
+    return frozenset(aligned)
+
+
+def _ambiguous(
+    grid: GridProfile, axis: str, value: float, line: float, window: float
+) -> bool:
+    """Whether a second learned line sits within the near-miss window as well.
+
+    An edge between two learned positions has no single position it missed, so
+    naming one of them as the expectation would be arbitrary.
+    """
+    lines = grid.columns_pt if axis == "x" else grid.rows_pt
+    near = [other for other in lines if abs(other - value) <= window]
+    return len(near) > 1 and any(other != line for other in near)
+
+
 def _group_near_misses(observed: Iterable[_NearMiss]) -> list[list[_NearMiss]]:
     """Group near misses by slide and grid line, then merge equal offsets.
 
@@ -484,9 +649,19 @@ class TextShapeOverlap(Rule):
     per slide, since one dragged box overlapping three columns is one mistake,
     and the worst overlap on the slide is the one named.
 
-    Known false-positive mode: a text box sized generously around short text that
-    overlaps a neighbour only in its empty region. Box geometry is what the file
-    records; where the glyphs actually land is not.
+    Overlap is measured between the shapes' **ink** where that can be
+    established (:func:`tieout.model.extent.ink_extent`), not their frames. A
+    generously sized text box overlapping its neighbour only across its empty
+    padding is the commonest layout false positive there is: on a real deck it
+    fires on every stacked pair of headings, because a heading's frame is routinely
+    twice the height of the line inside it. The narrowing is an upper bound on
+    the glyphs, so an overlap that survives it is an overlap of things a reader
+    sees.
+
+    Known false-positive mode: a shape whose ink cannot be bounded -- a filled
+    panel, a rotated label, a table -- is still measured at its frame, so a
+    caption sitting inside a coloured card reads as an overlap unless the card
+    is untexted.
     """
 
     id: ClassVar[str] = "LO-004"
@@ -507,13 +682,19 @@ class TextShapeOverlap(Rule):
                 for shape in content_shapes(slide, furniture)
                 if shape.has_text and not _is_thin(shape) and shape.area_pt2 > 0
             ]
+            inked = {shape.ref.shape_id: ink_bbox_pt(shape) for shape in candidates}
             overlaps: list[tuple[float, float, ShapeModel, ShapeModel]] = []
             for index, first in enumerate(candidates):
+                first_box = inked[first.ref.shape_id]
                 for second in candidates[index + 1 :]:
-                    area = rect_intersection_area_pt2(first.bbox_pt, second.bbox_pt)
+                    second_box = inked[second.ref.shape_id]
+                    area = rect_intersection_area_pt2(first_box, second_box)
                     if area <= 0:
                         continue
-                    share = area / min(first.area_pt2, second.area_pt2)
+                    smaller = min(_area_of(first_box), _area_of(second_box))
+                    if smaller <= 0:
+                        continue
+                    share = area / smaller
                     if share > threshold:
                         overlaps.append((share, area, first, second))
 
@@ -541,6 +722,10 @@ class TextShapeOverlap(Rule):
                     )
                 )
         return cluster_findings(findings)
+
+
+def _area_of(bbox: tuple[float, float, float, float]) -> float:
+    return max(0.0, bbox[2]) * max(0.0, bbox[3])
 
 
 # --------------------------------------------------------------------------------------

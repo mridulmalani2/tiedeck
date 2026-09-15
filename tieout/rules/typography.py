@@ -501,15 +501,25 @@ class CanonicalTerms(Rule):
     Measures: every window of words the length of a canonical term from
     ``typography.canon_terms``. A window that shares its
     :func:`tieout.text.canon_key` with the canonical form but differs from it as
-    a surface string is a variant, which catches the case slips and misspellings
-    the learned variant list never saw. The variants recorded in the profile are
-    additionally matched literally, since a short form such as "AP" shares no key
-    with what it abbreviates. One finding per slide per variant, reporting the
-    canonical form in ``expected``.
+    a surface string is a variant, which catches the misspellings and spacing
+    slips the learned variant list never saw. The variants recorded in the
+    profile are additionally matched literally, since a short form such as "AP"
+    shares no key with what it abbreviates. One finding per slide per variant,
+    reporting the canonical form in ``expected``.
+
+    **Casing is not terminology.** A window differing from the canonical form
+    only in capitalisation is not reported unless the term appears in
+    ``typography.canon_case_sensitive``. Investment banking decks set the same
+    term in caps in an eyebrow, in title case on an agenda and in sentence case
+    in prose; all three are the house style, and ``typography.title_case`` is
+    the rule that governs which belongs where. Reporting them here fires once
+    per occurrence of an ordinary convention -- on a twenty-slide deck, dozens of
+    times -- and buries the misspelling the rule exists to find. Nothing derives
+    the opt-in list; a mark that genuinely must never be recased is added to it
+    by hand.
 
     Known false positive: a canonical term whose words are ordinary prose is
-    reported at the start of a sentence, where the initial capital is grammar
-    rather than a terminology error.
+    reported where it is spelled differently for grammatical reasons.
     """
 
     id: ClassVar[str] = "TY-005"
@@ -523,6 +533,9 @@ class CanonicalTerms(Rule):
         canon_terms = profile.typography.canon_terms
         if not canon_terms:  # pragma: no cover - the engine skips on requires
             return self.skip("the profile does not define typography.canon_terms")
+        case_sensitive = {
+            term.casefold() for term in profile.typography.canon_case_sensitive
+        }
 
         # Compiled once per deck rather than once per passage: a literal matcher
         # per declared variant, bounded so a longer word is not a hit.
@@ -545,7 +558,10 @@ class CanonicalTerms(Rule):
             for passage in _passages(slide):
                 for canonical in canon_terms:
                     for variant in _variants_in(
-                        passage.text, canonical, literals[canonical]
+                        passage.text,
+                        canonical,
+                        literals[canonical],
+                        cased=canonical.casefold() in case_sensitive,
                     ):
                         key = (canonical, variant)
                         shape, count = seen.get(key, (passage.shape, 0))
@@ -572,17 +588,30 @@ class CanonicalTerms(Rule):
 
 
 def _variants_in(
-    text: str, canonical: str, literals: list[tuple[str, re.Pattern[str]]]
+    text: str,
+    canonical: str,
+    literals: list[tuple[str, re.Pattern[str]]],
+    *,
+    cased: bool,
 ) -> Iterator[str]:
-    """Surface forms in ``text`` that should have been ``canonical``."""
+    """Surface forms in ``text`` that should have been ``canonical``.
+
+    ``cased`` says whether a difference of capitalisation alone counts. It is
+    False for every term unless the profile opts the term in.
+    """
     key = canon_key(canonical)
     length = len(key.split())
     if length:
         for window in _windows(text, length):
             surface = window.rstrip(_TRAILING_PUNCTUATION)
-            if surface != canonical and canon_key(surface) == key:
-                yield surface
+            if surface == canonical or canon_key(surface) != key:
+                continue
+            if not cased and surface.casefold() == canonical.casefold():
+                continue
+            yield surface
     for variant, pattern in literals:
+        if not cased and variant.casefold() == canonical.casefold():
+            continue
         if pattern.search(text):
             yield variant
 

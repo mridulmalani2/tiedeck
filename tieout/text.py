@@ -397,7 +397,10 @@ def find_dates(text: str) -> list[DateReading]:
 # Terminology
 # --------------------------------------------------------------------------------------
 
-_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z'’&.-]*")
+#: Digits are admitted after the first letter so that a fiscal label stays one
+#: token. Without them "FY26E REVENUE" tokenises as "FY", "E", "REVENUE", the
+#: run breaks at the digits, and the deck acquires a phantom term "E REVENUE".
+_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9'’&.-]*")
 _SENTENCE_SPLIT: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+|\n+")
 
 #: What may sit between two capitalised words without breaking the phrase.

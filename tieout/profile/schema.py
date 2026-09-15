@@ -292,6 +292,13 @@ class TypographyProfile(_Model):
     unit_pattern: str | None = None
     #: Canonical surface form -> the variants that must be rewritten to it.
     canon_terms: dict[str, list[str]] = Field(default_factory=dict)
+    #: Terms whose capitalisation is itself a house rule. TY-005 ignores a
+    #: case-only deviation from a canonical term unless the term is listed here,
+    #: because a deck legitimately sets the same term in caps in an eyebrow, in
+    #: title case on an agenda and in sentence case in prose. Nothing derives
+    #: this: it is an opt-in, edited by hand when a mark really must not be
+    #: recased.
+    canon_case_sensitive: list[str] = Field(default_factory=list)
 
 
 class HygieneProfile(_Model):

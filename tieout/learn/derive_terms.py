@@ -65,6 +65,19 @@ class CanonCandidate:
         return sum(f.count for f in self.forms)
 
     @property
+    def differs_only_by_case(self) -> bool:
+        """Whether every spelling is the same term in different capitalisation.
+
+        Case is typography, not terminology. A deck sets a section name in caps
+        in the eyebrow, in title case on the agenda and in sentence case in
+        prose, and all three are correct. ``typography.title_case`` is the rule
+        that governs casing; asking the user to pick one spelling here, and then
+        reporting the other two hundreds of times, is the same judgement made
+        twice and wrongly the second time.
+        """
+        return len({f.text.casefold() for f in self.forms}) == 1
+
+    @property
     def explained_by_sentence_position(self) -> bool:
         """Whether the variation is only sentence-initial capitalisation.
 
@@ -123,17 +136,23 @@ def derive_terms(deck: DeckModel, furniture: Furniture) -> TermsDerivation:
         if not _is_distinctive(candidate.canonical.text):
             continue
 
-        result.candidates.append(candidate)
-        if candidate.explained_by_sentence_position:
+        if candidate.differs_only_by_case:
+            # Recorded with no variants: the spellings seen here are all correct,
+            # and listing them would have TY-005 report the reference deck's own
+            # headings. Casing is opted into per term via
+            # ``typography.canon_case_sensitive``.
+            result.canon_terms.setdefault(candidate.canonical.text, [])
+            spellings = ", ".join(sorted(f.text for f in candidate.forms))
             result.derivation.note(
                 f"typography.canon_terms.{candidate.canonical.text}",
-                "spellings differ only by sentence-initial capitalisation, which is "
-                "not a terminology choice; not queued as a question",
+                f"spellings differ only in capitalisation ({spellings}), which is "
+                "typography rather than terminology; all are accepted. Add the term "
+                "to typography.canon_case_sensitive to enforce one casing",
                 "high",
             )
-            result.canon_terms.setdefault(candidate.canonical.text, [])
             continue
 
+        result.candidates.append(candidate)
         result.derivation.ask(_canon_question(candidate))
 
     result.canon_terms = _drop_subsumed(result.canon_terms, groups)
@@ -280,8 +299,12 @@ def _is_distinctive(phrase: str) -> bool:
     words = [word for word in words if word]
     if not words:
         return False
-    if any(word.isupper() and len(word) > 2 for word in words):
-        # An acronym or a wordmark set in capitals is a term by construction.
+    if any(
+        word.isupper() and len(word) > 2 and not is_common_word(word) for word in words
+    ):
+        # An acronym or a wordmark set in capitals is a term by construction --
+        # but an ordinary English word set in capitals is a heading, and "KEY",
+        # "GROSS" and "PERFORMANCE" are not this client's vocabulary.
         return True
     return any(len(word) > 3 and not is_common_word(word) for word in words)
 
