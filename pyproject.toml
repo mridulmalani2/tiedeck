@@ -67,7 +67,7 @@ tieout-review = "tieout_review.cli:app"
 tieout-ui = "tieout_ui.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["tieout", "tieout_review", "tieout_ui"]
+packages = ["tieout", "tieout_fix", "tieout_review", "tieout_ui"]
 artifacts = [
   "tieout/report/templates/*.j2",
   "tieout/data/*.gz",

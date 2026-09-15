@@ -448,3 +448,32 @@ def test_the_readme_leads_the_ui_section_with_the_one_command_start(readme):
     assert "run.ps1" in section
     opening = section.split("###", 1)[0]
     assert "./run.sh" in opening, "the one-command start belongs before the long recipe"
+
+
+def test_every_top_level_package_is_declared_for_packaging():
+    """A package missing from ``packages`` is invisible until someone installs
+    for real.
+
+    ``tieout_fix`` was left out of it, and nothing caught that: CI installs
+    editable, which puts the checkout on the path and finds every package in it
+    whether declared or not. The failure only appears on the install the README
+    actually recommends -- a plain, non-editable one -- where the UI died on
+    start with ``No module named 'tieout_fix'``.
+    """
+    import tomllib
+
+    root = README.parent
+    declared = set(
+        tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"][
+            "hatch"
+        ]["build"]["targets"]["wheel"]["packages"]
+    )
+    present = {
+        path.name
+        for path in root.iterdir()
+        if path.is_dir()
+        and (path / "__init__.py").exists()
+        and not path.name.startswith((".", "_"))
+        and path.name != "tests"
+    }
+    assert present <= declared, f"not declared for packaging: {sorted(present - declared)}"

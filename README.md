@@ -1392,7 +1392,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,234 tests
+.venv/bin/python -m pytest              # 1,235 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
