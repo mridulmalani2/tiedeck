@@ -709,17 +709,39 @@ enforced as a JSON schema rather than only asked for in the prompt.
 ## Optional: the local UI
 
 ```bash
-.venv/bin/python -m pip install ".[ui]"
-tieout-ui
+./run.sh            # macOS, Linux
+.\run.ps1           # Windows
 ```
 
-That serves one page on `http://127.0.0.1:8765/` and opens a browser on it.
-Upload a deck, confirm what was derived from the client's reference material,
-optionally turn on content review, and read the findings slide by slide.
+That is the whole thing. It finds a Python new enough, builds a virtual
+environment, installs, and serves one page on `http://127.0.0.1:8765/` with a
+browser open on it. Upload a deck, confirm what was derived from the client's
+reference material, optionally turn on content review, and read the findings
+slide by slide.
+
+From nothing at all:
+
+```bash
+git clone https://github.com/mridulmalani2/tiedeck
+cd tiedeck
+git checkout claude/practical-volta-j1yct7      # until the PR is merged
+./run.sh
+```
+
+Run it again any time. The first run sets up and takes a minute; every run
+after it starts the server in about a second, and it reinstalls only when
+`pyproject.toml` has changed. Flags pass straight through, so `./run.sh --port
+9000` and `./run.sh --no-open` do what you would expect. `Ctrl-C` stops the
+server and deletes every deck it was holding.
+
+It changes nothing outside the checkout: everything lands in `.venv/`, and if
+no usable Python is found it says so and exits without touching anything.
 
 ### Start to finish, on your own machine
 
-Nothing here needs a key, a network or an account.
+Nothing here needs a key, a network or an account. `run.sh` does all of the
+below; this is what it is doing, for anyone who would rather run it by hand or
+is installing the development extra.
 
 **First, check your Python.** This needs 3.11 or later, and the `python3` already
 on a Mac is usually older — macOS ships 3.9 with Xcode's command line tools:
@@ -1303,7 +1325,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,135 tests
+.venv/bin/python -m pytest              # 1,141 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

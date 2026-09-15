@@ -376,3 +376,75 @@ def test_the_ui_recipe_warns_that_the_system_python_is_too_old(readme):
     normalised = " ".join(section.split())
     assert "macOS ships 3.9" in normalised
     assert "brew install python@3.12" in section
+
+
+# --------------------------------------------------------------------------------------
+# The one-command start
+# --------------------------------------------------------------------------------------
+
+
+def test_the_launchers_the_readme_promises_exist():
+    """The README opens the UI section with these two lines. A reader who pastes
+    one and gets "no such file" has learned the documentation is not maintained,
+    which is expensive in a tool whose whole claim is that it is careful."""
+    for name in ("run.sh", "run.ps1"):
+        assert (README.parent / name).is_file(), f"{name} is documented but missing"
+
+
+def test_the_shell_launcher_is_executable():
+    """`./run.sh` is what the README says to type. Without the bit set that is a
+    permission error, and the fix -- chmod +x -- is not obvious to the reader."""
+    import stat
+
+    mode = (README.parent / "run.sh").stat().st_mode
+    assert mode & stat.S_IXUSR, "run.sh is not executable"
+
+
+def test_the_shell_launcher_parses():
+    """Cheap, and the alternative is finding out from a user that the script
+    this repository tells everyone to run has a syntax error in it."""
+    import subprocess
+
+    result = subprocess.run(
+        ["bash", "-n", str(README.parent / "run.sh")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_launcher_installs_the_ui_extra_and_not_an_editable():
+    """Same trap the manual recipe documents: editable mode needs pip 21.3+, and
+    the pip bundled with an older Python is 21.2."""
+    script = (README.parent / "run.sh").read_text(encoding="utf-8")
+    assert '".[ui]"' in script
+    assert '-e ".[ui]"' not in script
+
+
+def test_the_launcher_refuses_a_python_older_than_the_packaging_requires():
+    """`requires-python` and the launcher's floor are two statements of one
+    fact. Drifting apart means either a rejected Python that would have worked
+    or, worse, a venv built by one that will not."""
+    import tomllib
+
+    packaging = tomllib.loads(
+        (README.parent / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    floor = packaging["project"]["requires-python"].lstrip(">=")
+    major, minor = (int(part) for part in floor.split("."))
+
+    script = (README.parent / "run.sh").read_text(encoding="utf-8")
+    assert f'MIN_PYTHON="{floor}"' in script
+    assert f"sys.version_info >= ({major}, {minor})" in script
+
+    powershell = (README.parent / "run.ps1").read_text(encoding="utf-8")
+    assert f"sys.version_info >= ({major}, {minor})" in powershell
+
+
+def test_the_readme_leads_the_ui_section_with_the_one_command_start(readme):
+    section = readme.split("## Optional: the local UI", 1)[1].split("\n## ", 1)[0]
+    assert "./run.sh" in section
+    assert "run.ps1" in section
+    opening = section.split("###", 1)[0]
+    assert "./run.sh" in opening, "the one-command start belongs before the long recipe"
