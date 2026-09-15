@@ -1,0 +1,630 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TieOut</title>
+<!--
+  An empty data URI rather than an icon file. Without it the browser requests
+  /favicon.ico, the server answers 404, and the console carries an error on
+  every load — which is exactly the noise that makes a real error invisible.
+-->
+<link rel="icon" href="data:,">
+<!--
+  One file, no build step, no dependencies. Every byte the browser loads comes
+  from this server: the Content-Security-Policy the server sets forbids every
+  external origin, which is the same promise the HTML report makes and for the
+  same reason. A deck open in this page is live client material.
+-->
+<style>
+  :root {
+    --ink: #16181d; --muted: #6b7280; --line: #e3e5ea; --bg: #fbfbfc;
+    --card: #ffffff; --accent: #1f3a8a; --blocker: #b4232a; --major: #b06a12;
+    --minor: #4a6fa5; --info: #6b7280; --ok: #1a7f43; --semantic: #6d3f9e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--card);
+    display: flex; align-items: baseline; gap: 14px; position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  header .note { color: var(--muted); font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px 96px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  section[hidden] { display: none; }
+  section > h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--muted); margin: 0 0 4px;
+  }
+  section > h2 .step { color: var(--accent); font-weight: 700; }
+  section > p.lede { margin: 0 0 16px; color: var(--muted); font-size: 13.5px; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 7px;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.secondary { background: var(--card); color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  input[type=text], input[type=password], select, textarea {
+    font: inherit; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 7px; background: var(--card); color: var(--ink); width: 100%;
+  }
+  textarea { min-height: 72px; resize: vertical; font-size: 14px; }
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  label.field > small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1 1 240px; }
+  .row > .shrink { flex: 0 0 auto; }
+  .drop {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 26px;
+    text-align: center; color: var(--muted); cursor: pointer;
+  }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .pill {
+    display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 7px;
+    border-radius: 5px; text-transform: uppercase; letter-spacing: 0.04em; color: #fff;
+  }
+  .pill.blocker { background: var(--blocker); }
+  .pill.major { background: var(--major); }
+  .pill.minor { background: var(--minor); }
+  .pill.info, .pill.none { background: var(--info); }
+  .pill.semantic { background: var(--semantic); }
+  .pill.ok { background: var(--ok); }
+  .group { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+  .group:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .group h3 { font-size: 14px; margin: 0 0 10px; }
+  .fact { display: flex; gap: 12px; padding: 7px 0; align-items: flex-start; }
+  .fact input { margin-top: 4px; flex: 0 0 auto; }
+  .fact .body { flex: 1 1 auto; min-width: 0; }
+  .fact .label { font-size: 13.5px; font-weight: 600; }
+  .fact .value { font-size: 13.5px; }
+  .fact .why { color: var(--muted); font-size: 12.5px; }
+  .fact.off .body { opacity: 0.45; text-decoration: line-through; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+  .swatch {
+    width: 58px; height: 34px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.15);
+    font-size: 9.5px; display: flex; align-items: flex-end; justify-content: center;
+    color: rgba(0,0,0,0.55); padding-bottom: 2px; font-family: ui-monospace, monospace;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; vertical-align: top; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  tbody tr { border-top: 1px solid var(--line); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  pre.payload {
+    max-height: 340px; overflow: auto; background: #f5f6f8; border: 1px solid var(--line);
+    border-radius: 7px; padding: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+  }
+  .warn {
+    background: #fff8e8; border: 1px solid #f0d9a6; border-radius: 7px;
+    padding: 12px 14px; font-size: 13.5px; margin: 12px 0;
+  }
+  .bad { background: #fdf0f0; border-color: #eec4c4; }
+  .good { background: #f0f8f2; border-color: #c2e0cc; }
+  .slides { display: grid; grid-template-columns: 250px 1fr; gap: 20px; }
+  .slidelist { max-height: 70vh; overflow-y: auto; padding-right: 6px; }
+  .slidecard {
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+    margin-bottom: 8px; cursor: pointer; background: var(--card);
+  }
+  .slidecard.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(31,58,138,0.12); }
+  .slidecard .head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .slidecard .n { font-size: 12px; color: var(--muted); font-weight: 700; }
+  .slidecard .t { font-size: 12.5px; margin-top: 3px; }
+  .slidecard img { width: 100%; border-radius: 4px; border: 1px solid var(--line); margin-top: 6px; }
+  .detail img { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; }
+  .finding { border-top: 1px solid var(--line); padding: 12px 0; }
+  .finding:first-child { border-top: 0; }
+  .finding .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .finding .msg { margin: 5px 0 0; font-size: 14px; }
+  .finding .delta { font-size: 13px; color: var(--ink); margin-top: 3px; }
+  .finding .why { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+  .busy { color: var(--muted); font-size: 13px; }
+  .foot { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  @media (max-width: 720px) { .slides { grid-template-columns: 1fr; } }
+</style>
+
+<header>
+  <h1>TieOut</h1>
+  <span class="note" id="hdr">Local only &middot; nothing leaves this machine unless you turn on content review</span>
+</header>
+
+<main>
+  <!-- 1. deck -->
+  <section id="s-deck">
+    <h2><span class="step">1</span> &nbsp;Deck</h2>
+    <p class="lede">The deck to audit. Nothing is uploaded anywhere: the file is copied into a
+      temporary directory on this machine and deleted when the server stops.</p>
+    <div class="drop" id="drop">
+      Drop a <code>.pptx</code> here, or click to choose
+      <input type="file" id="file" accept=".pptx,.potx,.ppsx" hidden>
+    </div>
+    <div id="deckinfo" class="foot"></div>
+  </section>
+
+  <!-- 2. profile -->
+  <section id="s-profile" hidden>
+    <h2><span class="step">2</span> &nbsp;House style</h2>
+    <p class="lede">Audit against a client already onboarded, or learn a new one from this deck.
+      Learning from the deck you are about to audit tells you nothing — use a deck the client
+      has already approved.</p>
+    <div class="row">
+      <label class="field">
+        <span>Existing client</span>
+        <select id="client"></select>
+      </label>
+      <div class="shrink"><button id="useclient" class="secondary">Use this profile</button></div>
+    </div>
+    <div class="row">
+      <label class="field">
+        <span>Or learn a new client from the deck above</span>
+        <input type="text" id="newclient" placeholder="e.g. acme" autocomplete="off">
+      </label>
+      <div class="shrink"><button id="learn">Learn</button></div>
+    </div>
+    <div id="learnbusy" class="busy"></div>
+  </section>
+
+  <!-- 3. confirm -->
+  <section id="s-confirm" hidden>
+    <h2><span class="step">3</span> &nbsp;Confirm what was derived</h2>
+    <p class="lede">Every line below was measured from the reference deck, with the evidence for
+      it. Untick anything that is not actually a house rule: the rule that reads it stops running
+      and the profile records that you decided so. Values are not editable here on purpose —
+      typing a number a deck does not support is how you get a client whose own approved deck
+      is reported as wrong. Edit the YAML for that.</p>
+    <div id="questions"></div>
+    <div id="facts"></div>
+    <div id="notlearned" class="foot"></div>
+    <p><button id="confirm">Save and continue</button>
+       <button id="skipconfirm" class="secondary">Continue without changes</button></p>
+  </section>
+
+  <!-- 4. review -->
+  <section id="s-review" hidden>
+    <h2><span class="step">4</span> &nbsp;Content review <span style="text-transform:none;letter-spacing:0">(optional)</span></h2>
+    <p class="lede">Off by default, and TieOut needs no key or network without it. Turned on, the
+      deck's text is sent to a language model to catch what arithmetic cannot — a headline that
+      contradicts its own table. Every name is replaced first, and you see exactly what would be
+      sent before anything is.</p>
+    <label class="field" style="display:flex;gap:9px;align-items:center">
+      <input type="checkbox" id="semantic" style="width:auto;margin:0">
+      <span style="margin:0">Enable content review</span>
+    </label>
+    <div id="semanticfields" hidden>
+      <label class="field">
+        <span>API key</span>
+        <input type="password" id="apikey" placeholder="sk-ant-..." autocomplete="off">
+        <small>Held for the one request that uses it. Never written to the profile, a report,
+          a log or this page's storage.</small>
+      </label>
+      <label class="field">
+        <span>Forbidden words</span>
+        <textarea id="forbidden" placeholder="Meridian Capital, Project Atlas, Jane Okafor"></textarea>
+        <small>Comma-separated. These are redacted on top of the client name, the learned
+          vocabulary, the document metadata and the built-in detectors. A name made only of
+          ordinary English words — "Northern Trust" — can only be caught here.</small>
+      </label>
+      <label class="field" style="display:flex;gap:9px;align-items:center">
+        <input type="checkbox" id="notes" style="width:auto;margin:0">
+        <span style="margin:0">Include speaker notes</span>
+      </label>
+      <p><button id="preview" class="secondary">Show me what would be sent</button></p>
+      <div id="plan"></div>
+    </div>
+  </section>
+
+  <!-- 5. run -->
+  <section id="s-run" hidden>
+    <h2><span class="step">5</span> &nbsp;Run</h2>
+    <p><button id="check">Check the deck</button> <span id="checkbusy" class="busy"></span></p>
+  </section>
+
+  <!-- 6. results -->
+  <section id="s-results" hidden>
+    <h2><span class="step">6</span> &nbsp;Results</h2>
+    <div class="counts" id="counts"></div>
+    <div id="reviewnote"></div>
+    <div class="slides">
+      <div class="slidelist" id="slidelist"></div>
+      <div class="detail" id="detail"></div>
+    </div>
+    <p class="foot"><a id="reportlink" href="#" target="_blank" rel="noopener">Open the
+      self-contained HTML report</a> — one file, nothing fetched when it is viewed, safe to email.</p>
+  </section>
+</main>
+
+<script>
+// The token is substituted into this document by the server rather than read
+// from the URL, so it is never in a link. The launcher opens the page with a
+// ?t= query so the browser can carry it in; drop that immediately, or the token
+// stays in the browser's history and in anything the user copies.
+if (location.search) history.replaceState(null, "", location.pathname);
+
+const TOKEN = "__TIEOUT_TOKEN__";
+const state = { deck: null, client: null, profile: null, audit: null, plan: null, approved: false };
+
+const $ = (id) => document.getElementById(id);
+const show = (id, on = true) => { $(id).hidden = !on; };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, { method = "GET", body = null, form = null } = {}) {
+  const headers = { "X-TieOut-Token": TOKEN };
+  if (body) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, {
+    method, headers, body: form ? form : body ? JSON.stringify(body) : null,
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = { detail: text }; }
+  if (!response.ok) throw new Error((data && data.detail) || response.statusText);
+  return data;
+}
+
+function fail(where, error) {
+  $(where).innerHTML = `<div class="warn bad">${esc(error.message || error)}</div>`;
+}
+
+/* ---- 1. deck ---- */
+
+$("drop").onclick = () => $("file").click();
+$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = (e) => {
+  e.preventDefault(); $("drop").classList.remove("over");
+  if (e.dataTransfer.files.length) upload(e.dataTransfer.files[0]);
+};
+$("file").onchange = (e) => { if (e.target.files.length) upload(e.target.files[0]); };
+
+async function upload(file) {
+  $("deckinfo").textContent = `Loading ${file.name}…`;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    state.deck = await api("/api/decks", { method: "POST", form });
+  } catch (error) { return fail("deckinfo", error); }
+  renderDeckInfo();
+  show("s-profile");
+  loadClients();
+  pollThumbnails();
+}
+
+function renderDeckInfo() {
+  const d = state.deck;
+  const thumbs = d.thumbnails.available
+    ? `${d.thumbnails.count} slide image(s) rendered`
+    : d.thumbnails.rendering ? "rendering slide images…" : esc(d.thumbnails.reason || "no slide images");
+  $("deckinfo").innerHTML =
+    `<strong>${esc(d.filename)}</strong> — ${d.slide_count} slides, ` +
+    `${Math.round(d.width_pt)}×${Math.round(d.height_pt)}pt. ${thumbs}`;
+}
+
+async function pollThumbnails() {
+  for (let i = 0; i < 90; i++) {
+    if (!state.deck) return;
+    if (state.deck.thumbnails.available || state.deck.thumbnails.reason) break;
+    await new Promise((r) => setTimeout(r, 2000));
+    try { state.deck = await api(`/api/decks/${state.deck.deck_id}`); } catch (_) { return; }
+    renderDeckInfo();
+    if (state.audit) renderSlideList();
+  }
+}
+
+/* ---- 2. profile ---- */
+
+async function loadClients() {
+  let data;
+  try { data = await api("/api/profiles"); } catch (error) { return fail("learnbusy", error); }
+  const select = $("client");
+  select.innerHTML = data.clients.length
+    ? data.clients.map((c) => `<option>${esc(c)}</option>`).join("")
+    : `<option value="">none onboarded yet</option>`;
+  $("useclient").disabled = !data.clients.length;
+}
+
+$("useclient").onclick = async () => {
+  const client = $("client").value;
+  if (!client) return;
+  try { state.profile = await api(`/api/profiles/${encodeURIComponent(client)}`); }
+  catch (error) { return fail("learnbusy", error); }
+  state.client = client;
+  renderConfirm();
+  show("s-confirm"); show("s-review"); show("s-run");
+};
+
+$("learn").onclick = async () => {
+  const client = $("newclient").value.trim();
+  if (!client) { $("learnbusy").textContent = "Name the client first."; return; }
+  $("learnbusy").textContent = "Deriving the house style…";
+  try {
+    state.profile = await api("/api/learn", {
+      method: "POST", body: { deck_id: state.deck.deck_id, client },
+    });
+  } catch (error) { return fail("learnbusy", error); }
+  state.client = client;
+  $("learnbusy").innerHTML =
+    `<div class="warn good">Learned <strong>${esc(client)}</strong> and wrote ` +
+    `<code>${esc(state.profile.written_to || "")}</code>. ` +
+    `${esc(state.profile.question_summary || "")}</div>`;
+  await loadClients();
+  renderConfirm();
+  show("s-confirm"); show("s-review"); show("s-run");
+};
+
+/* ---- 3. confirm ---- */
+
+function renderConfirm() {
+  const p = state.profile;
+  const outstanding = (p.questions || []).filter((q) => !q.answered);
+  $("questions").innerHTML = outstanding.length
+    ? `<div class="group"><h3>${outstanding.length} question(s) the evidence did not settle</h3>` +
+      outstanding.map((q) => `
+        <label class="field">
+          <span>${esc(q.question)}</span>
+          <select data-question="${esc(q.id)}">
+            ${(q.options.length ? q.options : [q.default]).map((o) =>
+              `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
+          </select>
+          <small><code>${esc(q.field_path)}</code></small>
+        </label>`).join("") + `</div>`
+    : `<div class="warn good">No questions: every rule was settled from the evidence.</div>`;
+
+  $("facts").innerHTML = (p.groups || []).map((group) => `
+    <div class="group">
+      <h3>${esc(group.title)}</h3>
+      ${group.facts.map(factRow).join("")}
+    </div>`).join("");
+
+  $("facts").querySelectorAll("input[type=checkbox]").forEach((box) => {
+    box.onchange = () => box.closest(".fact").classList.toggle("off", !box.checked);
+  });
+
+  $("notlearned").innerHTML = (p.not_learned || []).length
+    ? `<strong>${p.not_learned.length} rule(s) deliberately not derived</strong>: ` +
+      p.not_learned.map((n) => `<code>${esc(n.key)}</code> — ${esc(n.reason)}`).join("; ")
+    : "";
+}
+
+function factRow(fact) {
+  const value = fact.kind === "swatches"
+    ? `<div class="swatches">${fact.value.map((s) =>
+        `<div class="swatch" style="background:${esc(s.hex)}">${esc(s.label)}</div>`).join("")}</div>`
+    : fact.kind === "list"
+      ? `<div class="value mono">${fact.value.map(esc).join(", ") || "—"}</div>`
+      : `<div class="value">${esc(fact.value)}</div>`;
+  return `
+    <div class="fact">
+      <input type="checkbox" checked data-path="${esc(fact.path)}">
+      <div class="body">
+        <div class="label">${esc(fact.label)}
+          ${fact.confidence !== "high" ? `<span class="pill minor">${esc(fact.confidence)}</span>` : ""}
+        </div>
+        ${value}
+        ${fact.why ? `<div class="why">why: ${esc(fact.why)}</div>` : ""}
+      </div>
+    </div>`;
+}
+
+$("skipconfirm").onclick = () => { show("s-run"); $("check").scrollIntoView({ behavior: "smooth" }); };
+
+$("confirm").onclick = async () => {
+  const answers = {};
+  $("questions").querySelectorAll("select[data-question]").forEach((s) => {
+    answers[s.dataset.question] = s.value;
+  });
+  const dropped = [];
+  $("facts").querySelectorAll("input[type=checkbox]").forEach((box) => {
+    if (!box.checked) dropped.push(box.dataset.path);
+  });
+  try {
+    state.profile = await api("/api/confirm", {
+      method: "POST", body: { client: state.client, answers, dropped },
+    });
+  } catch (error) { return fail("notlearned", error); }
+  const bits = [];
+  if (state.profile.applied?.length) bits.push(`applied ${state.profile.applied.join(", ")}`);
+  if (state.profile.dropped?.length) bits.push(`dropped ${state.profile.dropped.length} fact(s)`);
+  if (state.profile.recorded_only?.length) {
+    bits.push(`recorded and locked, but needing a re-learn to take effect: ` +
+      state.profile.recorded_only.join(", "));
+  }
+  renderConfirm();
+  $("notlearned").innerHTML =
+    `<div class="warn good">Saved. ${esc(bits.join("; ") || "no changes")}</div>` + $("notlearned").innerHTML;
+  show("s-run");
+};
+
+/* ---- 4. review ---- */
+
+$("semantic").onchange = () => {
+  show("semanticfields", $("semantic").checked);
+  state.approved = false;
+};
+
+$("preview").onclick = async () => {
+  $("plan").innerHTML = `<div class="busy">Redacting…</div>`;
+  try {
+    state.plan = await api("/api/redact", {
+      method: "POST",
+      body: {
+        deck_id: state.deck.deck_id, client: state.client || "",
+        forbidden: $("forbidden").value, include_notes: $("notes").checked,
+      },
+    });
+  } catch (error) { return fail("plan", error); }
+  renderPlan(state.plan);
+};
+
+function renderPlan(plan) {
+  const redactions = plan.redactions.length ? `
+    <table>
+      <thead><tr><th>placeholder</th><th>kind</th><th>uses</th><th>original</th><th>from</th></tr></thead>
+      <tbody>${plan.redactions.map((r) => `<tr>
+        <td class="mono">${esc(r.placeholder)}</td><td>${esc(r.kind)}</td>
+        <td>${r.occurrences}</td><td>${esc(r.original)}</td>
+        <td class="mono">${esc(r.source)}</td></tr>`).join("")}</tbody>
+    </table>` : `<p class="foot">Nothing matched a term or a detector.</p>`;
+
+  const residuals = plan.residuals.length ? `
+    <div class="warn">
+      <strong>${plan.residuals.length} item(s) could not be cleared confidently.</strong>
+      Each is a judgement only you can make. Add the ones that identify someone to the
+      forbidden words above and preview again.
+      <table style="margin-top:10px">
+        <thead><tr><th>line</th><th>uses</th><th>text</th><th>why</th></tr></thead>
+        <tbody>${plan.residuals.map((r) => `<tr>
+          <td>${r.first_line}</td><td>${r.occurrences}</td>
+          <td class="mono">${esc(r.text)}</td><td>${esc(r.reason)}</td></tr>`).join("")}</tbody>
+      </table>
+      <label class="field" style="display:flex;gap:9px;align-items:center;margin:12px 0 0">
+        <input type="checkbox" id="approve" style="width:auto;margin:0">
+        <span style="margin:0">I have read these and am content to send them</span>
+      </label>
+    </div>` : `<div class="warn good">Nothing outstanding — every identifier was redacted.</div>`;
+
+  $("plan").innerHTML = `
+    <p class="foot"><strong>${plan.redactions.length}</strong> term(s) redacted across
+      <strong>${plan.characters.toLocaleString()}</strong> characters.</p>
+    ${redactions}
+    ${residuals}
+    <p class="foot" style="margin-top:14px">This is the payload, exactly as it would be sent:</p>
+    <pre class="payload">${esc(plan.text)}</pre>`;
+
+  const approve = $("approve");
+  if (approve) approve.onchange = () => { state.approved = approve.checked; };
+  state.approved = plan.is_clear;
+}
+
+/* ---- 5. run ---- */
+
+$("check").onclick = async () => {
+  if (!state.client) { $("checkbusy").textContent = "Choose or learn a client profile first."; return; }
+  const semantic = $("semantic").checked;
+  if (semantic && !$("apikey").value.trim()) {
+    $("checkbusy").textContent = "Content review needs an API key, or turn it off.";
+    return;
+  }
+  $("checkbusy").textContent = semantic ? "Auditing, then reviewing the content…" : "Auditing…";
+  $("check").disabled = true;
+  try {
+    state.audit = await api("/api/check", {
+      method: "POST",
+      body: {
+        deck_id: state.deck.deck_id, client: state.client, semantic,
+        forbidden: $("forbidden").value, include_notes: $("notes").checked,
+        approved: state.approved, api_key: semantic ? $("apikey").value.trim() : null,
+      },
+    });
+  } catch (error) { $("check").disabled = false; return fail("checkbusy", error); }
+  $("check").disabled = false;
+  $("checkbusy").textContent = "";
+  renderResults();
+  show("s-results");
+  $("s-results").scrollIntoView({ behavior: "smooth" });
+};
+
+/* ---- 6. results ---- */
+
+function renderResults() {
+  const a = state.audit;
+  const s = a.summary;
+  $("counts").innerHTML =
+    (s.total === 0
+      ? `<span class="pill ok">no findings</span>`
+      : ["blocker", "major", "minor", "info"].filter((k) => s[k])
+          .map((k) => `<span class="pill ${k}">${s[k]} ${k}</span>`).join("")) +
+    ` <span class="foot">${a.slide_count} slides, ${a.rules_run.length} rules run` +
+    `${a.suppressed ? `, ${a.suppressed} accepted` : ""}</span>`;
+
+  const review = a.review;
+  $("reviewnote").innerHTML = !review ? "" : review.held
+    ? `<div class="warn bad"><strong>Nothing was sent.</strong> ${esc(review.detail || "")}</div>`
+    : `<div class="warn good">Content review: ${review.finding_count} finding(s) from
+       <code>${esc(review.model || "")}</code>, ${review.redactions.length} term(s) withheld,
+       ${review.characters.toLocaleString()} characters sent.
+       ${review.dropped?.length ? `${review.dropped.length} answer(s) discarded as unreadable.` : ""}
+       Semantic findings never affect the exit code.</div>`;
+
+  $("reportlink").href = `/api/report/${encodeURIComponent(state.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`;
+  renderSlideList();
+  const first = a.slides.find((s) => s.findings.length) || a.slides[0];
+  if (first) selectSlide(first.index);
+}
+
+function renderSlideList() {
+  const a = state.audit;
+  if (!a) return;
+  const thumbs = state.deck?.thumbnails?.available;
+  $("slidelist").innerHTML = a.slides.map((slide) => `
+    <div class="slidecard" data-slide="${slide.index}">
+      <div class="head">
+        <span class="n">Slide ${slide.index}${slide.hidden ? " · hidden" : ""}</span>
+        <span class="pill ${slide.worst || "none"}">${
+          slide.findings.length ? slide.findings.length : "clean"}</span>
+      </div>
+      <div class="t">${esc(slide.title || slide.archetype)}</div>
+      ${thumbs ? `<img loading="lazy" alt="slide ${slide.index}"
+        src="/api/thumbnails/${encodeURIComponent(state.deck.deck_id)}/${slide.index}?t=${encodeURIComponent(TOKEN)}">` : ""}
+    </div>`).join("");
+  $("slidelist").querySelectorAll(".slidecard").forEach((card) => {
+    card.onclick = () => selectSlide(Number(card.dataset.slide));
+  });
+}
+
+function selectSlide(index) {
+  const slide = state.audit.slides.find((s) => s.index === index);
+  if (!slide) return;
+  $("slidelist").querySelectorAll(".slidecard").forEach((card) => {
+    const selected = Number(card.dataset.slide) === index;
+    card.classList.toggle("active", selected);
+    // The first slide with findings is selected automatically, and it is often
+    // below the fold: without this the detail pane shows slide 11 while the
+    // list still reads slide 1.
+    if (selected) card.scrollIntoView({ block: "nearest" });
+  });
+
+  const image = state.deck?.thumbnails?.available
+    ? `<img alt="slide ${index}"
+        src="/api/thumbnails/${encodeURIComponent(state.deck.deck_id)}/${index}?t=${encodeURIComponent(TOKEN)}">`
+    : "";
+
+  const findings = slide.findings.length
+    ? slide.findings.map((f) => `
+      <div class="finding">
+        <div class="top">
+          <span class="pill ${f.severity}">${esc(f.severity)}</span>
+          ${f.category === "semantic" ? `<span class="pill semantic">semantic</span>` : ""}
+          <code>${esc(f.rule_id)}</code>
+          ${f.shape ? `<span class="foot">${esc(f.shape)}</span>` : ""}
+          ${f.confidence !== "high" ? `<span class="foot">${esc(f.confidence)} confidence</span>` : ""}
+        </div>
+        <p class="msg">${esc(f.message)}</p>
+        ${f.measured || f.expected ? `<div class="delta mono">${esc(f.measured || "")}${
+          f.expected ? ` → ${esc(f.expected)}` : ""}</div>` : ""}
+        ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+      </div>`).join("")
+    : `<div class="warn good">Nothing to report on this slide.</div>`;
+
+  const unchecked = slide.unchecked.length
+    ? `<p class="foot"><strong>Not checked here:</strong> ` +
+      slide.unchecked.map((u) => `<code>${esc(u.rule_id)}</code> — ${esc(u.reason)}`).join("; ") +
+      `</p>`
+    : "";
+
+  $("detail").innerHTML = `
+    <h3 style="margin:0 0 4px">Slide ${slide.index}
+      <span class="foot" style="font-weight:400">${esc(slide.archetype)}
+        (${esc(slide.archetype_confidence)} confidence)</span></h3>
+    <p class="foot" style="margin-top:0">${esc(slide.title || "")}</p>
+    ${image}
+    ${findings}
+    ${unchecked}`;
+}
+</script>

@@ -49,10 +49,16 @@ FORBIDDEN_MODULES = frozenset(
         "websockets",
         "paramiko",
         "pycurl",
-        # The optional review layer. It is a separate top-level package for
-        # exactly this reason: a core module importing it would make this walk a
+        # The optional layers. Both are separate top-level packages for exactly
+        # this reason: a core module importing either would make this walk a
         # statement about an import guard rather than about the code.
         "tieout_review",
+        "tieout_ui",
+        # What the UI layer is built on. Named here so that a core module
+        # reaching for a web framework is a test failure rather than a surprise.
+        "fastapi",
+        "starlette",
+        "uvicorn",
     }
 )
 

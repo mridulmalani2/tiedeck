@@ -21,10 +21,12 @@ import pytest
 
 import tieout
 import tieout_review
+import tieout_ui
 from tests.test_no_network import FORBIDDEN_MODULES
 
 _CORE = Path(tieout.__file__).parent
 _REVIEW = Path(tieout_review.__file__).parent
+_UI = Path(tieout_ui.__file__).parent
 
 #: The only module allowed to reach out, and the only one the tests below
 #: exempt. Keeping the transport this contained is what makes the claim
@@ -47,20 +49,118 @@ def _imports(path: Path) -> list[tuple[int, str]]:
     return out
 
 
-def test_the_review_package_is_outside_the_air_gapped_one():
+def test_the_optional_packages_are_outside_the_air_gapped_one():
     """Two top-level packages, not a subpackage.
 
     A subpackage would sit inside the walk's root and would have to be excluded
     from it by name, which is exactly the kind of exception that stops being
     noticed.
     """
-    assert _REVIEW != _CORE
-    assert _CORE not in _REVIEW.parents
+    for package in (_REVIEW, _UI):
+        assert package != _CORE
+        assert _CORE not in package.parents
 
 
-def test_the_air_gap_walk_treats_the_review_package_as_forbidden():
-    """So that a core module importing it is a test failure, not a review note."""
+def test_the_air_gap_walk_treats_both_optional_packages_as_forbidden():
+    """So that a core module importing one is a test failure, not a review note."""
     assert "tieout_review" in FORBIDDEN_MODULES
+    assert "tieout_ui" in FORBIDDEN_MODULES
+    assert "fastapi" in FORBIDDEN_MODULES
+
+
+@pytest.mark.parametrize("path", _modules(_CORE), ids=lambda p: p.name)
+def test_no_core_module_imports_the_ui_layer(path):
+    offenders = [
+        f"line {line}: {module}"
+        for line, module in _imports(path)
+        if module in ("tieout_ui", "fastapi", "starlette", "uvicorn")
+    ]
+    assert not offenders, f"{path.relative_to(_CORE)} imports the UI layer: {offenders}"
+
+
+@pytest.mark.parametrize("path", _modules(_UI), ids=lambda p: p.name)
+def test_the_ui_layer_reaches_the_network_only_through_the_review_transport(path):
+    """The UI serves a loopback socket, which is what a web framework is for.
+
+    What it must not do is talk to a third party itself: the only outbound call
+    in the whole repository stays in ``tieout_review.client``, reached through
+    one named seam.
+    """
+    allowed = {"fastapi", "starlette", "uvicorn", "tieout_review", "socket"}
+    if path.name == "cli.py":
+        # It opens a browser on the loopback URL it just bound. Covered by the
+        # test below, which pins the address it is allowed to open.
+        allowed.add("webbrowser")
+    offenders = [
+        f"line {line}: {module}"
+        for line, module in _imports(path)
+        if module in FORBIDDEN_MODULES - allowed - {"tieout_ui"}
+    ]
+    assert not offenders, f"{path.relative_to(_UI)} can reach out: {offenders}"
+
+
+def test_the_browser_is_only_ever_opened_on_a_loopback_address():
+    """The one ``webbrowser`` call in the repository. It must not be reachable
+    with anything but the address the server just bound, which the CLI has
+    already refused unless it is loopback."""
+    from tieout_ui.cli import _launch
+
+    opened: list[str] = []
+
+    class _FakeTimer:
+        def __init__(self, delay: float, function: object) -> None:
+            self._function = function
+
+        def start(self) -> None:
+            self._function()  # type: ignore[operator]
+
+    import threading
+    import webbrowser
+
+    from tieout_ui.server import is_loopback
+
+    def _record(url: str, *args: object, **kwargs: object) -> bool:
+        opened.append(url)
+        return True
+
+    real_timer, real_open = threading.Timer, webbrowser.open
+    threading.Timer = _FakeTimer  # type: ignore[misc, assignment]
+    webbrowser.open = _record
+    try:
+        _launch("http://127.0.0.1:8765/", "token-value")
+    finally:
+        threading.Timer = real_timer  # type: ignore[misc]
+        webbrowser.open = real_open
+
+    (url,) = opened
+    host = url.split("//", 1)[1].split(":", 1)[0]
+    assert is_loopback(host), url
+
+
+def test_the_ui_never_imports_the_sdk_itself():
+    """It goes through the review layer's transport or not at all."""
+    for path in _modules(_UI):
+        assert "anthropic" not in {module for _, module in _imports(path)}, path
+
+
+def test_the_served_page_has_no_external_references():
+    """The same promise the HTML report makes, for the same reason: the page has
+    a live deck open in it."""
+    from tieout_ui.server import PAGE
+
+    markup = PAGE.read_text(encoding="utf-8")
+    for forbidden in (
+        "http://",
+        "https://",
+        "//cdn",
+        "fonts.googleapis",
+        "fonts.gstatic",
+        "unpkg",
+        "jsdelivr",
+        "<script src",
+        "@import url",
+    ):
+        assert forbidden not in markup, f"the page references {forbidden!r}"
 
 
 @pytest.mark.parametrize("path", _modules(_CORE), ids=lambda p: p.name)
@@ -151,8 +251,8 @@ def test_the_transport_refuses_to_exist_without_a_key(monkeypatch):
 
 
 def test_the_key_is_not_written_to_a_profile_or_a_report():
-    """Searched for structurally: no module in either package writes a key out."""
-    for root in (_CORE, _REVIEW):
+    """Searched for structurally: no module in any package writes a key out."""
+    for root in (_CORE, _REVIEW, _UI):
         for path in _modules(root):
             source = path.read_text(encoding="utf-8")
             assert "ANTHROPIC_API_KEY" not in source or path.name == _TRANSPORT

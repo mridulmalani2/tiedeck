@@ -19,6 +19,7 @@ from typing import Annotated, Final
 import typer
 from rich.console import Console
 
+from tieout.learn import apply_answers
 from tieout.learn import learn as learn_profile
 from tieout.learn.emit import iter_provenance
 from tieout.learn.emit import write as write_profile
@@ -215,6 +216,8 @@ def _review(client: str, out: Path | None) -> None:
             "high",
         )
 
+    applied, recorded_only = apply_answers(profile)
+
     target = out or profile_path(client)
     write_profile(profile, target)
     _out.print()
@@ -222,6 +225,16 @@ def _review(client: str, out: Path | None) -> None:
         f"[bold green]Answered[/bold green] {len(outstanding)} question(s) and "
         f"locked their fields in {target}"
     )
+    if applied:
+        _out.print(f"  applied to: {', '.join(applied)}")
+    if recorded_only:
+        # Said plainly rather than implied. These answers are recorded and their
+        # fields locked, but folding them in needs the reference deck's evidence,
+        # which a review run does not have.
+        _out.print(
+            "  recorded and locked, but the field itself needs a re-learn or an "
+            "edit to the YAML: " + ", ".join(recorded_only)
+        )
 
 
 # --------------------------------------------------------------------------------------

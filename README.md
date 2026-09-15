@@ -40,6 +40,7 @@ outstanding. See [Optional: semantic review](#optional-semantic-review).
 - [The profile](#the-profile)
 - [The rule catalogue](#the-rule-catalogue)
 - [Optional: semantic review](#optional-semantic-review)
+- [Optional: the local UI](#optional-the-local-ui)
 - [Command reference](#command-reference)
 - [Known limitations](#known-limitations)
 - [Development](#development)
@@ -69,6 +70,15 @@ dependency, the Anthropic SDK:
 That puts `tieout-review` on the path as a second command. Install it and
 `tieout` is unchanged: it still has no way to reach a network, and the test that
 proves that treats the review package as a forbidden import.
+
+There is also a local web UI, likewise separate:
+
+```bash
+.venv/bin/python -m pip install -e ".[ui]"
+```
+
+It serves one page on `127.0.0.1` and refuses to bind anything else. See
+[Optional: the local UI](#optional-the-local-ui). Everything works without it.
 
 ---
 
@@ -687,6 +697,110 @@ enforced as a JSON schema rather than only asked for in the prompt.
 
 ---
 
+## Optional: the local UI
+
+```bash
+.venv/bin/python -m pip install -e ".[ui]"
+tieout-ui
+```
+
+That serves one page on `http://127.0.0.1:8765/` and opens it. Upload a deck,
+confirm what was derived from the client's reference material, optionally turn
+on content review, and read the findings slide by slide.
+
+### What it is, and is not
+
+It is a front end over the same functions the commands call — `learn`,
+`run_rules`, `prepare`, `send` — and it computes nothing of its own. That is the
+only way a second interface stays honest: a UI with its own idea of what a
+finding is would be a second tool to keep true. The profile it writes is the
+same `profiles/NAME.yaml` the CLI writes, for the same reason.
+
+It is not a service. It binds a loopback address and **refuses anything else**:
+
+```console
+$ tieout-ui --host 0.0.0.0
+error '0.0.0.0' is not a loopback address. This server has no authentication
+beyond a session token and holds live deck material; it will only bind an
+address reachable from this machine.
+```
+
+Enforced rather than defaulted, because "we default to localhost" is a weaker
+promise than "it will not bind anything else". Every API call carries a session
+token generated at startup, so another tab — or any other process that can
+reach 127.0.0.1 — cannot drive an audit or read your deck. The token is
+substituted into the document rather than passed in a link, and the page clears
+it out of the address bar on load so it does not sit in browser history.
+
+The page is one file with no external references at all: no CDN, no font
+service, nothing fetched when it renders. The `Content-Security-Policy` the
+server sends is `default-src 'none'` with `connect-src 'self'`, which enforces
+that rather than asserting it — the same promise the HTML report makes, and for
+the same reason. An uploaded deck lives in a temporary directory and is deleted
+when the server stops.
+
+### The six steps
+
+1. **Deck.** Drag a `.pptx` in. Nothing is uploaded anywhere; the file is copied
+   into a temporary directory on your machine.
+2. **House style.** Audit against a client already onboarded, or learn a new one
+   from this deck.
+3. **Confirm.** Every derived fact, with the evidence for it — the palette as
+   swatches, the size band per text role, the logo box per slide type, the safe
+   margins, the grid, the typographic conventions — plus any questions the
+   evidence did not settle. Untick anything that is not really a house rule.
+4. **Content review** (optional, off by default). A key field and a forbidden
+   words box, then **Show me what would be sent**: the redaction table, the
+   residual list, and the payload verbatim. Nothing is sent until you have read
+   the residuals and said so.
+5. **Run.**
+6. **Results.** A column of slides with a severity badge each; click one to see
+   its findings, with the measurement, the expectation and the provenance
+   behind the expectation. Plus a link to the same self-contained HTML report
+   `tieout check --format html` produces.
+
+### Editing is deliberately only dropping
+
+Step 3 lets you remove a derived fact. It does not let you retype one.
+
+Typing a value into a form is how you get a profile the client's own approved
+deck would fail, and then a tool that reports their reference material as
+wrong — which is the one failure this design cannot recover from, because
+everything downstream treats the profile as ground truth. Dropping is always
+safe: the rule that read the field stops running, and `not_learned` records
+that a person decided so, with the field locked so a later `learn --add` cannot
+quietly put it back. For anything else, edit the YAML; it is a document meant
+to be read and edited, and that is the supported path.
+
+### Slide images
+
+Thumbnails come from LibreOffice in headless mode, converted once to PDF and
+rasterised with pdfium. It is entirely optional: a machine without LibreOffice
+shows slide cards and a sentence saying why, and nothing about the audit
+changes. A core-only LibreOffice install (`libreoffice-core` with no
+`libreoffice-impress`) has no PowerPoint filter and fails the same way, which
+the message says explicitly because the error LibreOffice itself gives —
+"source file could not be loaded" — helps nobody.
+
+Rendering happens on a background thread, so the upload returns immediately and
+images appear when they are ready.
+
+**Stated plainly: the LibreOffice conversion is not exercised by the test suite
+or by CI**, because it is a subprocess call to an optional large dependency that
+neither environment has. What is tested is every way it can fail, the pdfium
+rasterisation half against a real PDF, and that the page degrades to cards. If
+you are relying on the thumbnails, check them once on your own machine.
+
+### The key
+
+Accepted in the form, held for the one request that uses it, and dropped with
+it. There is no field for it on any session object, it is never echoed in a
+response, never written under the session directory, and the page keeps no
+`localStorage`, `sessionStorage` or cookie of any kind. `tests/test_ui_server.py`
+asserts each of those separately.
+
+---
+
 ## Command reference
 
 ```
@@ -727,6 +841,14 @@ and exits `2` rather than proceeding. Its diagnostic summary goes to stderr, so
 
 Speaker notes are excluded from the payload unless `--include-notes` is passed.
 They are where the price and the walk-away number live.
+
+The local UI, also installed separately:
+
+```
+tieout-ui [--host 127.0.0.1] [--port 8765] [--open/--no-open]
+```
+
+`--host` accepts loopback addresses only and exits `2` on anything else.
 
 **Exit codes.** `0` nothing at or above `--fail-on`; `1` findings at or above it;
 `2` the run itself failed. A gate that cannot distinguish the last two will
@@ -860,8 +982,8 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 950 tests
-.venv/bin/python -m pytest --cov=tieout --cov=tieout_review   # floor 85%
+.venv/bin/python -m pytest              # 1,080 tests
+.venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
 ```
@@ -928,6 +1050,22 @@ except `client.py` may import anything network-capable, `redact.py` may import
 nothing but the standard library and `tieout`, and importing either package must
 not load the SDK.
 
+The UI is a third:
+
+```
+tieout_ui/
+  render.py    LibreOffice -> PDF -> PNG, degrading to nothing on every failure
+  session.py   uploaded decks, in memory and in a temp dir; never an API key
+  view.py      profile and audit -> JSON, as a pure function of the model
+  server.py    the routes, the token, the headers
+  static/      one HTML file with no external references
+  cli.py       tieout-ui, refusing any non-loopback bind
+```
+
+It may import a web framework, because serving a loopback socket is what one is
+for; it may not import the SDK, and reaches the model only through
+`tieout_review`'s single transport. That too is asserted rather than assumed.
+
 Rules read the resolved model and nothing else. If a rule needs something the
 model does not expose, the model gets extended — without that boundary every rule
 reimplements inheritance slightly differently and the tool quietly disagrees with
@@ -951,43 +1089,47 @@ Recorded for review rather than buried:
    walk is concerned. The deterministic consistency rules were built first
    specifically so that the questions a model gets asked are only the ones
    arithmetic cannot answer.
-3. **Five modules not in section 4's file list**: `model/color.py` (Delta-E is
+3. **A local web UI the specification does not mention.** Same shape as the
+   deviation above: a separate package, a separate install, a separate command,
+   and a forbidden import as far as the air-gap walk is concerned. It computes
+   nothing of its own and writes the same profile the CLI writes.
+4. **Five modules not in section 4's file list**: `model/color.py` (Delta-E is
    required throughout and needs a home), `model/furniture.py` (logo, footer and
    text-role identification, shared by the learner and the rules so the two
    cannot disagree), `cluster.py` and `text.py` (shared primitives the rules must
    reach without importing the learning engine), and `fixtures/spec.py` (the
    declarative specification the generator builds from, which section 11 requires
    as a file).
-4. **A ceiling on the palette tolerance.** Section 8.3 derives it as half the
+5. **A ceiling on the palette tolerance.** Section 8.3 derives it as half the
    minimum inter-cluster distance, floored at 2.0. With a well-separated
    four-colour palette that yields ~16 Delta-E, wide enough for a visibly wrong
    colour to pass, so a ceiling of 6.0 is applied and recorded in the profile's
    provenance.
-5. **LO-003 fires only against a learned grid line.** A literal "any two edges
+6. **LO-003 fires only against a learned grid line.** A literal "any two edges
    0.5–4pt apart" reading produces dozens of false positives per deck. Section 8.3
    resolves it — "a shape 3pt off a real grid line is a defect while a shape 3pt
    off a one-off edge is not" — and that is what is implemented.
-6. **Provenance is written twice**, as `why:` comments and as a generated
+7. **Provenance is written twice**, as `why:` comments and as a generated
    `provenance` block. The single-copy design was built first and abandoned: YAML
    attaches a leading comment to the preceding sibling key, so recovering notes
    from comments mis-assigned them across section boundaries and a finding about
    the grid cited the margin derivation.
-7. **Hygiene questions are conditional on evidence.** Section 8.4 lists four
+8. **Hygiene questions are conditional on evidence.** Section 8.4 lists four
    settings to ask about with a default; asked unconditionally they fire on every
    deck, and section 14's requirement that a clean reference deck produce zero
    questions would be unachievable. They are asked only where the deck shows
    contrary evidence.
-8. **`p:defaultTextStyle` added to the inheritance chain** between the master's
+9. **`p:defaultTextStyle` added to the inheritance chain** between the master's
    text styles and the theme. It is genuinely part of PowerPoint's resolution —
    a plain text box inherits from it — and omitting it resolved every text box to
    the theme default size.
-9. **Margins are clamped to the tightest observed edge.** The 5th percentile
+10. **Margins are clamped to the tightest observed edge.** The 5th percentile
    exists to tolerate shapes outside the content frame, but every shape it
    tolerates is one LO-002 would then report on the deck the margin was learned
    from. The clamp makes the profile unable to fail its own reference deck.
-10. **`rules.enabled` added to the profile.** Without an opt-in list a rule with
+11. **`rules.enabled` added to the profile.** Without an opt-in list a rule with
    `default_enabled = False` could never be switched on at all.
-11. **`Rule.run(deck, profile)` keeps the specified signature**, with furniture
+12. **`Rule.run(deck, profile)` keeps the specified signature**, with furniture
     reached through a memoised helper and `unchecked` collected from the rule
     instance, rather than changing the signature to pass a context object.
 

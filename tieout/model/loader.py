@@ -85,7 +85,19 @@ def load_deck(path: str | Path, *, classify: bool = True) -> DeckModel:
     if not path.exists():
         raise DeckLoadError(f"no such file: {path}")
 
-    package = load_package(path)
+    # Wrapped, like the Presentation() call below. DeckLoadError exists so a
+    # caller has one thing to catch; a truncated or non-zip file reaching this
+    # unwrapped meant `tieout check` printed a traceback instead of a sentence,
+    # and the local UI answered 500 to a mistaken drag-and-drop.
+    try:
+        package = load_package(path)
+    except DeckLoadError:
+        raise
+    except Exception as exc:
+        raise DeckLoadError(
+            f"cannot read {path.name} as a PowerPoint package: {exc}"
+        ) from exc
+
     try:
         presentation = Presentation(str(path))
     except Exception as exc:

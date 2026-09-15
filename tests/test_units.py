@@ -233,3 +233,30 @@ def test_transfer_functions_round_trip():
         assert colour.linear_to_srgb(colour.srgb_to_linear(value)) == pytest.approx(
             value, abs=1e-9
         )
+
+
+def test_a_corrupt_file_raises_the_declared_error_not_a_zip_error(tmp_path):
+    """``DeckLoadError`` exists so a caller has one thing to catch.
+
+    A truncated or non-zip file used to escape it as ``zipfile.BadZipFile``,
+    which meant ``tieout check`` printed a traceback rather than a sentence, and
+    anything embedding the loader had to guess at the exception surface.
+    """
+    import pytest
+
+    from tieout.model.loader import DeckLoadError, load_deck
+
+    path = tmp_path / "truncated.pptx"
+    path.write_bytes(b"PK\x03\x04 not really a zip")
+    with pytest.raises(DeckLoadError) as excinfo:
+        load_deck(path)
+    assert "truncated.pptx" in str(excinfo.value)
+
+
+def test_a_missing_file_raises_the_same_error(tmp_path):
+    import pytest
+
+    from tieout.model.loader import DeckLoadError, load_deck
+
+    with pytest.raises(DeckLoadError):
+        load_deck(tmp_path / "absent.pptx")

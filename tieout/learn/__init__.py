@@ -251,6 +251,45 @@ def _downgrade_defaulted_answers(profile: Profile, interview: InterviewResult) -
         profile.set_provenance(question.field_path, note, "medium")
 
 
+def apply_answers(profile: Profile) -> tuple[list[str], list[str]]:
+    """Fold answered questions back into the profile's fields.
+
+    Returns ``(applied, recorded_only)`` as lists of field paths.
+
+    Answering a question used to update only the question record: the answer,
+    the lock and the provenance note were written, and the field the question
+    was about kept the derived default. A profile could therefore say
+    ``allow_speaker_notes: false`` directly under a note claiming the user had
+    answered "yes, allow them", which is worse than not asking.
+
+    Only the hygiene answers can be applied from the profile alone, because
+    their mapping is a pure function of the answer text. The rest — a palette
+    outlier, a logo variant, a terminology choice — are applied inside the
+    derivers against evidence this function does not have, so they are reported
+    as recorded-only rather than silently claimed. They are locked, so a
+    re-learn will not overwrite the decision, and the field can be edited in the
+    YAML directly, which is what the profile is for.
+    """
+    answers = {
+        question.id: question.answer
+        for question in profile.questions
+        if question.answered and question.answer is not None
+    }
+    resolved = apply_hygiene_answers(answers)
+
+    applied: list[str] = []
+    for path, value in resolved.items():
+        _set_path(profile, path, value)
+        applied.append(path)
+
+    recorded_only = [
+        question.field_path
+        for question in profile.questions
+        if question.answered and question.field_path not in resolved
+    ]
+    return sorted(applied), sorted(set(recorded_only))
+
+
 def _set_path(profile: Profile, path: str, value: object) -> None:
     parts = path.split(".")
     target: object = profile

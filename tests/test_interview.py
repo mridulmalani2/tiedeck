@@ -231,3 +231,109 @@ def test_the_metadata_answer_is_inverted_because_the_question_is():
 
 def test_unanswered_hygiene_questions_change_nothing():
     assert apply_hygiene_answers({}) == {}
+
+
+# --------------------------------------------------------------------------- #
+# Answers have to reach the field they are about
+# --------------------------------------------------------------------------- #
+
+
+def test_an_answered_hygiene_question_changes_the_field():
+    """Recording the answer without applying it is worse than not asking.
+
+    A profile could say ``allow_speaker_notes: false`` directly under a `why:`
+    note claiming the user answered "yes, allow them", which contradicts itself
+    in writing.
+    """
+    from tieout.learn import apply_answers
+    from tieout.profile.schema import DeferredQuestion, Profile, SlideProfile
+
+    profile = Profile(
+        client="acme",
+        slide=SlideProfile(width_pt=960.0, height_pt=540.0),
+        questions=[
+            DeferredQuestion(
+                id="hygiene-notes",
+                field_path="hygiene.allow_speaker_notes",
+                question="are notes acceptable?",
+                options=["no, flag them", "yes, allow them"],
+                default="no, flag them",
+                answered=True,
+                answer="yes, allow them",
+            )
+        ],
+    )
+    before = profile.hygiene.allow_speaker_notes
+    assert before is False
+
+    applied, recorded_only = apply_answers(profile)
+
+    after = profile.hygiene.allow_speaker_notes
+    assert after is True
+    assert applied == ["hygiene.allow_speaker_notes"]
+    assert recorded_only == []
+
+
+def test_a_conservative_answer_leaves_the_field_alone():
+    from tieout.learn import apply_answers
+    from tieout.profile.schema import DeferredQuestion, Profile, SlideProfile
+
+    profile = Profile(
+        client="acme",
+        slide=SlideProfile(width_pt=960.0, height_pt=540.0),
+        questions=[
+            DeferredQuestion(
+                id="hygiene-hidden",
+                field_path="hygiene.allow_hidden_slides",
+                question="are hidden slides acceptable?",
+                answered=True,
+                answer="no, flag them",
+            )
+        ],
+    )
+    apply_answers(profile)
+    assert profile.hygiene.allow_hidden_slides is False
+
+
+def test_an_answer_that_cannot_be_applied_is_reported_rather_than_claimed():
+    """A palette or terminology answer is folded in by the deriver against
+    evidence a review run does not have. Saying so is the honest outcome."""
+    from tieout.learn import apply_answers
+    from tieout.profile.schema import DeferredQuestion, Profile, SlideProfile
+
+    profile = Profile(
+        client="acme",
+        slide=SlideProfile(width_pt=960.0, height_pt=540.0),
+        questions=[
+            DeferredQuestion(
+                id="palette-outlier-1",
+                field_path="brand.palette_hex",
+                question="include the fifth colour?",
+                answered=True,
+                answer="yes, include it",
+            )
+        ],
+    )
+    applied, recorded_only = apply_answers(profile)
+    assert applied == []
+    assert recorded_only == ["brand.palette_hex"]
+
+
+def test_an_unanswered_question_changes_nothing():
+    from tieout.learn import apply_answers
+    from tieout.profile.schema import DeferredQuestion, Profile, SlideProfile
+
+    profile = Profile(
+        client="acme",
+        slide=SlideProfile(width_pt=960.0, height_pt=540.0),
+        questions=[
+            DeferredQuestion(
+                id="hygiene-notes",
+                field_path="hygiene.allow_speaker_notes",
+                question="are notes acceptable?",
+                default="no, flag them",
+            )
+        ],
+    )
+    assert apply_answers(profile) == ([], [])
+    assert profile.hygiene.allow_speaker_notes is False
