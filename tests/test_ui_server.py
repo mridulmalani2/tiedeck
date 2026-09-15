@@ -652,3 +652,111 @@ def test_running_the_ui_without_its_extra_names_the_extra(monkeypatch):
     assert result.exit_code == EXIT_ERROR
     assert "tieout[ui]" in result.output
     assert "unaffected" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# Dropping a fact, per field kind
+# --------------------------------------------------------------------------- #
+
+
+def test_dropping_a_required_scalar_resets_it_rather_than_crashing(
+    client, onboarded, tmp_path
+):
+    """The schema validates on assignment, so writing None to a required field
+    raised a ValidationError out of the handler — a 500 where the UI had invited
+    the click. A tolerance is a parameter, not a claim about the client, so
+    dropping it means going back to the default."""
+    from tieout.profile.schema import BrandProfile
+
+    default = BrandProfile().palette_tolerance_delta_e
+    response = client.post(
+        "/api/confirm",
+        json={"client": "demo", "dropped": ["brand.palette_tolerance_delta_e"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["dropped"] == ["brand.palette_tolerance_delta_e"]
+
+    from tieout.profile.loader import load
+
+    profile = load(tmp_path / "profiles" / "demo.yaml")
+    assert profile.brand.palette_tolerance_delta_e == default
+
+
+def test_dropping_an_optional_field_clears_it(client, onboarded, tmp_path):
+    from tieout.profile.loader import load
+
+    client.post("/api/confirm", json={"client": "demo", "dropped": ["typography.quotes"]})
+    assert load(tmp_path / "profiles" / "demo.yaml").typography.quotes is None
+
+
+def test_a_required_field_with_no_default_cannot_be_dropped(client, onboarded, tmp_path):
+    """Refused rather than raised, and the profile is left loadable."""
+    from tieout.profile.loader import load
+
+    response = client.post(
+        "/api/confirm", json={"client": "demo", "dropped": ["slide.width_pt"]}
+    )
+    assert response.status_code == 200
+    assert response.json()["dropped"] == []
+    assert load(tmp_path / "profiles" / "demo.yaml").slide.width_pt > 0
+
+
+def test_the_view_says_which_facts_can_be_dropped(onboarded):
+    """So the page only offers the control where it means something. A checkbox
+    that does nothing is worse than no checkbox."""
+    facts = [fact for group in onboarded["groups"] for fact in group["facts"]]
+    assert facts
+    assert all("droppable" in fact for fact in facts)
+    assert any(fact["droppable"] for fact in facts)
+
+
+def test_droppability_is_a_dry_run_and_does_not_mutate(reference_profile):
+    """`can_clear` works on a copy; asking must not answer by doing."""
+    from tieout_ui.edit import can_clear
+
+    before = list(reference_profile.brand.palette_hex)
+    assert can_clear(reference_profile, "brand.palette_hex")
+    assert reference_profile.brand.palette_hex == before
+
+
+# --------------------------------------------------------------------------- #
+# Two decks at once
+# --------------------------------------------------------------------------- #
+
+
+def test_each_deck_keeps_its_own_report(client, onboarded, uploaded, dirty_path):
+    """The report used to live in one slot on the app, so checking a second deck
+    made the first one's report link answer 404."""
+    second = client.post(
+        "/api/decks", files={"file": (dirty_path.name, dirty_path.read_bytes(), _MIME)}
+    ).json()
+    for deck_id in (uploaded["deck_id"], second["deck_id"]):
+        assert (
+            client.post("/api/check", json={"deck_id": deck_id, "client": "demo"}).status_code
+            == 200
+        )
+    first = client.get(f"/api/report/{uploaded['deck_id']}")
+    other = client.get(f"/api/report/{second['deck_id']}")
+    assert first.status_code == 200
+    assert other.status_code == 200
+    assert first.text != other.text
+
+
+# --------------------------------------------------------------------------- #
+# The page
+# --------------------------------------------------------------------------- #
+
+
+def test_the_page_hides_hidden_elements(client):
+    """A ribbon group sets display:flex, which beats the browser's own rule for
+    [hidden] — so the API key field showed with content review switched off,
+    which is exactly the wrong affordance and invisible in a diff."""
+    assert "[hidden] { display: none !important; }" in client.get("/").text
+
+
+def test_the_page_presents_findings_as_a_note_not_as_cards(client):
+    """The layout is the feature: bankers read decks in PowerPoint, and a review
+    note in a task pane is the idiom they already use for marked-up slides."""
+    page = client.get("/").text
+    for expected in ("Review note", "plainNote", "slide-head", "class=\"item\""):
+        assert expected in page, expected

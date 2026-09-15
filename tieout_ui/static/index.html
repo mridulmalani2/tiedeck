@@ -2,243 +2,407 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TieOut</title>
-<!--
-  An empty data URI rather than an icon file. Without it the browser requests
-  /favicon.ico, the server answers 404, and the console carries an error on
-  every load — which is exactly the noise that makes a real error invisible.
--->
 <link rel="icon" href="data:,">
 <!--
   One file, no build step, no dependencies. Every byte the browser loads comes
-  from this server: the Content-Security-Policy the server sets forbids every
-  external origin, which is the same promise the HTML report makes and for the
-  same reason. A deck open in this page is live client material.
+  from this server: the Content-Security-Policy forbids every external origin,
+  the same promise the HTML report makes and for the same reason. A deck open in
+  this page is live client material.
+
+  The chrome deliberately borrows PowerPoint's: a ribbon of tabs, a slide rail
+  on the left, the slide on a neutral canvas, and a task pane on the right. That
+  is not decoration. The people using this spend their day in PowerPoint, and
+  findings about a deck are easiest to act on in the layout they already read
+  decks in — which is also why the findings are a review note in the task pane
+  rather than a wall of cards.
 -->
 <style>
+  /* Office's own neutral ramp and PowerPoint's accent, so the window reads as
+     part of the same toolchain rather than as a web app about PowerPoint. */
   :root {
-    --ink: #16181d; --muted: #6b7280; --line: #e3e5ea; --bg: #fbfbfc;
-    --card: #ffffff; --accent: #1f3a8a; --blocker: #b4232a; --major: #b06a12;
-    --minor: #4a6fa5; --info: #6b7280; --ok: #1a7f43; --semantic: #6d3f9e;
+    --accent: #b7472a; --accent-dark: #8c3520; --accent-wash: #fdf5f3;
+    --ink: #201f1e; --ink-2: #484644; --ink-3: #797775;
+    --chrome: #f3f2f1; --chrome-2: #edebe9; --line: #e1dfdd; --line-2: #d2d0ce;
+    --surface: #ffffff; --canvas: #a19f9d;
+    --blocker: #a4262c; --major: #c07206; --minor: #486991; --info: #797775;
+    --semantic: #6b2d90; --ok: #107c10;
+    --rail: 214px; --pane: 384px;
+    --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
+  /* A ribbon group sets display:flex, which beats the browser's own rule for
+     [hidden] — so the API key field showed with content review switched off,
+     which is exactly the wrong affordance. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0; font: 14px/1.45 var(--font); color: var(--ink);
+    background: var(--chrome); display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--card);
-    display: flex; align-items: baseline; gap: 14px; position: sticky; top: 0; z-index: 10;
+
+  /* ---- title bar ---- */
+  .titlebar {
+    background: var(--accent); color: #fff; height: 46px; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 14px; padding: 0 16px;
   }
-  header h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
-  header .note { color: var(--muted); font-size: 13px; }
-  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px 96px; }
-  section {
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 20px 22px; margin-bottom: 18px;
+  .titlebar .app { font-weight: 600; font-size: 14.5px; letter-spacing: .01em; }
+  .titlebar .doc {
+    font-size: 13px; opacity: .92; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  section[hidden] { display: none; }
-  section > h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
-    color: var(--muted); margin: 0 0 4px;
+  .titlebar .spacer { flex: 1 1 auto; }
+  .titlebar .badge {
+    font-size: 11.5px; background: rgba(255,255,255,.16); padding: 3px 9px;
+    border-radius: 3px; white-space: nowrap;
   }
-  section > h2 .step { color: var(--accent); font-weight: 700; }
-  section > p.lede { margin: 0 0 16px; color: var(--muted); font-size: 13.5px; }
-  button {
-    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 7px;
-    border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+
+  /* ---- ribbon ---- */
+  .tabs {
+    background: var(--accent); display: flex; gap: 2px; padding: 0 12px;
+    flex: 0 0 auto;
   }
-  button.secondary { background: var(--card); color: var(--accent); }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .tabs button {
+    background: none; border: 0; color: #fff; font: inherit; font-size: 13px;
+    padding: 7px 16px; cursor: pointer; border-radius: 3px 3px 0 0; opacity: .85;
+  }
+  .tabs button:hover:not(:disabled) { background: rgba(255,255,255,.14); opacity: 1; }
+  .tabs button[aria-selected="true"] {
+    background: var(--chrome); color: var(--ink); opacity: 1; font-weight: 600;
+  }
+  .tabs button:disabled { opacity: .45; cursor: default; }
+
+  .ribbon {
+    background: var(--chrome); border-bottom: 1px solid var(--line);
+    padding: 10px 14px; flex: 0 0 auto; display: flex; gap: 0;
+    align-items: stretch; overflow-x: auto; min-height: 92px;
+  }
+  .ribbon > .panel { display: none; gap: 0; align-items: stretch; }
+  .ribbon > .panel[data-active] { display: flex; }
+  .grp {
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 0 14px; border-right: 1px solid var(--line-2); min-width: 0;
+  }
+  .grp:last-child { border-right: 0; }
+  .grp > .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .grp > .name {
+    font-size: 11px; color: var(--ink-3); text-align: center; padding-top: 6px;
+    white-space: nowrap;
+  }
+
+  button.big, button.small {
+    font: inherit; cursor: pointer; border-radius: 3px; border: 1px solid transparent;
+    background: none; color: var(--ink);
+  }
+  button.big {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px 12px; font-size: 12px; min-width: 66px;
+  }
+  button.big .ico { font-size: 20px; line-height: 1; }
+  button.small { padding: 5px 11px; font-size: 13px; border-color: var(--line-2); background: var(--surface); }
+  button.big:hover:not(:disabled), button.small:hover:not(:disabled) {
+    background: var(--chrome-2); border-color: var(--line-2);
+  }
+  button.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+  button:disabled { opacity: .4; cursor: default; }
+
   input[type=text], input[type=password], select, textarea {
-    font: inherit; padding: 8px 10px; border: 1px solid var(--line);
-    border-radius: 7px; background: var(--card); color: var(--ink); width: 100%;
+    font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line-2);
+    border-radius: 2px; background: var(--surface); color: var(--ink); min-width: 150px;
   }
-  textarea { min-height: 72px; resize: vertical; font-size: 14px; }
-  label.field { display: block; margin-bottom: 12px; }
-  label.field > span { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
-  label.field > small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
-  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
-  .row > * { flex: 1 1 240px; }
-  .row > .shrink { flex: 0 0 auto; }
-  .drop {
-    border: 2px dashed var(--line); border-radius: 10px; padding: 26px;
-    text-align: center; color: var(--muted); cursor: pointer;
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { min-height: 46px; resize: vertical; width: 260px; }
+  label.inline { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+  label.stack { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ink-3); }
+
+  /* ---- body: rail | canvas | pane ---- */
+  .body { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  .rail {
+    flex: 0 0 var(--rail); background: var(--surface);
+    border-right: 1px solid var(--line); overflow-y: auto; padding: 10px 8px;
   }
-  .drop.over { border-color: var(--accent); color: var(--accent); }
-  .pill {
-    display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 7px;
-    border-radius: 5px; text-transform: uppercase; letter-spacing: 0.04em; color: #fff;
+  .rail:empty { display: none; }
+  .thumb { display: flex; gap: 7px; margin-bottom: 8px; cursor: pointer; }
+  .thumb .n { font-size: 11px; color: var(--ink-3); width: 17px; text-align: right; padding-top: 2px; flex: 0 0 auto; }
+  .thumb .box {
+    flex: 1 1 auto; aspect-ratio: 16/9; background: var(--surface);
+    border: 1px solid var(--line-2); position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
   }
-  .pill.blocker { background: var(--blocker); }
-  .pill.major { background: var(--major); }
-  .pill.minor { background: var(--minor); }
-  .pill.info, .pill.none { background: var(--info); }
-  .pill.semantic { background: var(--semantic); }
-  .pill.ok { background: var(--ok); }
-  .group { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
-  .group:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
-  .group h3 { font-size: 14px; margin: 0 0 10px; }
-  .fact { display: flex; gap: 12px; padding: 7px 0; align-items: flex-start; }
-  .fact input { margin-top: 4px; flex: 0 0 auto; }
-  .fact .body { flex: 1 1 auto; min-width: 0; }
-  .fact .label { font-size: 13.5px; font-weight: 600; }
-  .fact .value { font-size: 13.5px; }
-  .fact .why { color: var(--muted); font-size: 12.5px; }
-  .fact.off .body { opacity: 0.45; text-decoration: line-through; }
-  .swatches { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
-  .swatch {
-    width: 58px; height: 34px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.15);
-    font-size: 9.5px; display: flex; align-items: flex-end; justify-content: center;
-    color: rgba(0,0,0,0.55); padding-bottom: 2px; font-family: ui-monospace, monospace;
+  .thumb .box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb .box .stub {
+    font-size: 9.5px; color: var(--ink-3); padding: 5px; text-align: center;
+    line-height: 1.25; max-height: 100%; overflow: hidden;
   }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 10px 6px 0; vertical-align: top; }
-  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-  tbody tr { border-top: 1px solid var(--line); }
-  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .thumb[aria-current="true"] .box { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-wash); }
+  .thumb[aria-current="true"] .n { color: var(--accent); font-weight: 700; }
+  .thumb .tally {
+    position: absolute; top: 3px; right: 3px; font-size: 10px; font-weight: 700;
+    color: #fff; border-radius: 9px; min-width: 17px; height: 17px; padding: 0 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .b-blocker { background: var(--blocker); } .b-major { background: var(--major); }
+  .b-minor { background: var(--minor); } .b-info { background: var(--info); }
+  .b-ok { background: var(--ok); }
+
+  .canvas {
+    flex: 1 1 auto; background: var(--canvas); overflow: auto; padding: 24px;
+    display: flex; align-items: flex-start; justify-content: center; min-width: 0;
+  }
+  .slide {
+    width: 100%; max-width: 860px; aspect-ratio: 16/9; background: var(--surface);
+    box-shadow: 0 2px 10px rgba(0,0,0,.28); display: flex; align-items: center;
+    justify-content: center; position: relative;
+  }
+  .slide img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .slide .placeholder { text-align: center; color: var(--ink-3); padding: 34px; max-width: 560px; }
+  .slide .placeholder h2 { font-size: 19px; color: var(--ink); margin: 0 0 8px; font-weight: 600; }
+  .slide .placeholder p { font-size: 12.5px; margin: 0; }
+
+  .pane {
+    flex: 0 0 var(--pane); background: var(--surface); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .pane > header {
+    padding: 11px 16px 9px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .pane > header h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  .pane > header .sub { font-size: 11.5px; color: var(--ink-3); }
+  .pane > .scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 0 26px; }
+
+  /* ---- the review note ---- */
+  .note-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  .note-head .line { font-size: 12px; color: var(--ink-2); }
+  .note-head .line + .line { margin-top: 2px; }
+  .note-head b { color: var(--ink); }
+  .tallies { display: flex; gap: 12px; margin-top: 9px; font-size: 11.5px; }
+  .tallies span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); }
+  .tallies i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .slide-head {
+    padding: 13px 16px 5px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-top: 1px solid var(--line); margin-top: 2px;
+  }
+  .slide-head:first-child { border-top: 0; }
+  .slide-head .title { display: block; text-transform: none; letter-spacing: 0;
+    font-weight: 400; font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+
+  /* A finding reads as a margin note: a rule of colour, the point in prose,
+     then the measurement subordinated beneath it. No boxes. */
+  .item {
+    display: grid; grid-template-columns: 3px 1fr; gap: 0 11px;
+    padding: 9px 16px 10px; cursor: default;
+  }
+  .item:hover { background: #faf9f8; }
+  .item .bar { border-radius: 2px; }
+  .item .n { font: 600 11px var(--mono); color: var(--ink-3); }
+  .item .say { font-size: 13.5px; margin: 1px 0 0; }
+  .item .ev {
+    font: 11.5px var(--mono); color: var(--ink-2); margin-top: 4px;
+    word-break: break-word;
+  }
+  .item .ev .arrow { color: var(--ink-3); }
+  .item .why { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+  .item .meta { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 1px; }
+  .item .tag {
+    font: 600 10px/1 var(--font); letter-spacing: .05em; text-transform: uppercase;
+    padding: 3px 5px; border-radius: 2px; color: #fff;
+  }
+  .item .shape { font-size: 11.5px; color: var(--ink-3); }
+
+  .empty { padding: 26px 16px; color: var(--ink-3); font-size: 13px; text-align: center; }
+  .empty strong { display: block; color: var(--ok); font-size: 14px; margin-bottom: 4px; }
+
+  /* ---- pane content: forms, tables, prose ---- */
+  .block { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .block h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 4px; }
+  .block p { font-size: 12.5px; color: var(--ink-2); margin: 0 0 10px; }
+  .block p:last-child { margin-bottom: 0; }
+  .block label.stack { margin-bottom: 10px; width: 100%; }
+  .block label.stack input, .block label.stack textarea, .block label.stack select { width: 100%; }
+
+  .fact {
+    display: grid; grid-template-columns: 16px 1fr; gap: 0 9px; padding: 7px 16px;
+    align-items: start;
+  }
+  .fact input { margin: 2px 0 0; }
+  .fact .k { font-size: 12.5px; font-weight: 600; }
+  .fact .v { font-size: 12.5px; color: var(--ink-2); }
+  .fact .why { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .fact.off .k, .fact.off .v { opacity: .4; text-decoration: line-through; }
+  .fact .fixed { font-size: 10.5px; color: var(--ink-3); }
+  .sw { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+  .sw figure { margin: 0; text-align: center; }
+  .sw i {
+    display: block; width: 50px; height: 24px; border: 1px solid var(--line-2);
+    border-radius: 2px;
+  }
+  .sw figcaption { font: 9.5px var(--mono); color: var(--ink-3); margin-top: 2px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--ink-3); padding: 0 8px 4px 0; font-weight: 600; }
+  td { padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
+  td.mono, .mono { font-family: var(--mono); }
+
   pre.payload {
-    max-height: 340px; overflow: auto; background: #f5f6f8; border: 1px solid var(--line);
-    border-radius: 7px; padding: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+    margin: 8px 0 0; max-height: 220px; overflow: auto; background: var(--chrome);
+    border: 1px solid var(--line); padding: 9px; font: 11px/1.5 var(--mono);
+    white-space: pre-wrap; word-break: break-word;
   }
-  .warn {
-    background: #fff8e8; border: 1px solid #f0d9a6; border-radius: 7px;
-    padding: 12px 14px; font-size: 13.5px; margin: 12px 0;
+  .msg { font-size: 12.5px; padding: 9px 11px; border-left: 3px solid; margin: 10px 0 0; }
+  .msg.warn { background: #fff9f0; border-color: var(--major); }
+  .msg.bad { background: #fdf3f4; border-color: var(--blocker); }
+  .msg.good { background: #f3f9f3; border-color: var(--ok); }
+  .drop {
+    border: 1px dashed var(--line-2); padding: 20px; text-align: center;
+    color: var(--ink-3); font-size: 12.5px; cursor: pointer; background: var(--chrome);
   }
-  .bad { background: #fdf0f0; border-color: #eec4c4; }
-  .good { background: #f0f8f2; border-color: #c2e0cc; }
-  .slides { display: grid; grid-template-columns: 250px 1fr; gap: 20px; }
-  .slidelist { max-height: 70vh; overflow-y: auto; padding-right: 6px; }
-  .slidecard {
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
-    margin-bottom: 8px; cursor: pointer; background: var(--card);
+  .drop.over { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+
+  /* ---- status bar ---- */
+  .status {
+    flex: 0 0 auto; background: var(--accent); color: #fff; font-size: 12px;
+    padding: 4px 16px; display: flex; gap: 18px; align-items: center;
   }
-  .slidecard.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(31,58,138,0.12); }
-  .slidecard .head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-  .slidecard .n { font-size: 12px; color: var(--muted); font-weight: 700; }
-  .slidecard .t { font-size: 12.5px; margin-top: 3px; }
-  .slidecard img { width: 100%; border-radius: 4px; border: 1px solid var(--line); margin-top: 6px; }
-  .detail img { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; }
-  .finding { border-top: 1px solid var(--line); padding: 12px 0; }
-  .finding:first-child { border-top: 0; }
-  .finding .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .finding .msg { margin: 5px 0 0; font-size: 14px; }
-  .finding .delta { font-size: 13px; color: var(--ink); margin-top: 3px; }
-  .finding .why { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-  .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
-  .busy { color: var(--muted); font-size: 13px; }
-  .foot { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
-  @media (max-width: 720px) { .slides { grid-template-columns: 1fr; } }
+  .status .spacer { flex: 1 1 auto; }
+  .status a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+  .status .busy::after { content: "…"; }
+
+  @media (max-width: 1100px) { :root { --pane: 320px; --rail: 168px; } }
+  @media (max-width: 860px) {
+    .body { flex-direction: column; }
+    .rail { flex: 0 0 auto; display: flex; overflow-x: auto; }
+    .thumb { flex: 0 0 132px; flex-direction: column; }
+    .pane { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line); }
+  }
 </style>
 
-<header>
-  <h1>TieOut</h1>
-  <span class="note" id="hdr">Local only &middot; nothing leaves this machine unless you turn on content review</span>
-</header>
+<div class="titlebar">
+  <span class="app">TieOut</span>
+  <span class="doc" id="doc">No deck open</span>
+  <span class="spacer"></span>
+  <span class="badge" id="guarantee">Offline &middot; nothing leaves this machine</span>
+</div>
 
-<main>
-  <!-- 1. deck -->
-  <section id="s-deck">
-    <h2><span class="step">1</span> &nbsp;Deck</h2>
-    <p class="lede">The deck to audit. Nothing is uploaded anywhere: the file is copied into a
-      temporary directory on this machine and deleted when the server stops.</p>
-    <div class="drop" id="drop">
-      Drop a <code>.pptx</code> here, or click to choose
-      <input type="file" id="file" accept=".pptx,.potx,.ppsx" hidden>
+<nav class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="deck">Deck</button>
+  <button role="tab" aria-selected="false" data-tab="style" id="tab-style" disabled>House style</button>
+  <button role="tab" aria-selected="false" data-tab="review" id="tab-review" disabled>Review</button>
+</nav>
+
+<div class="ribbon">
+  <div class="panel" data-tab="deck" data-active>
+    <div class="grp">
+      <div class="row">
+        <button class="big" id="open"><span class="ico">&#128194;</span>Open deck</button>
+      </div>
+      <div class="name">File</div>
     </div>
-    <div id="deckinfo" class="foot"></div>
-  </section>
-
-  <!-- 2. profile -->
-  <section id="s-profile" hidden>
-    <h2><span class="step">2</span> &nbsp;House style</h2>
-    <p class="lede">Audit against a client already onboarded, or learn a new one from this deck.
-      Learning from the deck you are about to audit tells you nothing — use a deck the client
-      has already approved.</p>
-    <div class="row">
-      <label class="field">
-        <span>Existing client</span>
-        <select id="client"></select>
-      </label>
-      <div class="shrink"><button id="useclient" class="secondary">Use this profile</button></div>
+    <div class="grp">
+      <div class="row">
+        <label class="stack">Existing client
+          <select id="client"></select>
+        </label>
+        <button class="small" id="useclient" disabled>Use profile</button>
+      </div>
+      <div class="name">Audit against</div>
     </div>
-    <div class="row">
-      <label class="field">
-        <span>Or learn a new client from the deck above</span>
-        <input type="text" id="newclient" placeholder="e.g. acme" autocomplete="off">
-      </label>
-      <div class="shrink"><button id="learn">Learn</button></div>
+    <div class="grp">
+      <div class="row">
+        <label class="stack">Learn a new client from this deck
+          <input type="text" id="newclient" placeholder="e.g. acme" autocomplete="off">
+        </label>
+        <button class="small" id="learn">Learn</button>
+      </div>
+      <div class="name">Onboard</div>
     </div>
-    <div id="learnbusy" class="busy"></div>
-  </section>
+  </div>
 
-  <!-- 3. confirm -->
-  <section id="s-confirm" hidden>
-    <h2><span class="step">3</span> &nbsp;Confirm what was derived</h2>
-    <p class="lede">Every line below was measured from the reference deck, with the evidence for
-      it. Untick anything that is not actually a house rule: the rule that reads it stops running
-      and the profile records that you decided so. Values are not editable here on purpose —
-      typing a number a deck does not support is how you get a client whose own approved deck
-      is reported as wrong. Edit the YAML for that.</p>
-    <div id="questions"></div>
-    <div id="facts"></div>
-    <div id="notlearned" class="foot"></div>
-    <p><button id="confirm">Save and continue</button>
-       <button id="skipconfirm" class="secondary">Continue without changes</button></p>
-  </section>
-
-  <!-- 4. review -->
-  <section id="s-review" hidden>
-    <h2><span class="step">4</span> &nbsp;Content review <span style="text-transform:none;letter-spacing:0">(optional)</span></h2>
-    <p class="lede">Off by default, and TieOut needs no key or network without it. Turned on, the
-      deck's text is sent to a language model to catch what arithmetic cannot — a headline that
-      contradicts its own table. Every name is replaced first, and you see exactly what would be
-      sent before anything is.</p>
-    <label class="field" style="display:flex;gap:9px;align-items:center">
-      <input type="checkbox" id="semantic" style="width:auto;margin:0">
-      <span style="margin:0">Enable content review</span>
-    </label>
-    <div id="semanticfields" hidden>
-      <label class="field">
-        <span>API key</span>
-        <input type="password" id="apikey" placeholder="sk-ant-..." autocomplete="off">
-        <small>Held for the one request that uses it. Never written to the profile, a report,
-          a log or this page's storage.</small>
-      </label>
-      <label class="field">
-        <span>Forbidden words</span>
-        <textarea id="forbidden" placeholder="Meridian Capital, Project Atlas, Jane Okafor"></textarea>
-        <small>Comma-separated. These are redacted on top of the client name, the learned
-          vocabulary, the document metadata and the built-in detectors. A name made only of
-          ordinary English words — "Northern Trust" — can only be caught here.</small>
-      </label>
-      <label class="field" style="display:flex;gap:9px;align-items:center">
-        <input type="checkbox" id="notes" style="width:auto;margin:0">
-        <span style="margin:0">Include speaker notes</span>
-      </label>
-      <p><button id="preview" class="secondary">Show me what would be sent</button></p>
-      <div id="plan"></div>
+  <div class="panel" data-tab="style">
+    <div class="grp">
+      <div class="row">
+        <button class="big" id="save"><span class="ico">&#10003;</span>Save changes</button>
+        <button class="big" id="revert"><span class="ico">&#8635;</span>Reload</button>
+      </div>
+      <div class="name">Profile</div>
     </div>
-  </section>
-
-  <!-- 5. run -->
-  <section id="s-run" hidden>
-    <h2><span class="step">5</span> &nbsp;Run</h2>
-    <p><button id="check">Check the deck</button> <span id="checkbusy" class="busy"></span></p>
-  </section>
-
-  <!-- 6. results -->
-  <section id="s-results" hidden>
-    <h2><span class="step">6</span> &nbsp;Results</h2>
-    <div class="counts" id="counts"></div>
-    <div id="reviewnote"></div>
-    <div class="slides">
-      <div class="slidelist" id="slidelist"></div>
-      <div class="detail" id="detail"></div>
+    <div class="grp">
+      <div class="row"><span class="mono" id="stylestat" style="font-size:12px;color:var(--ink-2)"></span></div>
+      <div class="name">Derived from the reference deck</div>
     </div>
-    <p class="foot"><a id="reportlink" href="#" target="_blank" rel="noopener">Open the
-      self-contained HTML report</a> — one file, nothing fetched when it is viewed, safe to email.</p>
-  </section>
-</main>
+  </div>
+
+  <div class="panel" data-tab="review">
+    <div class="grp">
+      <div class="row">
+        <button class="big primary" id="check"><span class="ico">&#9654;</span>Check deck</button>
+      </div>
+      <div class="name">Run</div>
+    </div>
+    <div class="grp">
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="semantic"> Content review</label>
+        <label class="inline"><input type="checkbox" id="notes"> Speaker notes</label>
+      </div>
+      <div class="name">Optional, off by default</div>
+    </div>
+    <div class="grp" id="keygrp" hidden>
+      <div class="row">
+        <label class="stack">API key
+          <input type="password" id="apikey" placeholder="sk-ant-…" autocomplete="off">
+        </label>
+        <label class="stack">Forbidden words
+          <textarea id="forbidden" placeholder="Meridian Capital, Project Atlas, Jane Okafor"></textarea>
+        </label>
+        <button class="small" id="preview">Show what would be sent</button>
+      </div>
+      <div class="name">Redaction</div>
+    </div>
+    <div class="grp">
+      <div class="row">
+        <button class="small" id="copynote">Copy note</button>
+        <button class="small" id="openreport" disabled>HTML report</button>
+      </div>
+      <div class="name">Share</div>
+    </div>
+  </div>
+</div>
+
+<div class="body">
+  <div class="rail" id="rail"></div>
+  <div class="canvas">
+    <div class="slide" id="slide">
+      <div class="placeholder">
+        <h2>Open a deck to begin</h2>
+        <p>The file is copied into a temporary directory on this machine and deleted
+           when the server stops. Nothing is uploaded anywhere.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="pane">
+    <header><h2 id="panetitle">Review note</h2><span class="sub" id="panesub"></span></header>
+    <div class="scroll" id="pane"></div>
+  </aside>
+</div>
+
+<div class="status">
+  <span id="pos">No deck</span>
+  <span id="tally"></span>
+  <span class="spacer"></span>
+  <span id="busy"></span>
+  <span id="thumbstate"></span>
+</div>
+
+<input type="file" id="file" accept=".pptx,.potx,.ppsx" hidden>
 
 <script>
 // The token is substituted into this document by the server rather than read
@@ -248,383 +412,518 @@
 if (location.search) history.replaceState(null, "", location.pathname);
 
 const TOKEN = "__TIEOUT_TOKEN__";
-const state = { deck: null, client: null, profile: null, audit: null, plan: null, approved: false };
+const S = { deck: null, client: null, profile: null, audit: null, plan: null, approved: false, slide: 1 };
 
 const $ = (id) => document.getElementById(id);
-const show = (id, on = true) => { $(id).hidden = !on; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const busy = (t) => { $("busy").textContent = t || ""; $("busy").className = t ? "busy" : ""; };
 
 async function api(path, { method = "GET", body = null, form = null } = {}) {
   const headers = { "X-TieOut-Token": TOKEN };
   if (body) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, {
-    method, headers, body: form ? form : body ? JSON.stringify(body) : null,
-  });
-  const text = await response.text();
+  const r = await fetch(path, { method, headers, body: form || (body ? JSON.stringify(body) : null) });
+  const text = await r.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { data = { detail: text }; }
-  if (!response.ok) throw new Error((data && data.detail) || response.statusText);
+  if (!r.ok) throw new Error((data && data.detail) || r.statusText);
   return data;
 }
 
-function fail(where, error) {
-  $(where).innerHTML = `<div class="warn bad">${esc(error.message || error)}</div>`;
+/* ---------- tabs ---------- */
+
+function tab(name) {
+  document.querySelectorAll('.tabs button').forEach((b) =>
+    b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll('.ribbon > .panel').forEach((p) => {
+    if (p.dataset.tab === name) p.setAttribute("data-active", ""); else p.removeAttribute("data-active");
+  });
+  if (name === "style" && S.profile) renderStyle();
+  if (name === "review") renderNote();
+  if (name === "deck" && !S.audit) renderIntro();
 }
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.onclick = () => { if (!b.disabled) tab(b.dataset.tab); };
+});
 
-/* ---- 1. deck ---- */
+/* ---------- 1. open a deck ---------- */
 
-$("drop").onclick = () => $("file").click();
-$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
-$("drop").ondragleave = () => $("drop").classList.remove("over");
-$("drop").ondrop = (e) => {
-  e.preventDefault(); $("drop").classList.remove("over");
+$("open").onclick = () => $("file").click();
+$("file").onchange = (e) => { if (e.target.files.length) upload(e.target.files[0]); };
+const canvasEl = document.querySelector(".canvas");
+canvasEl.ondragover = (e) => { e.preventDefault(); };
+canvasEl.ondrop = (e) => {
+  e.preventDefault();
   if (e.dataTransfer.files.length) upload(e.dataTransfer.files[0]);
 };
-$("file").onchange = (e) => { if (e.target.files.length) upload(e.target.files[0]); };
 
 async function upload(file) {
-  $("deckinfo").textContent = `Loading ${file.name}…`;
+  busy(`Opening ${file.name}`);
   const form = new FormData();
   form.append("file", file);
-  try {
-    state.deck = await api("/api/decks", { method: "POST", form });
-  } catch (error) { return fail("deckinfo", error); }
-  renderDeckInfo();
-  show("s-profile");
+  try { S.deck = await api("/api/decks", { method: "POST", form }); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy("");
+  S.audit = null; S.slide = 1;
+  $("doc").textContent = S.deck.filename;
+  $("pos").textContent = `Slide 1 of ${S.deck.slide_count}`;
+  renderRail(); renderSlide(); renderIntro(); thumbState();
   loadClients();
-  pollThumbnails();
+  pollThumbs();
 }
 
-function renderDeckInfo() {
-  const d = state.deck;
-  const thumbs = d.thumbnails.available
-    ? `${d.thumbnails.count} slide image(s) rendered`
-    : d.thumbnails.rendering ? "rendering slide images…" : esc(d.thumbnails.reason || "no slide images");
-  $("deckinfo").innerHTML =
-    `<strong>${esc(d.filename)}</strong> — ${d.slide_count} slides, ` +
-    `${Math.round(d.width_pt)}×${Math.round(d.height_pt)}pt. ${thumbs}`;
+function thumbState() {
+  const t = S.deck?.thumbnails;
+  $("thumbstate").textContent = !t ? ""
+    : t.available ? `${t.count} slide images`
+    : t.rendering ? "rendering slide images…" : "no slide images";
+  $("thumbstate").title = t?.reason || "";
 }
 
-async function pollThumbnails() {
-  for (let i = 0; i < 90; i++) {
-    if (!state.deck) return;
-    if (state.deck.thumbnails.available || state.deck.thumbnails.reason) break;
+async function pollThumbs() {
+  for (let i = 0; i < 90 && S.deck; i++) {
+    if (S.deck.thumbnails.available || S.deck.thumbnails.reason) break;
     await new Promise((r) => setTimeout(r, 2000));
-    try { state.deck = await api(`/api/decks/${state.deck.deck_id}`); } catch (_) { return; }
-    renderDeckInfo();
-    if (state.audit) renderSlideList();
+    try { S.deck = await api(`/api/decks/${S.deck.deck_id}`); } catch (_) { return; }
+    thumbState(); renderRail(); renderSlide();
   }
 }
 
-/* ---- 2. profile ---- */
-
 async function loadClients() {
-  let data;
-  try { data = await api("/api/profiles"); } catch (error) { return fail("learnbusy", error); }
-  const select = $("client");
-  select.innerHTML = data.clients.length
-    ? data.clients.map((c) => `<option>${esc(c)}</option>`).join("")
+  let d;
+  try { d = await api("/api/profiles"); } catch (e) { return; }
+  $("client").innerHTML = d.clients.length
+    ? d.clients.map((c) => `<option>${esc(c)}</option>`).join("")
     : `<option value="">none onboarded yet</option>`;
-  $("useclient").disabled = !data.clients.length;
+  $("useclient").disabled = !d.clients.length;
 }
 
 $("useclient").onclick = async () => {
-  const client = $("client").value;
-  if (!client) return;
-  try { state.profile = await api(`/api/profiles/${encodeURIComponent(client)}`); }
-  catch (error) { return fail("learnbusy", error); }
-  state.client = client;
-  renderConfirm();
-  show("s-confirm"); show("s-review"); show("s-run");
+  const c = $("client").value;
+  if (!c) return;
+  busy(`Loading ${c}`);
+  try { S.profile = await api(`/api/profiles/${encodeURIComponent(c)}`); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); S.client = c; onProfile();
 };
 
 $("learn").onclick = async () => {
-  const client = $("newclient").value.trim();
-  if (!client) { $("learnbusy").textContent = "Name the client first."; return; }
-  $("learnbusy").textContent = "Deriving the house style…";
+  const c = $("newclient").value.trim();
+  if (!c) return paneMessage("warn", "Name the client first.");
+  busy(`Deriving the house style for ${c}`);
   try {
-    state.profile = await api("/api/learn", {
-      method: "POST", body: { deck_id: state.deck.deck_id, client },
-    });
-  } catch (error) { return fail("learnbusy", error); }
-  state.client = client;
-  $("learnbusy").innerHTML =
-    `<div class="warn good">Learned <strong>${esc(client)}</strong> and wrote ` +
-    `<code>${esc(state.profile.written_to || "")}</code>. ` +
-    `${esc(state.profile.question_summary || "")}</div>`;
+    S.profile = await api("/api/learn", { method: "POST", body: { deck_id: S.deck.deck_id, client: c } });
+  } catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); S.client = c;
   await loadClients();
-  renderConfirm();
-  show("s-confirm"); show("s-review"); show("s-run");
+  const where = String(S.profile.written_to || "").split("/").slice(-2).join("/");
+  onProfile(`Learned ${c} from ${S.deck.filename}, written to ${where}.`);
 };
 
-/* ---- 3. confirm ---- */
+function onProfile(note) {
+  $("tab-style").disabled = false;
+  $("tab-review").disabled = false;
+  $("guarantee").textContent = `Profile: ${S.client}`;
+  tab("style");
+  if (note) paneMessage("good", note, true);
+}
 
-function renderConfirm() {
-  const p = state.profile;
+/* ---------- 2. house style ---------- */
+
+function renderStyle() {
+  const p = S.profile;
+  $("panetitle").textContent = "House style";
+  $("panesub").textContent = `${p.client} · v${p.version}`;
+  $("stylestat").textContent =
+    `${p.sources.join(", ")} · ${Object.keys(p.archetypes).length} slide types`;
+
   const outstanding = (p.questions || []).filter((q) => !q.answered);
-  $("questions").innerHTML = outstanding.length
-    ? `<div class="group"><h3>${outstanding.length} question(s) the evidence did not settle</h3>` +
-      outstanding.map((q) => `
-        <label class="field">
-          <span>${esc(q.question)}</span>
+  const questions = outstanding.length ? `
+    <div class="block">
+      <h3>${outstanding.length} question${outstanding.length === 1 ? "" : "s"} the evidence did not settle</h3>
+      ${outstanding.map((q) => `
+        <label class="stack">${esc(q.question)}
           <select data-question="${esc(q.id)}">
             ${(q.options.length ? q.options : [q.default]).map((o) =>
               `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
           </select>
-          <small><code>${esc(q.field_path)}</code></small>
-        </label>`).join("") + `</div>`
-    : `<div class="warn good">No questions: every rule was settled from the evidence.</div>`;
+        </label>`).join("")}
+    </div>` : `
+    <div class="block"><h3>No questions</h3>
+      <p>Every rule was settled from the evidence in the reference deck.</p></div>`;
 
-  $("facts").innerHTML = (p.groups || []).map((group) => `
-    <div class="group">
-      <h3>${esc(group.title)}</h3>
-      ${group.facts.map(factRow).join("")}
-    </div>`).join("");
+  const groups = (p.groups || []).map((g) => `
+    <div class="slide-head">${esc(g.title)}</div>
+    ${g.facts.map(fact).join("")}`).join("");
 
-  $("facts").querySelectorAll("input[type=checkbox]").forEach((box) => {
-    box.onchange = () => box.closest(".fact").classList.toggle("off", !box.checked);
+  const unlearned = (p.not_learned || []).length ? `
+    <div class="slide-head">Deliberately not derived</div>
+    <div class="block"><p>${p.not_learned.map((n) =>
+      `<span class="mono">${esc(n.key)}</span> — ${esc(n.reason)}`).join("<br>")}</p></div>` : "";
+
+  $("pane").innerHTML = `
+    <div class="block">
+      <p>Every line below was measured from the reference deck, with the evidence
+         for it. Clear anything that is not really a house rule: the rule that
+         reads it stops running, and the profile records that you decided so.</p>
+      <p>Values are not editable here on purpose — a number the client's own
+         approved deck does not support would report their material as wrong.
+         Edit the YAML for that.</p>
+    </div>
+    ${questions}${groups}${unlearned}`;
+
+  $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
+    b.onchange = () => b.closest(".fact").classList.toggle("off", !b.checked);
   });
-
-  $("notlearned").innerHTML = (p.not_learned || []).length
-    ? `<strong>${p.not_learned.length} rule(s) deliberately not derived</strong>: ` +
-      p.not_learned.map((n) => `<code>${esc(n.key)}</code> — ${esc(n.reason)}`).join("; ")
-    : "";
 }
 
-function factRow(fact) {
-  const value = fact.kind === "swatches"
-    ? `<div class="swatches">${fact.value.map((s) =>
-        `<div class="swatch" style="background:${esc(s.hex)}">${esc(s.label)}</div>`).join("")}</div>`
-    : fact.kind === "list"
-      ? `<div class="value mono">${fact.value.map(esc).join(", ") || "—"}</div>`
-      : `<div class="value">${esc(fact.value)}</div>`;
-  return `
-    <div class="fact">
-      <input type="checkbox" checked data-path="${esc(fact.path)}">
-      <div class="body">
-        <div class="label">${esc(fact.label)}
-          ${fact.confidence !== "high" ? `<span class="pill minor">${esc(fact.confidence)}</span>` : ""}
-        </div>
-        ${value}
-        ${fact.why ? `<div class="why">why: ${esc(fact.why)}</div>` : ""}
-      </div>
-    </div>`;
+function fact(f) {
+  const value = f.kind === "swatches"
+    ? `<div class="sw">${f.value.map((s) =>
+        `<figure><i style="background:${esc(s.hex)}"></i>
+         <figcaption>${esc(s.label)}</figcaption></figure>`).join("")}</div>`
+    : f.kind === "list" ? `<div class="v mono">${f.value.map(esc).join(", ") || "—"}</div>`
+    : `<div class="v">${esc(f.value)}</div>`;
+  const box = f.droppable
+    ? `<input type="checkbox" checked data-path="${esc(f.path)}">`
+    : `<span class="fixed" title="This field cannot be cleared: it has no meaningful empty value.">&middot;</span>`;
+  return `<div class="fact">${box}<div>
+      <div class="k">${esc(f.label)}${f.confidence !== "high"
+        ? ` <span class="fixed">(${esc(f.confidence)} confidence)</span>` : ""}</div>
+      ${value}
+      ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+    </div></div>`;
 }
 
-$("skipconfirm").onclick = () => { show("s-run"); $("check").scrollIntoView({ behavior: "smooth" }); };
-
-$("confirm").onclick = async () => {
+$("save").onclick = async () => {
   const answers = {};
-  $("questions").querySelectorAll("select[data-question]").forEach((s) => {
-    answers[s.dataset.question] = s.value;
-  });
+  $("pane").querySelectorAll("select[data-question]").forEach((s) => { answers[s.dataset.question] = s.value; });
   const dropped = [];
-  $("facts").querySelectorAll("input[type=checkbox]").forEach((box) => {
-    if (!box.checked) dropped.push(box.dataset.path);
+  $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
+    if (!b.checked) dropped.push(b.dataset.path);
   });
-  try {
-    state.profile = await api("/api/confirm", {
-      method: "POST", body: { client: state.client, answers, dropped },
-    });
-  } catch (error) { return fail("notlearned", error); }
+  busy("Saving the profile");
+  try { S.profile = await api("/api/confirm", { method: "POST", body: { client: S.client, answers, dropped } }); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy("");
   const bits = [];
-  if (state.profile.applied?.length) bits.push(`applied ${state.profile.applied.join(", ")}`);
-  if (state.profile.dropped?.length) bits.push(`dropped ${state.profile.dropped.length} fact(s)`);
-  if (state.profile.recorded_only?.length) {
-    bits.push(`recorded and locked, but needing a re-learn to take effect: ` +
-      state.profile.recorded_only.join(", "));
-  }
-  renderConfirm();
-  $("notlearned").innerHTML =
-    `<div class="warn good">Saved. ${esc(bits.join("; ") || "no changes")}</div>` + $("notlearned").innerHTML;
-  show("s-run");
+  if (S.profile.applied?.length) bits.push(`applied ${S.profile.applied.join(", ")}`);
+  if (S.profile.dropped?.length) bits.push(`cleared ${S.profile.dropped.length} field(s)`);
+  if (S.profile.recorded_only?.length)
+    bits.push(`recorded and locked, but needing a re-learn to take effect: ${S.profile.recorded_only.join(", ")}`);
+  renderStyle();
+  paneMessage("good", `Saved. ${bits.join("; ") || "No changes."}`, true);
 };
 
-/* ---- 4. review ---- */
+$("revert").onclick = async () => {
+  if (!S.client) return;
+  S.profile = await api(`/api/profiles/${encodeURIComponent(S.client)}`);
+  renderStyle();
+};
+
+/* ---------- 3. review ---------- */
 
 $("semantic").onchange = () => {
-  show("semanticfields", $("semantic").checked);
-  state.approved = false;
+  $("keygrp").hidden = !$("semantic").checked;
+  S.approved = false;
 };
 
 $("preview").onclick = async () => {
-  $("plan").innerHTML = `<div class="busy">Redacting…</div>`;
+  busy("Redacting");
   try {
-    state.plan = await api("/api/redact", {
-      method: "POST",
-      body: {
-        deck_id: state.deck.deck_id, client: state.client || "",
-        forbidden: $("forbidden").value, include_notes: $("notes").checked,
-      },
-    });
-  } catch (error) { return fail("plan", error); }
-  renderPlan(state.plan);
+    S.plan = await api("/api/redact", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client || "",
+      forbidden: $("forbidden").value, include_notes: $("notes").checked,
+    }});
+  } catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); renderPlan(S.plan);
 };
 
 function renderPlan(plan) {
-  const redactions = plan.redactions.length ? `
-    <table>
-      <thead><tr><th>placeholder</th><th>kind</th><th>uses</th><th>original</th><th>from</th></tr></thead>
-      <tbody>${plan.redactions.map((r) => `<tr>
-        <td class="mono">${esc(r.placeholder)}</td><td>${esc(r.kind)}</td>
-        <td>${r.occurrences}</td><td>${esc(r.original)}</td>
-        <td class="mono">${esc(r.source)}</td></tr>`).join("")}</tbody>
-    </table>` : `<p class="foot">Nothing matched a term or a detector.</p>`;
+  $("panetitle").textContent = "What would be sent";
+  $("panesub").textContent = `${plan.characters.toLocaleString()} characters`;
+  const rows = plan.redactions.length ? `
+    <table><thead><tr><th>Placeholder</th><th>Uses</th><th>Original</th><th>From</th></tr></thead>
+    <tbody>${plan.redactions.map((r) => `<tr><td class="mono">${esc(r.placeholder)}</td>
+      <td>${r.occurrences}</td><td>${esc(r.original)}</td>
+      <td class="mono">${esc(r.source)}</td></tr>`).join("")}</tbody></table>`
+    : `<p>Nothing matched a term or a detector.</p>`;
 
   const residuals = plan.residuals.length ? `
-    <div class="warn">
-      <strong>${plan.residuals.length} item(s) could not be cleared confidently.</strong>
-      Each is a judgement only you can make. Add the ones that identify someone to the
-      forbidden words above and preview again.
-      <table style="margin-top:10px">
-        <thead><tr><th>line</th><th>uses</th><th>text</th><th>why</th></tr></thead>
-        <tbody>${plan.residuals.map((r) => `<tr>
-          <td>${r.first_line}</td><td>${r.occurrences}</td>
-          <td class="mono">${esc(r.text)}</td><td>${esc(r.reason)}</td></tr>`).join("")}</tbody>
-      </table>
-      <label class="field" style="display:flex;gap:9px;align-items:center;margin:12px 0 0">
-        <input type="checkbox" id="approve" style="width:auto;margin:0">
-        <span style="margin:0">I have read these and am content to send them</span>
-      </label>
-    </div>` : `<div class="warn good">Nothing outstanding — every identifier was redacted.</div>`;
+    <div class="msg warn">
+      <b>${plan.residuals.length} item${plan.residuals.length === 1 ? "" : "s"} could not be cleared
+      confidently.</b> Each is a judgement only you can make. Add the ones that identify
+      someone to the forbidden words and preview again.
+      <table style="margin-top:8px"><thead><tr><th>Line</th><th>Text</th><th>Why</th></tr></thead>
+      <tbody>${plan.residuals.map((r) => `<tr><td>${r.first_line}</td>
+        <td class="mono">${esc(r.text)}</td><td>${esc(r.reason)}</td></tr>`).join("")}</tbody></table>
+      <label class="inline" style="margin-top:9px"><input type="checkbox" id="approve">
+        I have read these and am content to send them</label>
+    </div>`
+    : `<div class="msg good">Nothing outstanding — every identifier was redacted.</div>`;
 
-  $("plan").innerHTML = `
-    <p class="foot"><strong>${plan.redactions.length}</strong> term(s) redacted across
-      <strong>${plan.characters.toLocaleString()}</strong> characters.</p>
-    ${redactions}
-    ${residuals}
-    <p class="foot" style="margin-top:14px">This is the payload, exactly as it would be sent:</p>
-    <pre class="payload">${esc(plan.text)}</pre>`;
-
-  const approve = $("approve");
-  if (approve) approve.onchange = () => { state.approved = approve.checked; };
-  state.approved = plan.is_clear;
+  $("pane").innerHTML = `
+    <div class="block"><h3>${plan.redactions.length} term(s) redacted</h3>${rows}${residuals}</div>
+    <div class="block"><h3>The payload, exactly as it would be sent</h3>
+      <pre class="payload">${esc(plan.text)}</pre></div>`;
+  const a = $("approve");
+  if (a) a.onchange = () => { S.approved = a.checked; };
+  S.approved = plan.is_clear;
 }
-
-/* ---- 5. run ---- */
 
 $("check").onclick = async () => {
-  if (!state.client) { $("checkbusy").textContent = "Choose or learn a client profile first."; return; }
+  if (!S.client) return paneMessage("warn", "Choose or learn a client profile first.");
   const semantic = $("semantic").checked;
-  if (semantic && !$("apikey").value.trim()) {
-    $("checkbusy").textContent = "Content review needs an API key, or turn it off.";
-    return;
-  }
-  $("checkbusy").textContent = semantic ? "Auditing, then reviewing the content…" : "Auditing…";
+  if (semantic && !$("apikey").value.trim())
+    return paneMessage("warn", "Content review needs an API key, or turn it off.");
+  busy(semantic ? "Auditing, then reviewing the content" : "Auditing");
   $("check").disabled = true;
   try {
-    state.audit = await api("/api/check", {
-      method: "POST",
-      body: {
-        deck_id: state.deck.deck_id, client: state.client, semantic,
-        forbidden: $("forbidden").value, include_notes: $("notes").checked,
-        approved: state.approved, api_key: semantic ? $("apikey").value.trim() : null,
-      },
-    });
-  } catch (error) { $("check").disabled = false; return fail("checkbusy", error); }
-  $("check").disabled = false;
-  $("checkbusy").textContent = "";
-  renderResults();
-  show("s-results");
-  $("s-results").scrollIntoView({ behavior: "smooth" });
+    S.audit = await api("/api/check", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client, semantic,
+      forbidden: $("forbidden").value, include_notes: $("notes").checked,
+      approved: S.approved, api_key: semantic ? $("apikey").value.trim() : null,
+    }});
+  } catch (e) { $("check").disabled = false; busy(""); return paneMessage("bad", e.message); }
+  $("check").disabled = false; busy("");
+  $("openreport").disabled = false;
+  tab("review"); renderRail(); renderNote();
 };
 
-/* ---- 6. results ---- */
+/* ---------- the review note ---------- */
 
-function renderResults() {
-  const a = state.audit;
-  const s = a.summary;
-  $("counts").innerHTML =
-    (s.total === 0
-      ? `<span class="pill ok">no findings</span>`
-      : ["blocker", "major", "minor", "info"].filter((k) => s[k])
-          .map((k) => `<span class="pill ${k}">${s[k]} ${k}</span>`).join("")) +
-    ` <span class="foot">${a.slide_count} slides, ${a.rules_run.length} rules run` +
-    `${a.suppressed ? `, ${a.suppressed} accepted` : ""}</span>`;
-
-  const review = a.review;
-  $("reviewnote").innerHTML = !review ? "" : review.held
-    ? `<div class="warn bad"><strong>Nothing was sent.</strong> ${esc(review.detail || "")}</div>`
-    : `<div class="warn good">Content review: ${review.finding_count} finding(s) from
-       <code>${esc(review.model || "")}</code>, ${review.redactions.length} term(s) withheld,
-       ${review.characters.toLocaleString()} characters sent.
-       ${review.dropped?.length ? `${review.dropped.length} answer(s) discarded as unreadable.` : ""}
-       Semantic findings never affect the exit code.</div>`;
-
-  $("reportlink").href = `/api/report/${encodeURIComponent(state.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`;
-  renderSlideList();
-  const first = a.slides.find((s) => s.findings.length) || a.slides[0];
-  if (first) selectSlide(first.index);
+function noteItems() {
+  if (!S.audit) return [];
+  const out = [];
+  let n = 0;
+  for (const slide of S.audit.slides) {
+    for (const f of slide.findings) out.push({ n: ++n, slide, f });
+  }
+  return out;
 }
 
-function renderSlideList() {
-  const a = state.audit;
-  if (!a) return;
-  const thumbs = state.deck?.thumbnails?.available;
-  $("slidelist").innerHTML = a.slides.map((slide) => `
-    <div class="slidecard" data-slide="${slide.index}">
-      <div class="head">
-        <span class="n">Slide ${slide.index}${slide.hidden ? " · hidden" : ""}</span>
-        <span class="pill ${slide.worst || "none"}">${
-          slide.findings.length ? slide.findings.length : "clean"}</span>
+function renderNote() {
+  $("panetitle").textContent = "Review note";
+  if (!S.audit) {
+    $("panesub").textContent = "";
+    $("pane").innerHTML = `<div class="block">
+      <p>Run <b>Check deck</b> to produce the note. Every finding states what it
+         measured, what it expected, and the evidence behind the expectation.</p></div>`;
+    return;
+  }
+  const a = S.audit, s = a.summary;
+  $("panesub").textContent = `${a.client} · ${a.slide_count} slides`;
+
+  const kinds = ["blocker", "major", "minor", "info"].filter((k) => s[k]);
+  $("tally").textContent = s.total
+    ? kinds.map((k) => `${s[k]} ${k}`).join("  \u00b7  ")
+    : "no findings";
+
+  const head = `
+    <div class="note-head">
+      <div class="line"><b>${esc(a.client)}</b> — ${esc(fileName(a.deck))}</div>
+      <div class="line">${a.slide_count} slides checked against ${a.rules_run.length}
+        rule${a.rules_run.length === 1 ? "" : "s"}${a.suppressed ? `, ${a.suppressed} previously accepted` : ""}.</div>
+      <div class="line">${s.total
+        ? `<b>${s.total}</b> point${s.total === 1 ? "" : "s"} to address before this deck goes out.`
+        : `<b>Nothing to address.</b> This deck matches the house style it was checked against.`}</div>
+      ${s.total ? `<div class="tallies">${kinds.map((k) =>
+        `<span><i class="b-${k}"></i>${s[k]} ${k}</span>`).join("")}</div>` : ""}
+    </div>
+    ${reviewBanner(a.review)}`;
+
+  const items = noteItems();
+  if (!items.length) {
+    $("pane").innerHTML = head + `<div class="empty"><strong>Clean</strong>
+      Every rule that ran had nothing to report.</div>`;
+    return;
+  }
+
+  let html = head, current = null;
+  for (const { n, slide, f } of items) {
+    if (slide.index !== current) {
+      current = slide.index;
+      html += `<div class="slide-head" data-goto="${slide.index}">
+        Slide ${slide.index}${slide.hidden ? " · hidden" : ""}
+        <span class="title">${esc(slide.title || slide.archetype)}</span></div>`;
+    }
+    html += item(n, slide, f);
+  }
+  $("pane").innerHTML = html;
+  $("pane").querySelectorAll("[data-goto]").forEach((el) => {
+    el.style.cursor = "pointer";
+    el.onclick = () => select(Number(el.dataset.goto));
+  });
+  $("pane").querySelectorAll(".item").forEach((el) => {
+    el.onclick = () => select(Number(el.dataset.slide));
+  });
+}
+
+function item(n, slide, f) {
+  const delta = f.measured || f.expected
+    ? `<div class="ev">${esc(f.measured || "")}${f.expected
+        ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
+  return `<div class="item" data-slide="${slide.index}">
+    <div class="bar b-${f.severity}"></div>
+    <div>
+      <div class="meta">
+        <span class="n">${n}. ${esc(f.rule_id)}</span>
+        <span class="tag b-${f.severity}">${esc(f.severity)}</span>
+        ${f.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
+        ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
       </div>
-      <div class="t">${esc(slide.title || slide.archetype)}</div>
-      ${thumbs ? `<img loading="lazy" alt="slide ${slide.index}"
-        src="/api/thumbnails/${encodeURIComponent(state.deck.deck_id)}/${slide.index}?t=${encodeURIComponent(TOKEN)}">` : ""}
-    </div>`).join("");
-  $("slidelist").querySelectorAll(".slidecard").forEach((card) => {
-    card.onclick = () => selectSlide(Number(card.dataset.slide));
+      <p class="say">${esc(sentence(f.message))}</p>
+      ${delta}
+      ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+    </div></div>`;
+}
+
+// Findings are written as fragments so they read in a table; in a note they
+// want to be sentences.
+function sentence(text) {
+  const t = String(text || "").trim();
+  if (!t) return t;
+  const first = t[0] === t[0].toLowerCase() && /[a-z]/.test(t[0])
+    ? t[0].toUpperCase() + t.slice(1) : t;
+  return /[.!?]$/.test(first) ? first : first + ".";
+}
+
+function fileName(path) { return String(path || "").split("/").pop(); }
+
+function reviewBanner(r) {
+  if (!r) return "";
+  if (r.held) return `<div class="block"><div class="msg bad"><b>Nothing was sent.</b>
+    ${esc(r.detail || "")}</div></div>`;
+  return `<div class="block"><div class="msg good">Content review: ${r.finding_count}
+    finding${r.finding_count === 1 ? "" : "s"} from <span class="mono">${esc(r.model || "")}</span>,
+    ${r.redactions.length} term(s) withheld, ${r.characters.toLocaleString()} characters sent.
+    ${r.dropped?.length ? `${r.dropped.length} answer(s) discarded as unreadable.` : ""}
+    Semantic findings never affect the exit code.</div></div>`;
+}
+
+$("copynote").onclick = async () => {
+  const text = plainNote();
+  try { await navigator.clipboard.writeText(text); busy("Note copied"); setTimeout(() => busy(""), 1600); }
+  catch (_) { paneMessage("warn", "The browser refused clipboard access. The HTML report is the other way out."); }
+};
+
+function plainNote() {
+  if (!S.audit) return "No check has been run.";
+  const a = S.audit, s = a.summary;
+  const lines = [
+    `TieOut review note — ${a.client}`,
+    fileName(a.deck),
+    `${a.slide_count} slides, ${a.rules_run.length} rules run`,
+    s.total ? `${s.total} point(s) to address: ${["blocker", "major", "minor", "info"]
+      .filter((k) => s[k]).map((k) => `${s[k]} ${k}`).join(", ")}`
+      : "Nothing to address.",
+    "",
+  ];
+  let current = null;
+  for (const { n, slide, f } of noteItems()) {
+    if (slide.index !== current) {
+      current = slide.index;
+      lines.push(`Slide ${slide.index} — ${slide.title || slide.archetype}`);
+    }
+    lines.push(`  ${n}. [${f.severity}] ${f.rule_id}  ${sentence(f.message)}`);
+    if (f.measured || f.expected) lines.push(`      ${f.measured || ""}${f.expected ? ` -> ${f.expected}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+$("openreport").onclick = () => {
+  window.open(`/api/report/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`, "_blank", "noopener");
+};
+
+/* ---------- slides ---------- */
+
+function renderRail() {
+  if (!S.deck) { $("rail").innerHTML = ""; return; }
+  const byIndex = {};
+  (S.audit?.slides || []).forEach((s) => { byIndex[s.index] = s; });
+  const thumbs = S.deck.thumbnails.available;
+  $("rail").innerHTML = S.deck.slides.map((s) => {
+    const a = byIndex[s.index];
+    const tally = !a ? "" : a.findings.length
+      ? `<span class="tally b-${a.worst}">${a.findings.length}</span>`
+      : `<span class="tally b-ok">&#10003;</span>`;
+    const inner = thumbs
+      ? `<img loading="lazy" alt="Slide ${s.index}"
+          src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}">`
+      : `<span class="stub">${esc(a?.title || s.archetype.replace(/_/g, " "))}</span>`;
+    return `<div class="thumb" data-slide="${s.index}" aria-current="${s.index === S.slide}">
+      <span class="n">${s.index}</span><span class="box">${inner}${tally}</span></div>`;
+  }).join("");
+  $("rail").querySelectorAll(".thumb").forEach((el) => {
+    el.onclick = () => select(Number(el.dataset.slide));
   });
 }
 
-function selectSlide(index) {
-  const slide = state.audit.slides.find((s) => s.index === index);
-  if (!slide) return;
-  $("slidelist").querySelectorAll(".slidecard").forEach((card) => {
-    const selected = Number(card.dataset.slide) === index;
-    card.classList.toggle("active", selected);
-    // The first slide with findings is selected automatically, and it is often
-    // below the fold: without this the detail pane shows slide 11 while the
-    // list still reads slide 1.
-    if (selected) card.scrollIntoView({ block: "nearest" });
-  });
-
-  const image = state.deck?.thumbnails?.available
-    ? `<img alt="slide ${index}"
-        src="/api/thumbnails/${encodeURIComponent(state.deck.deck_id)}/${index}?t=${encodeURIComponent(TOKEN)}">`
-    : "";
-
-  const findings = slide.findings.length
-    ? slide.findings.map((f) => `
-      <div class="finding">
-        <div class="top">
-          <span class="pill ${f.severity}">${esc(f.severity)}</span>
-          ${f.category === "semantic" ? `<span class="pill semantic">semantic</span>` : ""}
-          <code>${esc(f.rule_id)}</code>
-          ${f.shape ? `<span class="foot">${esc(f.shape)}</span>` : ""}
-          ${f.confidence !== "high" ? `<span class="foot">${esc(f.confidence)} confidence</span>` : ""}
-        </div>
-        <p class="msg">${esc(f.message)}</p>
-        ${f.measured || f.expected ? `<div class="delta mono">${esc(f.measured || "")}${
-          f.expected ? ` → ${esc(f.expected)}` : ""}</div>` : ""}
-        ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
-      </div>`).join("")
-    : `<div class="warn good">Nothing to report on this slide.</div>`;
-
-  const unchecked = slide.unchecked.length
-    ? `<p class="foot"><strong>Not checked here:</strong> ` +
-      slide.unchecked.map((u) => `<code>${esc(u.rule_id)}</code> — ${esc(u.reason)}`).join("; ") +
-      `</p>`
-    : "";
-
-  $("detail").innerHTML = `
-    <h3 style="margin:0 0 4px">Slide ${slide.index}
-      <span class="foot" style="font-weight:400">${esc(slide.archetype)}
-        (${esc(slide.archetype_confidence)} confidence)</span></h3>
-    <p class="foot" style="margin-top:0">${esc(slide.title || "")}</p>
-    ${image}
-    ${findings}
-    ${unchecked}`;
+function renderSlide() {
+  if (!S.deck) return;
+  const thumbs = S.deck.thumbnails.available;
+  $("slide").innerHTML = thumbs
+    ? `<img alt="Slide ${S.slide}"
+        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${encodeURIComponent(TOKEN)}">`
+    : `<div class="placeholder"><h2>Slide ${S.slide}</h2>
+        <p>${esc(slideTitle(S.slide) || "")}</p>
+        <p style="margin-top:12px">${esc(S.deck.thumbnails.reason
+          || "Slide images are still rendering.")}</p></div>`;
 }
+
+function slideTitle(index) {
+  const a = (S.audit?.slides || []).find((s) => s.index === index);
+  if (a) return a.title || a.archetype.replace(/_/g, " ");
+  const s = S.deck.slides.find((s) => s.index === index);
+  return s ? s.archetype.replace(/_/g, " ") : "";
+}
+
+function select(index) {
+  S.slide = index;
+  $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;
+  $("rail").querySelectorAll(".thumb").forEach((el) => {
+    const on = Number(el.dataset.slide) === index;
+    el.setAttribute("aria-current", String(on));
+    if (on) el.scrollIntoView({ block: "nearest" });
+  });
+  renderSlide();
+  const head = $("pane").querySelector(`.slide-head[data-goto="${index}"]`);
+  if (head) head.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+/* ---------- pane helpers ---------- */
+
+function renderIntro() {
+  $("panetitle").textContent = "Getting started";
+  $("panesub").textContent = "";
+  $("pane").innerHTML = `
+    <div class="block">
+      <h3>1. Open the deck you want checked</h3>
+      <p>Drop it on the slide area, or use <b>Open deck</b>.</p>
+      <h3>2. Choose a house style</h3>
+      <p>Audit against a client already onboarded, or learn a new one. Learn from a
+         deck the client has <i>already approved</i> — learning from the deck you are
+         about to check tells you nothing.</p>
+      <h3>3. Check</h3>
+      <p>The findings arrive as a review note, slide by slide, each with the
+         measurement and the evidence behind what was expected.</p>
+    </div>
+    <div class="block">
+      <h3>Offline unless you ask otherwise</h3>
+      <p>TieOut needs no key and no network. <b>Content review</b> on the Review tab
+         is the one exception: it sends the deck's text to a language model with every
+         name replaced, and shows you exactly what would go before anything does.</p>
+    </div>`;
+}
+
+function paneMessage(kind, text, keep) {
+  const html = `<div class="block"><div class="msg ${kind}">${esc(text)}</div></div>`;
+  if (keep) $("pane").insertAdjacentHTML("afterbegin", html);
+  else $("pane").innerHTML = html + $("pane").innerHTML;
+}
+
+renderIntro();
+// The client list does not depend on a deck being open, and someone arriving at
+// this page usually wants to know which clients are already onboarded.
+loadClients();
 </script>

@@ -710,6 +710,21 @@ That serves one page on `http://127.0.0.1:8765/` and opens it. Upload a deck,
 confirm what was derived from the client's reference material, optionally turn
 on content review, and read the findings slide by slide.
 
+### It looks like PowerPoint on purpose
+
+A ribbon of tabs, a slide rail down the left, the slide on a neutral canvas, and
+a task pane on the right. That is not decoration. The people using this spend
+their day in PowerPoint, and findings about a deck are easiest to act on in the
+layout they already read decks in.
+
+It is also why the findings are a **review note** rather than a wall of cards.
+PowerPoint's own idiom for "someone has marked up your deck" is a comments task
+pane, so that is where the note goes: continuous numbering across the deck,
+grouped under slide headings, each point as a sentence with the measurement
+subordinated beneath it and the evidence beneath that. Clicking a point moves
+the rail and the canvas to its slide. **Copy note** puts the same thing on the
+clipboard as plain text, which is what actually gets pasted into an email.
+
 ### What it is, and is not
 
 It is a front end over the same functions the commands call — `learn`,
@@ -756,14 +771,17 @@ when the server stops.
    residual list, and the payload verbatim. Nothing is sent until you have read
    the residuals and said so.
 5. **Run.**
-6. **Results.** A column of slides with a severity badge each; click one to see
-   its findings, with the measurement, the expectation and the provenance
-   behind the expectation. Plus a link to the same self-contained HTML report
-   `tieout check --format html` produces.
+6. **Results.** The review note in the task pane, and a count badge on every
+   slide in the rail. Plus **Copy note** for the plain-text version and the same
+   self-contained HTML report `tieout check --format html` produces.
 
 ### Editing is deliberately only dropping
 
-Step 3 lets you remove a derived fact. It does not let you retype one.
+Step 3 lets you remove a derived fact. It does not let you retype one, and it
+only offers the control where removing means something: a list empties, an
+optional setting clears, a tolerance returns to its default — it is a parameter,
+not a claim about the client — and a required field with no default shows a dot
+instead of a checkbox.
 
 Typing a value into a form is how you get a profile the client's own approved
 deck would fail, and then a tool that reports their reference material as
@@ -1161,7 +1179,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,089 tests
+.venv/bin/python -m pytest              # 1,098 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

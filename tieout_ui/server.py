@@ -43,9 +43,10 @@ from tieout.profile.loader import (
     profile_dir,
     profile_path,
 )
-from tieout.profile.schema import NotLearned, Profile
+from tieout.profile.schema import Profile
 from tieout.report import html as html_report
 from tieout.rules.base import clear_caches, run_rules
+from tieout_ui.edit import drop
 from tieout_ui.session import Deck, SessionStore
 from tieout_ui.view import audit_view, profile_view, rules_view
 
@@ -273,7 +274,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             )
 
         applied, recorded_only = apply_answers(profile)
-        dropped = _drop(profile, request.dropped)
+        dropped = drop(profile, request.dropped)
 
         write_profile(profile, profile_path(request.client))
         view = profile_view(profile)
@@ -314,16 +315,15 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
         view = audit_view(result, deck.model)
         view["review"] = review
-        app.state.last_report = html_report.render(result, deck.model)
-        app.state.last_report_deck = deck.deck_id
+        deck.report = html_report.render(result, deck.model)
         return JSONResponse(view)
 
     @app.get("/api/report/{deck_id}", response_class=HTMLResponse)
     def report(store: Guard, deck_id: str) -> HTMLResponse:
-        markup = getattr(app.state, "last_report", None)
-        if markup is None or getattr(app.state, "last_report_deck", None) != deck_id:
+        deck = _require(store, deck_id)
+        if not deck.report:
             raise HTTPException(status_code=404, detail="run a check first")
-        return HTMLResponse(markup)
+        return HTMLResponse(deck.report)
 
     return app
 
@@ -369,59 +369,6 @@ def _load(client: str) -> Profile:
         return load_for_client(client, None)
     except ProfileError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-def _drop(profile: Profile, paths: list[str]) -> list[str]:
-    """Remove derived facts the person disagreed with.
-
-    Dropping is the only edit offered. Retyping a value in a form is how you get
-    a profile the reference deck itself would fail, and then a client whose own
-    approved deck is reported as wrong. Dropping is always safe: the rule that
-    read the field stops running, and `not_learned` records that a person
-    decided so.
-    """
-    dropped: list[str] = []
-    for path in paths:
-        if _clear(profile, path):
-            dropped.append(path)
-            profile.not_learned.append(
-                NotLearned(key=path, reason="dropped in the UI: not a house rule")
-            )
-            if path not in profile.locks:
-                profile.locks.append(path)
-    return dropped
-
-
-def _clear(profile: Profile, path: str) -> bool:
-    parts = path.split(".")
-    target: Any = profile
-    for part in parts[:-1]:
-        if isinstance(target, dict):
-            target = target.get(part)
-        elif isinstance(target, list):
-            try:
-                target = target[int(part)]
-            except (ValueError, IndexError):
-                return False
-        else:
-            target = getattr(target, part, None)
-        if target is None:
-            return False
-
-    leaf = parts[-1]
-    if isinstance(target, dict):
-        return target.pop(leaf, None) is not None
-    if isinstance(target, list):
-        try:
-            target.pop(int(leaf))
-        except (ValueError, IndexError):
-            return False
-        return True
-    if not hasattr(target, leaf):
-        return False
-    current = getattr(target, leaf)
-    setattr(target, leaf, [] if isinstance(current, list) else None)
-    return True
 
 
 def _prepare(

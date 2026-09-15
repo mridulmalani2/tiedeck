@@ -49,6 +49,10 @@ class Deck:
     model: DeckModel
     thumbnails: RenderResult = field(default_factory=RenderResult)
     rendering: bool = False
+    #: The HTML report from this deck's last check. Held per deck rather than
+    #: one slot on the app: with two decks open, checking the second used to
+    #: make the first one's report link answer 404.
+    report: str = ""
 
     @property
     def slide_count(self) -> int:

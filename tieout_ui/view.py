@@ -18,6 +18,7 @@ from typing import Any
 from tieout.model.deck import DeckModel
 from tieout.profile.schema import Profile
 from tieout.rules.base import SEVERITY_ORDER, AuditResult, load_all_rules
+from tieout_ui.edit import can_clear
 
 __all__ = ["audit_view", "profile_view", "rules_view"]
 
@@ -37,6 +38,10 @@ def _fact(
         "value": value,
         "why": profile.provenance.get(path, ""),
         "confidence": profile.confidence.get(path, "high"),
+        # Asked here so the page only offers the control where it means
+        # something. A tolerance resets to its default rather than vanishing,
+        # and a required field with no default cannot be dropped at all.
+        "droppable": can_clear(profile, path),
     }
 
 
