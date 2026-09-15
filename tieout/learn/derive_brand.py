@@ -47,6 +47,7 @@ from tieout.model.deck import DeckModel, ShapeModel
 from tieout.model.furniture import (
     Furniture,
     is_confidentiality_marking,
+    logo_variants,
     normalise_text,
 )
 from tieout.profile.schema import (
@@ -505,10 +506,27 @@ def _derive_logo(
         return
 
     primary = candidates[0]
-    logo = LogoProfile(image_sha1=[primary])
+    # A mark in two colourways is two image parts and so two hashes, and the
+    # light one is often carried by the title slide alone -- below the support
+    # threshold, and so invisible here. Admitted by the slot it fills rather
+    # than by its pixels, and never at the expense of the ambiguity question
+    # below: a runner-up that cleared the threshold on its own is a candidate,
+    # not a variant, and is still asked about.
+    variants = tuple(
+        sha
+        for sha in logo_variants(deck, frozenset({primary}))
+        if sha not in set(candidates)
+    )
+    logo = LogoProfile(image_sha1=[primary, *variants])
     result.derivation.note(
         "brand.logo",
-        f"one image present on {support[primary]} of {total_slides} slides",
+        f"one image present on {support[primary]} of {total_slides} slides"
+        + (
+            f"; {len(variants)} further image(s) in the same position and at the same "
+            f"size, read as the same mark in another colourway"
+            if variants
+            else ""
+        ),
         "high",
     )
 
@@ -527,13 +545,13 @@ def _derive_logo(
                 "medium",
             )
 
-    _derive_logo_boxes(deck, primary, logo, result, total_slides)
+    _derive_logo_boxes(deck, frozenset({primary, *variants}), logo, result, total_slides)
     result.profile.logo = logo
 
 
 def _derive_logo_boxes(
     deck: DeckModel,
-    sha1: str,
+    sha1s: frozenset[str],
     logo: LogoProfile,
     result: BrandDerivation,
     total_slides: int,
@@ -542,7 +560,7 @@ def _derive_logo_boxes(
     by_archetype: dict[str, list[ShapeModel]] = {}
     for slide in learnable_slides(deck):
         for shape in slide.all_shapes():
-            if shape.image_sha1 == sha1:
+            if shape.image_sha1 in sha1s:
                 by_archetype.setdefault(slide.archetype, []).append(shape)
 
     aspects: list[float] = []

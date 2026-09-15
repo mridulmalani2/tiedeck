@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 #: An image on at least this share of slides is a logo candidate (section 8.3).
 LOGO_SUPPORT_SHARE: Final[float] = 0.40
 
+#: How close an image must sit to the established logo slot -- in position and
+#: in size -- to be read as the same mark in another colourway.
+LOGO_VARIANT_TOLERANCE_PT: Final[float] = 2.0
+
 #: A string repeated verbatim on at least this share of slides is boilerplate.
 BOILERPLATE_SUPPORT_SHARE: Final[float] = 0.60
 
@@ -210,7 +214,56 @@ def _logo_hashes(
     threshold = max(1, round(LOGO_SUPPORT_SHARE * deck.slide_count))
     candidates = [sha for sha, count in support.items() if count >= threshold]
     candidates.sort(key=lambda sha: (-support[sha], sha))
-    return tuple(candidates), support
+    primary = tuple(candidates)
+    return primary + logo_variants(deck, frozenset(primary)), support
+
+
+def logo_variants(deck: DeckModel, accepted: frozenset[str]) -> tuple[str, ...]:
+    """Hashes sitting in the established logo slot under a different hash.
+
+    A brand mark usually ships in two colourways: a dark one for light slides
+    and a light one for the dark ones. They are two image parts, so they have
+    two hashes, and the title slide is both the slide most likely to be dark and
+    often the only slide in the deck that is. Its logo therefore sits on one
+    slide out of twenty and falls below :data:`LOGO_SUPPORT_SHARE`.
+
+    The consequence was silent and worse than a missed rule. With no logo found
+    on any title slide, the archetype was learned as *exempt* -- a positive
+    claim that title slides correctly carry no logo -- so nothing checked the
+    logo on a title slide again, and moving or deleting it was never reported.
+
+    So identity here is geometric rather than by pixels: an image in the same
+    place, at the same size, as the logo on every other slide is that logo.
+    Position and size must both agree, which is what stops an ordinary picture
+    that happens to share a corner from being admitted.
+    """
+    slots = {
+        (shape.left_pt, shape.top_pt, shape.width_pt, shape.height_pt)
+        for slide in deck.slides
+        for shape in slide.all_shapes()
+        if shape.image_sha1 and shape.image_sha1 in accepted
+    }
+    if not slots:
+        return ()
+
+    variants: set[str] = set()
+    for slide in deck.slides:
+        for shape in slide.all_shapes():
+            if not shape.image_sha1 or shape.image_sha1 in accepted:
+                continue
+            if any(_fills_slot(shape, slot) for slot in slots):
+                variants.add(shape.image_sha1)
+    return tuple(sorted(variants))
+
+
+def _fills_slot(shape: ShapeModel, slot: tuple[float, float, float, float]) -> bool:
+    left, top, width, height = slot
+    return (
+        abs(shape.left_pt - left) <= LOGO_VARIANT_TOLERANCE_PT
+        and abs(shape.top_pt - top) <= LOGO_VARIANT_TOLERANCE_PT
+        and abs(shape.width_pt - width) <= LOGO_VARIANT_TOLERANCE_PT
+        and abs(shape.height_pt - height) <= LOGO_VARIANT_TOLERANCE_PT
+    )
 
 
 def _page_numbers(

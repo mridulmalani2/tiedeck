@@ -449,3 +449,83 @@ def test_learning_is_deterministic(clean_deck):
     second = learn_from_decks([clean_deck], "determinism").profile
     assert first.model_dump() == second.model_dump()
     assert first.provenance == second.provenance
+
+
+# --------------------------------------------------------------------------------------
+# A logo in two colourways
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_logo_colourways(path):
+    """Five slides carrying the same logo slot, but a different image on slide 1.
+
+    This is what a real deck looks like: a dark title slide takes the light
+    colourway of the mark, the four light slides take the dark one. Two image
+    parts, two hashes, one logo.
+    """
+    import io
+
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    def _mark(colour):
+        buffer = io.BytesIO()
+        Image.new("RGB", (188, 74), colour).save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for index in range(5):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        # Slide 1 takes the light mark; the rest take the dark one. Same slot.
+        colour = (255, 255, 255) if index == 0 else (30, 39, 97)
+        picture = slide.shapes.add_picture(
+            _mark(colour), Pt(823), Pt(29), Pt(94), Pt(37)
+        )
+        picture.name = "Logo"
+        body = slide.shapes.add_textbox(Pt(42), Pt(120), Pt(600), Pt(200))
+        body.text_frame.text = f"Slide {index + 1} body copy for the archetype classifier."
+    presentation.save(str(path))
+
+    from tieout.model.loader import load_deck
+
+    return load_deck(path)
+
+
+def test_a_logo_in_two_colourways_is_one_logo(tmp_path):
+    """The light mark sits on one slide in five, far below the support share, so
+    it was not a logo candidate at all. Nothing recorded it, and the archetype
+    carrying it was then learned as *exempt* — a positive claim that those
+    slides correctly have no logo. From that point a title slide with the logo
+    moved, resized or deleted was never reported by any rule.
+
+    Recognition is by the slot the image fills, not by its pixels.
+    """
+    from tieout.model.furniture import detect_furniture
+
+    deck = _deck_with_logo_colourways(tmp_path / "colourways.pptx")
+    furniture = detect_furniture(deck)
+
+    for slide in deck.slides:
+        assert furniture.logo_shapes(slide), (
+            f"slide {slide.index} carries the logo and must be seen to"
+        )
+
+
+def test_the_colourway_variant_reaches_the_profile(tmp_path):
+    """Detection is not enough on its own: the learner derived the logo through
+    its own copy of the threshold and kept a single hash, so the profile still
+    exempted the archetype that only ever carries the variant."""
+    deck = _deck_with_logo_colourways(tmp_path / "colourways.pptx")
+    profile = learn_from_decks([deck], "acme").profile
+
+    assert profile.brand.logo is not None
+    assert len(profile.brand.logo.image_sha1) == 2, (
+        "both colourways belong to the profile, or the variant's slides go unchecked"
+    )
+    assert "exempt" not in profile.brand.logo.per_archetype.values(), (
+        "no archetype in this deck is without a logo"
+    )
