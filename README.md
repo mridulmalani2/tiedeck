@@ -245,6 +245,46 @@ Three behaviours worth knowing:
 
 ---
 
+### The reference deck review
+
+`learn` finishes by running the whole rule catalogue against the deck it just
+learned from, and reporting what the profile does not cover.
+
+```console
+Reference deck review — 12 finding(s) the profile does not cover
+  Either fix these in the reference deck before it becomes the house standard,
+  or accept them: every one is about to be the bar every future deck is
+  measured against.
+  [blocker] BR-005 ×1 on slide(s) 8: 2 runs in 2 shapes set in Arial, which is
+  not an approved typeface
+  [minor] TY-002 ×3 on slide(s) 5, 9, 20: 10 spacing defects on this slide
+```
+
+A profile derived from a deck and then run against that same deck should find
+nothing. That is the tool's own acceptance criterion, and every deviation is one
+of exactly two things.
+
+Either **the profile is wrong** — it derived a central value where the deck holds
+a range, and now reports the deck's own spread. That is a defect in TieOut and
+belongs in its test suite, not in your report.
+
+Or **the reference deck really does contain what the rule says**: a typeface
+nobody meant to use, a colour used once, a double space. That is worth knowing
+*before* the profile goes into service, because every one of those defects is
+about to become the standard every future deck is measured against, or a finding
+on every future deck that inherits it.
+
+So it is reported, never absorbed. Widening the profile to cover a defect would
+make the criterion hold by making the tool useless, and recording blanket
+exemptions would do the same more quietly.
+
+A rule that *raised* while reviewing is called out separately, in red, and the
+review is not clean however few findings came back: a rule that crashed checked
+nothing, and counting it among the rules that ran claims coverage that does not
+exist.
+
+---
+
 ## How derivation works
 
 Four stages, and the design principle running through all of them is from the
@@ -470,7 +510,7 @@ produce would be measured against a default the client never agreed to.
 | **TY-002** | minor | on | Double space, trailing whitespace, space before punctuation or mixed non-breaking spaces | not learned; fixed behaviour |
 | **TY-003** | minor | on | Bullet terminal punctuation inconsistent with the learned convention | `typography.bullet_terminal_punctuation` |
 | **TY-004** | minor | on | Slide title capitalisation deviates from the learned convention | `typography.title_case` |
-| **TY-005** | major | on | A non-canonical variant of a learned term appears | `typography.canon_terms` |
+| **TY-005** | major | on | A non-canonical variant of a learned term appears | `typography.canon_terms`, `typography.canon_accepted` |
 | **TY-006** | major | on | Number formatting is inconsistent within one table column | `typography.decimal_places_by_column` |
 | **TY-007** | minor | on | Currency or unit notation deviates from the learned pattern | `typography.currency_pattern` |
 | **TY-008** | minor | on | Date format deviates from the learned format | `typography.date_format` |
@@ -1353,6 +1393,40 @@ fetched at view time, with the provenance of every finding shown inline.
 
 ---
 
+### Three fields worth knowing about
+
+**`typography.canon_accepted`** holds the *other* spellings the reference deck
+uses for a canonical term, and they are accepted rather than reported. A deck
+sets the same term in caps in an eyebrow, in title case on the agenda and in
+sentence case in prose, and all three are the house style precisely because the
+approved deck contains them. This is evidence, not a blanket exemption for
+capitalisation: a form the reference deck never carried is still reported, so
+"Ashcombe partners" on a deck whose reference only ever wrote "Ashcombe
+Partners" is caught. `canon_terms` wins where a form appears in both, which is
+how the loser of an answered terminology question stays reportable.
+
+**`hygiene.document_metadata_allowed`** holds the identifying `docProps` values
+the reference deck carries. They belong to the client whose approved deck it is,
+so HY-004 treats them as authorship rather than as a leak, and reports only
+other names — a named individual, a counterparty, a codename. Without it the
+rule blocks on the client's own name in the client's own deck, which tells you
+only that TieOut cannot tell whose deck it is looking at.
+
+**`brand.palette_tolerance_delta_e`** is derived from the distance *between*
+palette entries, and then raised if it has to be to admit the widest cluster's
+own members. Clustering gathers colours within 3 Delta-E of each other, so a
+cluster can be wider than the tolerance measured against its representative, and
+the rim of every cluster then fails a check against the palette it is part of.
+The provenance says when admission is what raised it.
+
+Opacity is not among them, because opacity is not a colour. A brand navy at 12%,
+28%, 60% and 75% — concentric rings, a tint band, a highlight panel — is one
+colour decision and four opacity decisions. TieOut records the colour as chosen
+and carries the opacity beside it, rather than compositing each against the page
+and reporting four colours that appear nowhere in the file.
+
+---
+
 ## Known limitations
 
 Stated plainly, because a QA tool that overstates its coverage is worse than one
@@ -1405,10 +1479,19 @@ sums, and only when at least three addends are involved.
 the reference deck as ground truth, so a mistake that is *consistent* in it
 becomes the expectation for every future deck. A logo 4pt out of place on all 26
 slides is learned as the correct position. TieOut mitigates this where it can —
-one-off colours are discarded rather than admitted to the palette, and outliers
-in a dominant value are queued as a question — but it cannot detect a systematic
-error. Learn from a deck you are confident in, read the emitted profile, and
-correct and `lock` anything wrong.
+one-off colours are discarded rather than admitted to the palette, outliers in a
+dominant value are queued as a question, and `learn` ends by
+[reviewing the reference deck against its own profile](#the-reference-deck-review)
+— but it cannot detect a systematic error. Learn from a deck you are confident
+in, read the emitted profile, and correct and `lock` anything wrong.
+
+**A shape whose position carries a number is still measured as geometry.** A dot
+on a competitive quadrant, a bar on a football field and a marker on a timeline
+sit where their value puts them. LO-003 sees a shape 3pt off a learned grid line
+and proposes snapping it, which would move a competitor or restate a valuation.
+TieOut cannot tell a data mark from a misplaced box — nothing in the file says
+which it is — so these are the findings to accept rather than act on, with
+`tieout check --accept LO-003@slide10` and a note saying why.
 
 **A single reference deck is thin evidence for deck-wide conventions.** Rules
 scoped to an archetype with two or three slides, or deck-wide keys with few

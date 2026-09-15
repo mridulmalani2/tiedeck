@@ -432,6 +432,13 @@ class NearMissAlignment(Rule):
       rest of the deck uses 500pt has aligned eight shapes deliberately; the
       deck grid has never seen that column, and measuring those eight against
       the nearest one it has knows only that they are not on it.
+
+      An even progression counts too. Five identical blocks stacked at a
+      uniform pitch are placed by that pitch, not by a row: their edges land
+      wherever the arithmetic puts them, and on a real deck two of the five
+      happened to fall near a learned row while three did not. Snapping the two
+      to satisfy this rule is what breaks the set -- it did, and LO-008 reported
+      the wreckage on the next run.
     * is **not** on any learned grid line, that is, further than
       ``profile.layout.grid.tolerance_pt`` from the nearest one, and
     * misses that nearest line by a distance inside
@@ -446,10 +453,14 @@ class NearMissAlignment(Rule):
     Decorative bleeds are excluded: a graphic placed to run off the slide edge
     has no alignment to miss.
 
-    Observations are grouped by slide and grid line, so a row of five cards
-    nudged together yields one finding; groups on the same slide sharing the same
-    signed offset are then merged, because one shape dragged 3pt off two grid
-    lines at once is one drag and not two defects.
+    One observation per shape per axis. A 21.6pt-tall box between rows 14.4pt
+    apart is 3.6pt below one and 3.6pt above the other, and reporting both asks
+    the reader to move it up and down at once; the nearer line is the one it was
+    meant to be on. Observations are then grouped by slide and grid line, so a
+    row of five cards nudged together yields one finding; groups on the same
+    slide sharing the same signed offset are merged after that, because one
+    shape dragged 3pt off two grid lines at once is one drag and not two
+    defects.
 
     Known false-positive mode: a deliberate small offset -- a shadow layer, a
     highlight bar intentionally set 2pt inside its card, an optical correction on
@@ -479,8 +490,13 @@ class NearMissAlignment(Rule):
                 if not is_decorative_bleed(shape, slide, canvas)
             ]
             local = _local_alignments(shapes, grid.tolerance_pt)
+            evenly_spaced = _evenly_spaced_axes(
+                shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
+            )
             for shape in shapes:
-                aligned = _aligned_axes(grid, shape, local)
+                aligned = _aligned_axes(grid, shape, local) | evenly_spaced.get(
+                    shape.ref.shape_id, frozenset()
+                )
                 for edge in _edge_values(shape):
                     if edge.axis in aligned:
                         continue
@@ -502,7 +518,10 @@ class NearMissAlignment(Rule):
                         )
                     )
 
-        return [self._finding_for(group, profile) for group in _group_near_misses(observed)]
+        return [
+            self._finding_for(group, profile)
+            for group in _group_near_misses(_closest_per_axis(observed))
+        ]
 
     def _finding_for(self, group: Sequence[_NearMiss], profile: Profile) -> Finding:
         first = group[0]
@@ -570,6 +589,37 @@ def _local_alignments(
     return out
 
 
+def _evenly_spaced_axes(
+    shapes: Sequence[ShapeModel], tolerance: float, stdev_limit: float
+) -> dict[int, frozenset[str]]:
+    """Shape id -> the axes on which it belongs to an evenly spaced run.
+
+    Reuses LO-008's sibling detection, so "evenly spaced" means the same thing
+    to the rule that rewards it as to the rule that reports its absence. A run
+    of same-sized shapes whose gutters agree within
+    ``profile.layout.gutter_stdev_pt`` is placed by its own pitch, and the
+    position of any one member on that axis is arithmetic rather than a
+    decision to get wrong.
+    """
+    out: dict[int, set[str]] = {}
+    for axis, settled in ((_ROW, "x"), (_COLUMN, "y")):
+        for group in _sibling_groups(shapes, axis, tolerance):
+            units = _touching_runs(group, axis, tolerance)
+            if len(units) < MIN_SIBLINGS:
+                continue
+            gutters = [
+                axis.lead(later[0]) - axis.trail(earlier[-1])
+                for earlier, later in itertools.pairwise(units)
+            ]
+            if len(gutters) < 2 or min(gutters) < -tolerance:
+                continue
+            if statistics.stdev(gutters) > stdev_limit:
+                continue
+            for shape in group:
+                out.setdefault(shape.ref.shape_id, set()).add(settled)
+    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+
+
 def _aligned_axes(
     grid: GridProfile, shape: ShapeModel, local: dict[str, list[float]]
 ) -> frozenset[str]:
@@ -604,6 +654,26 @@ def _ambiguous(
     lines = grid.columns_pt if axis == "x" else grid.rows_pt
     near = [other for other in lines if abs(other - value) <= window]
     return len(near) > 1 and any(other != line for other in near)
+
+
+def _closest_per_axis(observed: Iterable[_NearMiss]) -> list[_NearMiss]:
+    """Keep only each shape's nearest miss on each axis.
+
+    A shape has one position per axis, so it has one placement to get wrong. Its
+    top, centre and bottom each miss a different line by a different amount, and
+    reporting all three turns one nudge into three findings that cannot all be
+    acted on -- two of them in opposite directions.
+    """
+    best: dict[tuple[int, int, str], _NearMiss] = {}
+    for miss in observed:
+        key = (miss.ref.slide_index, miss.ref.shape_id, miss.axis)
+        current = best.get(key)
+        if current is None or (abs(miss.delta), miss.label) < (
+            abs(current.delta),
+            current.label,
+        ):
+            best[key] = miss
+    return [best[key] for key in sorted(best)]
 
 
 def _group_near_misses(observed: Iterable[_NearMiss]) -> list[list[_NearMiss]]:

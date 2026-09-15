@@ -50,7 +50,7 @@ def build(result: AuditResult) -> dict[str, Any]:
             for entry in result.unchecked
         ],
         "rules_skipped": [
-            {"rule_id": entry.rule_id, "reason": entry.reason}
+            {"rule_id": entry.rule_id, "reason": entry.reason, "failed": entry.failed}
             for entry in result.rules_skipped
         ],
         "rules_run": list(result.rules_run),

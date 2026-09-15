@@ -143,10 +143,18 @@ class Unchecked:
 
 @dataclass(frozen=True, slots=True)
 class RuleSkipped:
-    """A rule that did not run, and why."""
+    """A rule that did not run, and why.
+
+    ``failed`` separates the two reasons a rule can be silent, which a reader
+    must never have to guess between. A rule that declines because the profile
+    holds no expectation for it has done its job; a rule that raised has told
+    you nothing at all, and a report counting it among the rules that ran is
+    claiming coverage it does not have.
+    """
 
     rule_id: str
     reason: str
+    failed: bool = False
 
 
 class Rule(ABC):
@@ -464,7 +472,11 @@ def run_rules(
             findings = rule.run(deck, profile)
         except Exception as exc:
             result.rules_skipped.append(
-                RuleSkipped(rule_cls.id, f"raised {type(exc).__name__}: {exc}")
+                RuleSkipped(
+                    rule_cls.id,
+                    f"raised {type(exc).__name__}: {exc}",
+                    failed=True,
+                )
             )
             continue
 

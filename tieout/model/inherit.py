@@ -57,13 +57,23 @@ NS: Final[dict[str, str]] = {"a": A, "p": P, "r": R}
 MAX_LEVEL: Final[int] = 8
 
 #: DrawingML colour transform elements, in the order they may appear.
+#:
+#: ``alpha`` is deliberately not among them. It is an opacity, not a colour: a
+#: brand navy at 12%, 28%, 60% and 75% is one colour decision and four opacity
+#: decisions, and flattening each against the page turns it into four colours
+#: that appear nowhere in the file and are on nobody's palette. A real deck's
+#: tint bands, concentric rings and highlight panels are all built this way, so
+#: the flattening reported the house style as four breaches of itself and told
+#: the user to recolour a deliberate ramp to a flat grey. The opacity is carried
+#: alongside the colour instead, on ``ResolvedFill``, ``ResolvedLine`` and
+#: ``ResolvedFont``, where a rule that cares about what the eye sees can reach
+#: it without every rule that cares about brand having to undo it.
 _TRANSFORM_TAGS: Final[tuple[str, ...]] = (
     "tint",
     "shade",
     "lumMod",
     "lumOff",
     "satMod",
-    "alpha",
 )
 
 #: Theme colour slots as they appear in ``a:clrScheme``.
@@ -290,6 +300,9 @@ class ResolvedFill:
 
     kind: str  # solid | none | gradient | picture | pattern | group | inherit
     hex: str | None
+    #: Declared opacity as a fraction. ``hex`` is the colour as chosen, not as
+    #: composited: see :data:`_TRANSFORM_TAGS`.
+    alpha: float = 1.0
     source: str = ""
 
     @property
@@ -307,7 +320,9 @@ class ResolvedLine:
 
     kind: str  # solid | none | gradient | pattern | inherit
     hex: str | None
-    width_pt: float | None
+    #: Declared opacity as a fraction, as on :class:`ResolvedFill`.
+    alpha: float = 1.0
+    width_pt: float | None = None
     source: str = ""
 
     @property
@@ -368,6 +383,20 @@ class SlideContext:
         if node is None:
             return None
         return self._resolve_color_node(node, ph_color=ph_color, depth=_depth)
+
+    def resolve_alpha(
+        self,
+        container: etree._Element | None,
+    ) -> float:
+        """The opacity of a colour-bearing container, as a fraction.
+
+        Read from the same node :meth:`resolve_color` reads the colour from, so
+        the two always describe the same declaration.
+        """
+        if container is None:
+            return 1.0
+        node = _first_color_child(container)
+        return 1.0 if node is None else _alpha_of(node)
 
     def _resolve_color_node(
         self,
@@ -708,6 +737,7 @@ class SlideContext:
                 return ResolvedFill(
                     kind="solid",
                     hex=self.resolve_color(fill_el, ph_color=ph_color),
+                    alpha=self.resolve_alpha(fill_el),
                     source=source,
                 )
             case "noFill":
@@ -719,6 +749,7 @@ class SlideContext:
                 return ResolvedFill(
                     kind="gradient",
                     hex=self.resolve_color(stop, ph_color=ph_color) if stop is not None else None,
+                    alpha=self.resolve_alpha(stop) if stop is not None else 1.0,
                     source=source,
                 )
             case "blipFill":
@@ -728,6 +759,7 @@ class SlideContext:
                 return ResolvedFill(
                     kind="pattern",
                     hex=self.resolve_color(fg, ph_color=ph_color) if fg is not None else None,
+                    alpha=self.resolve_alpha(fg) if fg is not None else 1.0,
                     source=source,
                 )
             case "grpFill":
@@ -797,6 +829,7 @@ class SlideContext:
             return ResolvedLine(
                 kind="solid",
                 hex=self.resolve_color(solid, ph_color=ph_color),
+                alpha=self.resolve_alpha(solid),
                 width_pt=width_pt,
                 source=source,
             )
@@ -981,6 +1014,25 @@ def _find_placeholder(
             if idx is None:
                 return shape
     return None
+
+
+def _alpha_of(node: etree._Element) -> float:
+    """The opacity a colour node declares, as a fraction. 1.0 when it declares none."""
+    child = node.find("a:alpha", NS)
+    if child is None:
+        return 1.0
+    raw = child.get("val")
+    if raw is None:
+        return 1.0
+    try:
+        return max(0.0, min(1.0, int(raw) / 100000.0))
+    except ValueError:
+        if raw.endswith("%"):
+            try:
+                return max(0.0, min(1.0, float(raw[:-1]) / 100.0))
+            except ValueError:
+                return 1.0
+        return 1.0
 
 
 def _apply_transforms(base: colour.Rgb, node: etree._Element) -> colour.Rgb:

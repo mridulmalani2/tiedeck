@@ -84,10 +84,14 @@ class ReferenceReview:
     """
 
     findings: list[Finding] = field(default_factory=list)
+    #: Rules that raised while reviewing the reference deck. They checked
+    #: nothing, so a review with any of these is not a clean review however few
+    #: findings came back.
+    failed_rules: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def clean(self) -> bool:
-        return not self.findings
+        return not self.findings and not self.failed_rules
 
     @property
     def by_rule(self) -> dict[str, list[Finding]]:
@@ -107,7 +111,18 @@ class ReferenceReview:
                 "The reference deck passes its own profile: every rule in the "
                 "catalogue is silent on the deck it was learned from."
             )
-        lines = [
+        lines = []
+        if self.failed_rules:
+            lines.append(
+                f"{len(self.failed_rules)} rule(s) failed to run against the "
+                "reference deck and checked nothing:"
+            )
+            lines.extend(
+                f"  {rule_id}: {reason}" for rule_id, reason in self.failed_rules
+            )
+        if not self.findings:
+            return "\n".join(lines)
+        lines += [
             f"{len(self.findings)} finding(s) remain on the reference deck itself. "
             "The profile does not cover these, so they are either defects in the "
             "deck worth fixing before it becomes the house standard, or "
@@ -214,7 +229,13 @@ def review_reference(decks: list[DeckModel], profile: Profile) -> ReferenceRevie
     review = ReferenceReview()
     for deck in decks:
         clear_caches()
-        review.findings.extend(run_rules(deck, profile).findings)
+        result = run_rules(deck, profile)
+        review.findings.extend(result.findings)
+        review.failed_rules.extend(
+            (entry.rule_id, entry.reason)
+            for entry in result.rules_skipped
+            if entry.failed
+        )
     clear_caches()
     return review
 

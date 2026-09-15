@@ -128,20 +128,32 @@ def _footer(result: AuditResult, console: Console) -> None:
         )
 
     if result.rules_skipped:
+        failures = [entry for entry in result.rules_skipped if entry.failed]
+        declined = [entry for entry in result.rules_skipped if not entry.failed]
         console.print()
-        console.print("[bold]rules not run[/bold]")
-        for skipped in result.rules_skipped:
+        if failures:
+            # Loud, and never dim. A rule that raised checked nothing, and a
+            # report that lists it beside the rules which declined for want of
+            # an expectation is inviting the reader to treat a crash as a pass.
             console.print(
-                Text(f"  {skipped.rule_id}  {skipped.reason}", style="dim")
+                f"[bold red]{len(failures)} rule(s) failed to run[/bold red] "
+                "[red]-- this deck was not fully checked[/red]"
             )
+            for entry in failures:
+                console.print(Text(f"  {entry.rule_id}  {entry.reason}", style="red"))
+            console.print()
+        if declined:
+            console.print("[bold]rules not run[/bold]")
+            for entry in declined:
+                console.print(Text(f"  {entry.rule_id}  {entry.reason}", style="dim"))
 
     if result.unchecked:
         console.print()
         console.print(
             f"[bold]not checked[/bold] [dim]({len(result.unchecked)} shape(s))[/dim]"
         )
-        for entry in _condense_unchecked(result):
-            console.print(Text(f"  {entry}", style="dim"))
+        for line in _condense_unchecked(result):
+            console.print(Text(f"  {line}", style="dim"))
 
 
 def _condense_unchecked(result: AuditResult) -> list[str]:

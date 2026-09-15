@@ -106,3 +106,75 @@ def test_review_reference_reports_what_a_rule_finds(
     assert review.findings
     assert "finding(s) remain on the reference deck itself" in review.describe()
     assert review.blocking_count >= 1
+
+
+# --------------------------------------------------------------------------------------
+# A rule that crashed has not passed
+# --------------------------------------------------------------------------------------
+
+
+def test_a_rule_that_raises_is_marked_failed_not_merely_skipped(
+    clean_deck: DeckModel,
+) -> None:
+    """The distinction this test exists for cost a real diagnosis.
+
+    A typo in a layout helper made LO-003 raise on every deck. The engine caught
+    it, filed it in ``rules_skipped`` beside the rules that decline for want of a
+    learned expectation, and the report said "0 findings from 37 rules" -- one
+    fewer than the run before, which is the only trace a reader had that a rule
+    had stopped checking anything at all.
+    """
+    from tieout.profile.schema import Profile
+    from tieout.rules.base import (
+        REGISTRY,
+        Finding,
+        Rule,
+        load_all_rules,
+        register,
+        run_rules,
+    )
+
+    load_all_rules()
+    profile = learn_from_decks([clean_deck], "guard").profile
+
+    @register
+    class Exploding(Rule):
+        id = "ZZ-999"
+        category = "layout"
+        summary = "raises"
+
+        def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+            raise RuntimeError("boom")
+
+    try:
+        result = run_rules(clean_deck, profile, include=["ZZ-999"])
+    finally:
+        REGISTRY.pop("ZZ-999", None)
+
+    entries = [entry for entry in result.rules_skipped if entry.rule_id == "ZZ-999"]
+    assert entries, "the crashed rule was not recorded at all"
+    assert entries[0].failed
+    assert "boom" in entries[0].reason
+    assert "ZZ-999" not in result.rules_run
+
+
+def test_a_declined_rule_is_not_marked_failed(clean_deck: DeckModel) -> None:
+    """Declining for want of an expectation is the rule working, not failing."""
+    from tieout.rules.base import run_rules
+
+    profile = learn_from_decks([clean_deck], "guard").profile
+    profile.brand.logo = None
+    result = run_rules(clean_deck, profile, include=["BR-001"])
+    entries = [entry for entry in result.rules_skipped if entry.rule_id == "BR-001"]
+    assert entries
+    assert not entries[0].failed
+
+
+def test_a_review_with_a_failed_rule_is_not_clean() -> None:
+    """Zero findings from a rule that never ran is not evidence of anything."""
+    from tieout.learn import ReferenceReview
+
+    review = ReferenceReview(failed_rules=[("LO-003", "raised NameError: nope")])
+    assert not review.clean
+    assert "failed to run" in review.describe()
+    assert "LO-003" in review.describe()

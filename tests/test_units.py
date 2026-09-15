@@ -12,6 +12,7 @@ import math
 import pytest
 
 from tieout.model import color as colour
+from tieout.model.inherit import SlideContext
 from tieout.model.units import (
     EMU_PER_INCH,
     EMU_PER_POINT,
@@ -260,3 +261,74 @@ def test_a_missing_file_raises_the_same_error(tmp_path):
 
     with pytest.raises(DeckLoadError):
         load_deck(tmp_path / "absent.pptx")
+
+
+# --------------------------------------------------------------------------------------
+# Opacity is not a colour
+# --------------------------------------------------------------------------------------
+
+
+def _resolver() -> SlideContext:
+    """A context with no theme behind it: these colours are literal sRGB."""
+    from tieout.model.inherit import ColorMap, SlideContext, Theme
+
+    return SlideContext(
+        theme=Theme(
+            major_latin=None,
+            minor_latin=None,
+            scheme={},
+            fill_styles=(),
+            line_styles=(),
+            bg_fill_styles=(),
+        ),
+        color_map=ColorMap(mapping={}),
+        layout_el=None,
+        master_el=None,
+    )
+
+
+def test_alpha_is_carried_rather_than_flattened_into_the_colour():
+    """A brand colour at reduced opacity is still that brand colour.
+
+    The resolver used to composite alpha against white and report the result, so
+    one navy used at 12%, 28%, 60% and 75% -- concentric rings, a tint band, a
+    highlight panel, all ordinary house style -- measured as four colours that
+    appear nowhere in the file and are on nobody's palette. BR-004 then reported
+    the house style as four breaches of itself and proposed recolouring a
+    deliberate ramp to a flat grey.
+    """
+    from lxml import etree
+
+    fill = etree.fromstring(
+        '<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:srgbClr val="0F2A4A"><a:alpha val="28000"/></a:srgbClr>'
+        "</a:solidFill>"
+    )
+    resolver = _resolver()
+    assert resolver.resolve_color(fill) == "#0F2A4A"
+    assert resolver.resolve_alpha(fill) == pytest.approx(0.28)
+
+
+def test_a_colour_with_no_alpha_reads_as_fully_opaque():
+    from lxml import etree
+
+    fill = etree.fromstring(
+        '<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:srgbClr val="C9A227"/>'
+        "</a:solidFill>"
+    )
+    resolver = _resolver()
+    assert resolver.resolve_alpha(fill) == pytest.approx(1.0)
+
+
+def test_other_colour_transforms_still_apply():
+    """Only alpha was removed from the transform list; tint and shade are colour."""
+    from lxml import etree
+
+    fill = etree.fromstring(
+        '<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:srgbClr val="0F2A4A"><a:lumMod val="50000"/></a:srgbClr>'
+        "</a:solidFill>"
+    )
+    resolver = _resolver()
+    assert resolver.resolve_color(fill) != "#0F2A4A"
