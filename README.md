@@ -1246,11 +1246,15 @@ the client's own proper nouns are seeded from the reference deck. Ticker
 patterns, short all-caps acronyms and canon terms are skipped. It will still
 flag unusual but legitimate words; add them to `hygiene.dictionary`.
 
-**SmartArt is not inspected.** A `dgm` graphic frame is recognised as a shape and
-its box participates in canvas and margin checks, but its internal geometry,
-text and colours live in a diagram part TieOut does not model. Nothing inside a
-SmartArt graphic is checked, and pretending otherwise would produce confident
-nonsense.
+**SmartArt is inspected for text only.** A `dgm` graphic frame's labels live in
+a separate diagram part, and TieOut reads them, so a draft marker, a
+non-canonical term or a misspelling inside SmartArt is reported like any other
+text — which matters, because a process or structure slide is often made
+entirely of SmartArt. Its *internal* geometry and colours are still not
+modelled: they are produced by an algorithm in the diagram's layout part rather
+than positioned by the author, so no layout or brand rule looks inside one, and
+claiming to measure those boxes would be confident nonsense. The frame's own box
+participates in canvas and margin checks, as it always did.
 
 **Chart internals are partially inspected.** Chart text — series names, category
 labels, titles, axis titles — is read and checked for typefaces, placeholder
@@ -1299,7 +1303,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,125 tests
+.venv/bin/python -m pytest              # 1,135 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

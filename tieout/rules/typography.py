@@ -70,11 +70,15 @@ class _Passage:
 def _passages(
     slide: SlideModel, *, furniture: Furniture | None = None
 ) -> Iterator[_Passage]:
-    """Every piece of text on a slide: text frames, table cells, chart labels.
+    """Every piece of text on a slide: text frames, table cells, chart and
+    SmartArt labels.
 
     Passing ``furniture`` excludes deck chrome. Charts are included through
     ``chart.text_strings`` because series names and category labels are prose the
-    author typed, and they obey the same conventions as the body.
+    author typed, and they obey the same conventions as the body. SmartArt is
+    included for the same reason: its labels are typed, and the fact that they
+    live in a separate part is an implementation detail of the format, not a
+    reason for a draft marker in one to go unreported.
     """
     for shape in slide.leaf_shapes():
         if furniture is not None and furniture.is_furniture(
@@ -93,6 +97,9 @@ def _passages(
             for label in shape.chart.text_strings:
                 if label.strip():
                     yield _Passage(shape, label, "chart label")
+        for label in shape.diagram_text:
+            if label.strip():
+                yield _Passage(shape, label, "SmartArt label")
 
 
 def _plural(count: int, singular: str) -> str:

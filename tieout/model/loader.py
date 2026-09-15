@@ -357,6 +357,9 @@ def _load_shape(
         element, context=context, ph_type=ph_type, ph_idx=ph_idx, font_scale=font_scale
     )
     chart = _load_chart(shape, context=context) if kind == "chart" else None
+    diagram_text = (
+        _load_diagram_text(shape, element, package) if kind == "smartart" else ()
+    )
 
     image_sha1, image_part, px_w, px_h = _image_identity(shape, package)
 
@@ -409,6 +412,7 @@ def _load_shape(
         image_part_name=image_part,
         image_pixel_width=px_w,
         image_pixel_height=px_h,
+        diagram_text=diagram_text,
         table=table,
         chart=chart,
         z_order=z_order,
@@ -1069,6 +1073,52 @@ _CHART_TYPE_TAGS: Final[tuple[str, ...]] = (
     "surfaceChart",
     "ofPieChart",
 )
+
+
+#: ``dgm`` is not in the model's shared namespace map, which covers only the
+#: three the shape tree itself uses.
+_DIAGRAM_NS: Final[dict[str, str]] = {
+    **NS,
+    "dgm": "http://schemas.openxmlformats.org/drawingml/2006/diagram",
+}
+
+
+def _load_diagram_text(
+    shape: Any, element: etree._Element, package: PackageInfo
+) -> tuple[str, ...]:
+    """The labels inside a SmartArt graphic, via the relationship that names them.
+
+    A ``dgm`` graphic frame stores no text. It points at a diagram data part
+    through ``dgm:relIds/@r:dm``, and that part holds every label, which is why
+    a draft marker or a client's name inside SmartArt was invisible to every
+    text rule in the tool.
+
+    Only the text. The diagram's internal geometry and colours remain
+    unmodelled, so nothing here invites a layout rule to measure a box it
+    cannot see.
+    """
+    rel_ids = element.find(".//dgm:relIds", _DIAGRAM_NS)
+    if rel_ids is None:
+        return ()
+    rel_id = rel_ids.get(f"{{{NS['r']}}}dm")
+    if not rel_id:
+        return ()
+
+    source = _part_name(shape)
+    if source is None:
+        return ()
+    # python-pptx reports a part name with a leading slash; the package layer
+    # keys on the zip entry, which has none.
+    source = source.lstrip("/")
+
+    for relationship in package.relationships:
+        if relationship.source_part != source or relationship.rel_id != rel_id:
+            continue
+        target = package.resolve(relationship)
+        if target is None:
+            return ()
+        return package.diagram_text.get(target.lstrip("/"), ())
+    return ()
 
 
 def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:

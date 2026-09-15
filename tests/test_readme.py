@@ -158,7 +158,7 @@ def test_the_stated_rule_total_matches_the_registry(readme):
         ("single deck evidence", "A single reference deck is thin evidence"),
         ("overflow approximate", "Overflow detection is approximate and off by default"),
         ("spell check off", "Spell check is off by default"),
-        ("smartart", "SmartArt is not inspected"),
+        ("smartart", "SmartArt is inspected for text only"),
     ],
 )
 def test_each_required_limitation_is_stated(readme, topic, needle):

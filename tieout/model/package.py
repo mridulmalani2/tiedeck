@@ -43,7 +43,12 @@ NS: Final[dict[str, str]] = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "p188": "http://schemas.microsoft.com/office/powerpoint/2018/8/main",
+    "dgm": "http://schemas.openxmlformats.org/drawingml/2006/diagram",
 }
+
+#: Spelled out for ElementTree's ``{uri}tag`` form, which ``iter`` needs.
+_A: Final[str] = NS["a"]
+_DGM: Final[str] = NS["dgm"]
 
 #: Relationship types whose targets are legitimately external and never a defect.
 _BENIGN_EXTERNAL_TYPES: Final[frozenset[str]] = frozenset(
@@ -217,6 +222,11 @@ class PackageInfo:
     comments: list[CommentPart] = field(default_factory=list)
     embedded_fonts: list[EmbeddedFont] = field(default_factory=list)
     part_names: tuple[str, ...] = ()
+    #: Text inside each SmartArt data part, keyed by part name. Read here
+    #: because this is the layer that has the archive open; a diagram's text
+    #: lives in its own part and is reachable from a slide only through a
+    #: relationship.
+    diagram_text: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def has_comments(self) -> bool:
@@ -283,7 +293,43 @@ def load_package(path: str | Path) -> PackageInfo:
         info.media = _read_media(archive, names)
         info.comments = _read_comments(archive, names)
         info.embedded_fonts = _read_embedded_fonts(archive)
+        info.diagram_text = _read_diagram_text(archive, names)
     return info
+
+
+def _read_diagram_text(
+    archive: zipfile.ZipFile, names: tuple[str, ...]
+) -> dict[str, tuple[str, ...]]:
+    """The text a SmartArt graphic displays, per diagram data part.
+
+    A ``dgm`` graphic frame carries no text of its own: every label lives in a
+    separate diagram part, which is why nothing in the deck model could see it
+    and why a draft marker or a misspelling inside SmartArt went unreported.
+
+    Only the text. The diagram's internal geometry and colours stay unmodelled
+    -- they are laid out by an algorithm in the layout part, and claiming to
+    measure them would produce confident nonsense.
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for name in names:
+        if not (name.startswith("ppt/diagrams/data") and name.endswith(".xml")):
+            continue
+        root = _parse(archive, name)
+        if root is None:
+            continue
+        strings: list[str] = []
+        for point in root.iter(f"{{{_DGM}}}pt"):
+            # Transition points hold connector formatting, not content, and
+            # their empty text bodies would otherwise read as blank labels.
+            if point.get("type") in ("parTrans", "sibTrans"):
+                continue
+            for paragraph in point.iter(f"{{{_A}}}p"):
+                text = "".join(node.text or "" for node in paragraph.iter(f"{{{_A}}}t"))
+                if text.strip():
+                    strings.append(text)
+        if strings:
+            out[name] = tuple(strings)
+    return out
 
 
 def _text(root: ET.Element | None, xpath: str) -> str | None:

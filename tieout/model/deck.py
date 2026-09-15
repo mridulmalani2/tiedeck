@@ -271,6 +271,11 @@ class ShapeModel:
     image_pixel_width: int | None = None
     image_pixel_height: int | None = None
 
+    #: The labels a SmartArt graphic displays. Held apart from
+    #: ``text_frame_paragraphs`` deliberately: the text is real and checkable,
+    #: but the diagram's internal geometry is not modelled, so a rule that
+    #: measures boxes must not start treating this shape as a text frame.
+    diagram_text: tuple[str, ...] = ()
     table: TableModel | None = None
     chart: ChartModel | None = None
     children: tuple[ShapeModel, ...] = ()
@@ -327,12 +332,13 @@ class ShapeModel:
 
     @property
     def text(self) -> str:
-        """All text in the shape, including table and chart text."""
+        """All text in the shape, including table, chart and SmartArt text."""
         parts = [p.text for p in self.text_frame_paragraphs]
         if self.table is not None:
             parts.extend(p.text for p in self.table.all_paragraphs)
         if self.chart is not None:
             parts.extend(self.chart.text_strings)
+        parts.extend(self.diagram_text)
         return "\n".join(part for part in parts if part)
 
     @property

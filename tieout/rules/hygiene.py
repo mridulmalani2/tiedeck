@@ -221,8 +221,9 @@ class PlaceholderMarkerRule(Rule):
     ) -> list[str]:
         """Distinct markers found on one slide, in profile order.
 
-        ``ShapeModel.text`` already folds in table cells and chart text strings,
-        so leaf shapes plus the notes text cover everything a reader can see.
+        ``ShapeModel.text`` already folds in table cells, chart text strings and
+        SmartArt labels, so leaf shapes plus the notes text cover everything a
+        reader can see.
         """
         haystacks = [shape.text for shape in slide.leaf_shapes() if shape.text]
         if slide.notes_text.strip():
