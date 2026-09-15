@@ -66,9 +66,32 @@ class Deck:
     draft_error: str = ""
     deriving: bool = False
 
+    #: The deck as it stands after any corrections. Starts as the upload and is
+    #: never written over: each fix writes a new file, so undo is putting a path
+    #: back rather than inverting an edit -- and an edit that cannot be inverted
+    #: exactly cannot be undone honestly.
+    working: Path | None = None
+    #: Earlier versions, newest last. Popping one is the undo.
+    history: list[Path] = field(default_factory=list)
+    #: What was applied, so the page can list it and the export can be described.
+    applied: list[str] = field(default_factory=list)
+    #: Corrections the person turned down. Held for this session only: deciding
+    #: to leave one deck's colour alone is not a decision about the client's
+    #: house style, and writing it to the profile would make it one.
+    rejected: set[str] = field(default_factory=set)
+
     @property
     def slide_count(self) -> int:
         return self.model.slide_count
+
+    @property
+    def current(self) -> Path:
+        """The file to audit and to export."""
+        return self.working or self.path
+
+    @property
+    def edited(self) -> bool:
+        return bool(self.history)
 
 
 class SessionStore:
@@ -143,6 +166,25 @@ class SessionStore:
     def all(self) -> Iterator[Deck]:
         with self._lock:
             yield from list(self._decks.values())
+
+    # -- corrections ----------------------------------------------------- #
+
+    def next_version(self, deck: Deck) -> Path:
+        """A path for the next corrected copy of this deck."""
+        return deck.path.parent / f"v{len(deck.history) + 1}-{deck.filename}"
+
+    def record(self, deck: Deck, version: Path, summary: str) -> None:
+        deck.history.append(deck.current)
+        deck.applied.append(summary)
+        deck.working = version
+
+    def undo(self, deck: Deck) -> str | None:
+        """Step back one correction. Returns what was undone, or None."""
+        if not deck.history:
+            return None
+        previous = deck.history.pop()
+        deck.working = previous
+        return deck.applied.pop() if deck.applied else None
 
     def _forget(self, deck_id: str) -> None:
         deck = self._decks.pop(deck_id, None)

@@ -17,6 +17,10 @@ The route list is short on purpose:
 * ``POST /api/redact``           what would be sent, offline and without a key
 * ``POST /api/check``            the audit, slide by slide
 * ``GET  /api/thumbnails/...``   a rendered slide
+* ``POST /api/fix``              apply one correction to the open deck
+* ``POST /api/undo``             step back one correction
+* ``POST /api/reject``           turn one down, for this session only
+* ``GET  /api/export/{id}``      the corrected deck
 * ``GET  /api/report/{id}``      the self-contained HTML report
 
 The API key, when content review is on, is a field on the ``check`` request and
@@ -47,7 +51,8 @@ from tieout.profile.loader import (
 )
 from tieout.profile.schema import Profile
 from tieout.report import html as html_report
-from tieout.rules.base import clear_caches, run_rules
+from tieout.rules.base import AuditResult, clear_caches, run_rules
+from tieout_fix import Fix, apply_fix, plan_fixes
 from tieout_ui.edit import apply_edits, drop
 from tieout_ui.session import Deck, SessionStore
 from tieout_ui.view import audit_view, profile_view, rules_view
@@ -165,6 +170,26 @@ class RedactRequest(BaseModel):
     client: str = ""
     forbidden: str = ""
     include_notes: bool = False
+
+
+class FixRequest(BaseModel):
+    deck_id: str
+    client: str
+    #: The action the correction belongs to, as the review note names it.
+    key: str
+
+
+class UndoRequest(BaseModel):
+    deck_id: str
+    client: str
+
+
+class RejectRequest(BaseModel):
+    deck_id: str
+    client: str
+    key: str
+    #: False puts it back, so a turned-down correction is not a dead end.
+    rejected: bool = True
 
 
 class CheckRequest(BaseModel):
@@ -368,10 +393,74 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         if request.semantic:
             review = _semantic(store, request, deck, profile, result)
 
-        view = audit_view(result, deck.model)
+        view = _audit_payload(deck, profile, result)
         view["review"] = review
         deck.report = html_report.render(result, deck.model)
         return JSONResponse(view)
+
+    @app.post("/api/fix")
+    def fix(store: Guard, request: FixRequest) -> JSONResponse:
+        """Apply one correction and re-audit, so the count moves as it is made."""
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+        planned = _plan(deck, profile)
+        chosen = planned.get(request.key)
+        if chosen is None:
+            raise HTTPException(
+                status_code=400, detail="that correction is not available on this deck"
+            )
+
+        version = store.next_version(deck)
+        report = apply_fix(deck.current, version, chosen)
+        if not report.applied:
+            version.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=report.detail)
+
+        store.record(deck, version, chosen.summary)
+        _reload(deck)
+        payload = _recheck(deck, profile)
+        payload["fixed"] = chosen.summary
+        payload["changes"] = report.changes
+        return JSONResponse(payload)
+
+    @app.post("/api/undo")
+    def undo(store: Guard, request: UndoRequest) -> JSONResponse:
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+        undone = store.undo(deck)
+        if undone is None:
+            raise HTTPException(status_code=400, detail="nothing to undo")
+        _reload(deck)
+        payload = _recheck(deck, profile)
+        payload["undone"] = undone
+        return JSONResponse(payload)
+
+    @app.post("/api/reject")
+    def reject(store: Guard, request: RejectRequest) -> JSONResponse:
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+        if request.rejected:
+            deck.rejected.add(request.key)
+        else:
+            deck.rejected.discard(request.key)
+        return JSONResponse(_recheck(deck, profile))
+
+    @app.get("/api/export/{deck_id}")
+    def export(store: Guard, deck_id: str) -> Response:
+        """The deck as it now stands, corrections included."""
+        deck = _require(store, deck_id)
+        name = deck.filename
+        if deck.edited:
+            stem = name.rsplit(".", 1)[0]
+            name = f"{stem} (corrected).pptx"
+        return Response(
+            content=deck.current.read_bytes(),
+            media_type=(
+                "application/vnd.openxmlformats-officedocument.presentationml."
+                "presentation"
+            ),
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
 
     @app.get("/api/report/{deck_id}", response_class=HTMLResponse)
     def report(store: Guard, deck_id: str) -> HTMLResponse:
@@ -386,6 +475,60 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _plan(deck: Deck, profile: Profile) -> dict[str, Fix]:
+    """The corrections available on this deck, as it now stands."""
+    clear_caches()
+    result = run_rules(
+        deck.model, profile, suppressions=load_suppressions(profile.client)
+    )
+    return plan_fixes(result, profile)
+
+
+def _reload(deck: Deck) -> None:
+    """Re-read the deck after a correction, so the next audit sees it.
+
+    Thumbnails are deliberately left as they were. Re-rendering after every fix
+    would put a LibreOffice conversion between a click and its result, for images
+    that a recoloured fill or a deleted note barely changes.
+    """
+    deck.model = load_deck(deck.current)
+
+
+def _recheck(deck: Deck, profile: Profile) -> dict[str, Any]:
+    clear_caches()
+    result = run_rules(
+        deck.model, profile, suppressions=load_suppressions(profile.client)
+    )
+    deck.report = html_report.render(result, deck.model)
+    return _audit_payload(deck, profile, result)
+
+
+def _audit_payload(
+    deck: Deck, profile: Profile, result: AuditResult
+) -> dict[str, Any]:
+    """The audit, with each action told whether it can be corrected.
+
+    Assembled here rather than in the view, which stays a pure function of the
+    model: whether a correction can be applied is a fact about this session's
+    deck, not about the audit.
+    """
+    view = audit_view(result, deck.model)
+    planned = plan_fixes(result, profile)
+    for action in view["actions"]:
+        fix = planned.get(action["key"])
+        action["fixable"] = fix is not None
+        action["rejected"] = action["key"] in deck.rejected
+    view["edited"] = deck.edited
+    view["applied"] = list(deck.applied)
+    view["can_undo"] = bool(deck.history)
+    view["fixable_count"] = sum(
+        1
+        for action in view["actions"]
+        if action["fixable"] and not action["rejected"]
+    )
+    return view
 
 
 def _derive(model: DeckModel) -> LearnResult:

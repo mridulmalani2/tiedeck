@@ -231,8 +231,8 @@
   .verdict.v-polish .call, .verdict.v-clear .call { color: #0b6a0b; }
   .verdict.v-polish .call i, .verdict.v-clear .call i { background: #0b6a0b; }
   .verdict .detail { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
-  .verdict .counts { display: flex; gap: 14px; margin-top: 9px; font-size: 11.5px; }
-  .verdict .counts span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); }
+  .verdict .counts { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-size: 11.5px; }
+  .verdict .counts span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); white-space: nowrap; }
   .verdict .counts b { font-size: 13px; color: var(--ink); }
 
   /* By fix / by slide. Two ways into the same findings: one to plan the work,
@@ -260,6 +260,18 @@
     margin-top: 7px; padding: 7px 9px; background: var(--accent-wash);
     border-left: 2px solid var(--accent); font-size: 12.5px; color: var(--ink);
   }
+  .action .acts { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+  .action .acts button {
+    font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line-2);
+    border-radius: 2px; background: var(--surface); color: var(--ink); cursor: pointer;
+  }
+  .action .acts button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .action .acts button.go:hover:not(:disabled) { background: var(--accent-dark); }
+  .action .acts button:hover:not(:disabled):not(.go) { background: var(--chrome-2); }
+  .action .acts button:disabled { opacity: .4; cursor: default; }
+  .action .acts .manual { font-size: 11.5px; color: var(--ink-3); }
+  .action.turned-down { opacity: .5; }
+  .action.turned-down .do { background: var(--chrome); border-left-color: var(--line-2); }
   .action .ev { font: 11.5px var(--mono); color: var(--ink-2); margin-top: 6px; }
   .action .ev .arrow { color: var(--ink-3); }
   .action .why { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
@@ -471,6 +483,13 @@
     </div>
     <div class="grp">
       <div class="row">
+        <button class="big" id="export" disabled><span class="ico">&#11015;</span>Export deck</button>
+        <button class="big" id="undo" disabled><span class="ico">&#8630;</span>Undo</button>
+      </div>
+      <div class="name" id="editstate">No corrections made</div>
+    </div>
+    <div class="grp">
+      <div class="row">
         <button class="small" id="copynote">Copy note</button>
         <button class="small" id="openreport" disabled>HTML report</button>
       </div>
@@ -591,6 +610,8 @@ async function upload(file) {
   S.audit = null; S.draft = null; S.slide = 1; S.mode = null;
   $("tally").textContent = "";
   $("openreport").disabled = true;
+  $("undo").disabled = true;
+  $("editstate").textContent = "No corrections made";
   $("tab-style").disabled = !S.client;
   $("tab-review").disabled = !S.client;
   $("doc").textContent = S.deck.filename;
@@ -979,7 +1000,7 @@ $("check").onclick = async () => {
   }
   S.checking = false; $("check").disabled = false; busy("");
   $("openreport").disabled = false;
-  tab("review"); renderRail(); renderNote();
+  tab("review"); renderRail(); renderNote(); editState();
 };
 
 /* ---------- the review note ---------- */
@@ -1022,6 +1043,7 @@ function renderNote() {
       ${s.total ? `<div class="counts">
         ${kinds.map((k) => `<span><i class="b-${k}"></i><b>${s[k]}</b> ${k}</span>`).join("")}
         <span><b>${actions.length}</b> ${actions.length === 1 ? "thing" : "things"} to do</span>
+        ${a.fixable_count ? `<span><b>${a.fixable_count}</b> TieOut can fix</span>` : ""}
       </div>` : ""}
     </div>
     <div class="note-head">
@@ -1074,7 +1096,7 @@ function byFix(actions) {
             — ${esc(sentence(i.message))}
           </div>`).join("")}
       </details>` : "";
-    return `<div class="action">
+    return `<div class="action${a.rejected ? " turned-down" : ""}">
       <div class="bar b-${esc(a.severity)}"></div>
       <div class="col">
         <div class="meta">
@@ -1085,11 +1107,44 @@ function byFix(actions) {
         <div class="k">${esc(a.title)}</div>
         <div class="scope">${where}${times}</div>
         ${a.remedy ? `<div class="do">${esc(a.remedy)}</div>` : ""}
+        ${actionButtons(a)}
         ${delta}
         ${a.why ? `<div class="why">${esc(a.why)}</div>` : ""}
         ${instances}
       </div></div>`;
   }).join("");
+}
+
+// Fix where the change is a substitution with one correct outcome; say so, and
+// why, where it is not. A button that moved shapes would be the useful-looking
+// one and the one that breaks decks.
+function actionButtons(a) {
+  if (a.rejected) {
+    return `<div class="acts">
+      <span class="manual">Set aside for this deck.</span>
+      <button data-unreject="${esc(a.key)}">Put it back</button></div>`;
+  }
+  // Everything can be set aside, whether or not TieOut can correct it: a
+  // finding someone has looked at and decided about should stop competing for
+  // attention with the ones they have not. Session-only, deliberately — see the
+  // note on Deck.rejected.
+  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>`;
+  if (!a.fixable) {
+    return `<div class="acts">${aside}
+      <span class="manual">${esc(whyManual(a))}</span></div>`;
+  }
+  return `<div class="acts">
+    <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
+}
+
+// Named per rule rather than as one sentence, because the two reasons are not
+// the same and the difference is the whole basis for the refusal.
+const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003",
+                  "LO-004","LO-005","LO-006","LO-007","LO-008"];
+function whyManual(a) {
+  if (GEOMETRY.includes(a.rule_id))
+    return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
+  return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
 }
 
 // The original order, kept because it is how a deck actually gets corrected:
@@ -1108,7 +1163,54 @@ function bySlide() {
   return html;
 }
 
+async function correct(path, body, working) {
+  if (S.checking) return;
+  S.checking = true;
+  busy(working);
+  let next;
+  try { next = await api(path, { method: "POST", body }); }
+  catch (e) { S.checking = false; busy(""); return paneMessage("bad", e.message); }
+  S.checking = false; busy("");
+  S.audit = next;
+  renderRail(); renderNote(); editState();
+  if (next.fixed) paneMessage("good",
+    `${next.fixed}. ${next.changes} change${next.changes === 1 ? "" : "s"} made — `
+    + `${next.summary.total} finding${next.summary.total === 1 ? "" : "s"} left. `
+    + `Undo is on the ribbon.`);
+  else if (next.undone) paneMessage("good", `Undone: ${next.undone}.`);
+  else clearFlash();
+}
+
+// The ribbon's account of what has been done to the deck.
+function editState() {
+  const a = S.audit;
+  const applied = (a && a.applied) || [];
+  $("undo").disabled = !(a && a.can_undo);
+  $("export").disabled = !S.deck;
+  $("editstate").textContent = !applied.length
+    ? "No corrections made"
+    : `${applied.length} correction${applied.length === 1 ? "" : "s"} made`;
+}
+
 function wireNote() {
+  $("pane").querySelectorAll("[data-fix]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      correct("/api/fix",
+        { deck_id: S.deck.deck_id, client: S.client, key: el.dataset.fix },
+        "Correcting the deck");
+    };
+  });
+  $("pane").querySelectorAll("[data-reject],[data-unreject]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const key = el.dataset.reject || el.dataset.unreject;
+      correct("/api/reject",
+        { deck_id: S.deck.deck_id, client: S.client, key,
+          rejected: el.dataset.reject !== undefined },
+        "");
+    };
+  });
   $("pane").querySelectorAll("[data-goto]").forEach((el) => {
     el.style.cursor = "pointer";
     el.onclick = (event) => {
@@ -1228,6 +1330,15 @@ function plainNote() {
   }
   return lines.join("\n");
 }
+
+$("undo").onclick = () => correct("/api/undo",
+  { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
+
+$("export").onclick = () => {
+  window.open(
+    `/api/export/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`,
+    "_blank", "noopener");
+};
 
 $("openreport").onclick = () => {
   window.open(`/api/report/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`, "_blank", "noopener");

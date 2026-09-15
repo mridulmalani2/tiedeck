@@ -46,6 +46,17 @@ def uploaded(client, clean_path):
 
 
 @pytest.fixture
+def dirty_uploaded(client, dirty_path):
+    """The seeded deck. The clean one has nothing to correct, by design."""
+    response = client.post(
+        "/api/decks",
+        files={"file": (dirty_path.name, dirty_path.read_bytes(), _MIME)},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
 def onboarded(client, uploaded):
     response = client.post(
         "/api/learn", json={"deck_id": uploaded["deck_id"], "client": "demo"}
@@ -1023,3 +1034,149 @@ def test_every_finding_that_is_about_a_shape_can_be_pointed_at(
     assert all(f["bbox_pt"] and len(f["bbox_pt"]) == 4 for f in shaped), (
         "a finding that names a shape must say where that shape is"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Correcting the deck
+# --------------------------------------------------------------------------- #
+
+
+def _check(client, deck_id, name="demo"):
+    response = client.post("/api/check", json={"deck_id": deck_id, "client": name})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_an_action_says_whether_it_can_be_corrected(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    assert view["actions"], "the reference deck has findings to act on"
+    assert all("fixable" in action for action in view["actions"])
+    assert view["can_undo"] is False and view["edited"] is False
+
+
+def test_applying_a_correction_reduces_the_findings_and_can_be_undone(
+    client, dirty_uploaded, onboarded
+):
+    view = _check(client, dirty_uploaded["deck_id"])
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    if not fixable:
+        pytest.skip("this deck has nothing mechanically correctable")
+
+    before = view["summary"]["total"]
+    fixed = client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": fixable[0]["key"]},
+    )
+    assert fixed.status_code == 200, fixed.text
+    after = fixed.json()
+    assert after["summary"]["total"] < before
+    assert after["edited"] is True and after["can_undo"] is True
+    assert after["applied"] == [fixable[0]["remedy"]] or after["fixed"]
+
+    undone = client.post(
+        "/api/undo", json={"deck_id": dirty_uploaded["deck_id"], "client": "demo"}
+    )
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["summary"]["total"] == before
+    assert undone.json()["can_undo"] is False
+
+
+def test_undo_with_nothing_to_undo_is_refused_rather_than_guessed_at(
+    client, dirty_uploaded, onboarded
+):
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.post(
+        "/api/undo", json={"deck_id": dirty_uploaded["deck_id"], "client": "demo"}
+    )
+    assert response.status_code == 400
+
+
+def test_a_correction_that_is_not_on_offer_is_refused(client, dirty_uploaded, onboarded):
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": "LO-003|invented"},
+    )
+    assert response.status_code == 400
+
+
+def test_setting_one_aside_marks_it_and_puts_it_back(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    key = view["actions"][0]["key"]
+
+    aside = client.post(
+        "/api/reject",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": key,
+              "rejected": True},
+    ).json()
+    assert next(a for a in aside["actions"] if a["key"] == key)["rejected"] is True
+
+    back = client.post(
+        "/api/reject",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": key,
+              "rejected": False},
+    ).json()
+    assert next(a for a in back["actions"] if a["key"] == key)["rejected"] is False
+
+
+def test_setting_one_aside_never_reaches_the_profile(client, dirty_uploaded, onboarded):
+    """Deciding to leave one deck's colour alone is not a decision about the
+    client's house style, and writing it to the profile would make it one."""
+    view = _check(client, dirty_uploaded["deck_id"])
+    before = client.get("/api/profiles/demo").json()
+
+    client.post(
+        "/api/reject",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo",
+              "key": view["actions"][0]["key"], "rejected": True},
+    )
+    assert client.get("/api/profiles/demo").json() == before
+
+
+def test_the_export_is_a_readable_deck(client, dirty_uploaded, onboarded):
+    import io
+    import zipfile
+
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.get(f"/api/export/{dirty_uploaded['deck_id']}")
+    assert response.status_code == 200
+    assert "presentationml" in response.headers["content-type"]
+    assert "attachment" in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        assert "ppt/presentation.xml" in archive.namelist()
+
+
+def test_the_export_is_named_as_corrected_only_once_it_is(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    plain = client.get(f"/api/export/{dirty_uploaded['deck_id']}")
+    assert "corrected" not in plain.headers["content-disposition"]
+
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    if not fixable:
+        pytest.skip("this deck has nothing mechanically correctable")
+    client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": fixable[0]["key"]},
+    )
+    assert "corrected" in client.get(
+        f"/api/export/{dirty_uploaded['deck_id']}"
+    ).headers["content-disposition"]
+
+
+def test_the_upload_itself_is_never_written_over(client, dirty_uploaded, onboarded, store):
+    """Undo is putting a path back, which only works while the earlier file is
+    still the earlier file."""
+    deck = store.require(dirty_uploaded["deck_id"])
+    original = deck.path.read_bytes()
+
+    view = _check(client, dirty_uploaded["deck_id"])
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    if not fixable:
+        pytest.skip("this deck has nothing mechanically correctable")
+    client.post(
+        "/api/fix",
+        json={"deck_id": dirty_uploaded["deck_id"], "client": "demo", "key": fixable[0]["key"]},
+    )
+    assert deck.path.read_bytes() == original
+    assert deck.current != deck.path

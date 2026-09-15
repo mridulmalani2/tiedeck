@@ -810,6 +810,43 @@ It is also why the findings are a **review note** rather than a wall of cards.
 PowerPoint's own idiom for "someone has marked up your deck" is a comments task
 pane, so that is where the note goes.
 
+### Fixing what can be fixed
+
+Each point in the note carries **Fix it** and **Set aside**, and the ribbon
+carries **Undo** and **Export deck**. Applying a correction re-runs the audit, so
+the count moves as you work; undo steps back one correction at a time; export
+hands back the deck with everything you accepted applied and nothing else
+changed.
+
+**A fix is offered only where the change has exactly one right answer.** A colour
+to the palette colour it is nearest, a typeface to the approved one, a variant
+spelling to the canon term, a double space to one space, a document property to
+nothing at all. Each is a substitution, and applying it cannot make the deck
+worse.
+
+**Geometry is never fixed, and that is a finding rather than a policy.** Snapping
+the six shapes LO-003 reported on a real deck to their nearest grid line was
+tried: it drove one text box into its neighbour — a `major` overlap where there
+had been none — and turned a timetable column spaced evenly to the point into one
+varying by five. The grid lines had been derived from that deck, different shapes
+align to different ones, and pulling a group onto a line breaks its relationship
+with everything around it. Which alignment matters is a judgement about what the
+slide is for. So LO-\*, the logo rules and BR-008 report and stop, and say why.
+
+**Nor is anything fixed where the answer is unknowable.** Two figures that
+disagree, a total that does not sum, a placeholder that needs real words, a word
+the dictionary does not know: the tool can see something is wrong and has no way
+to know what is right. A value invented there would be wrong invisibly, inside a
+file someone is about to send.
+
+Nothing is edited in place. Each correction writes a new copy, which is what
+makes undo a matter of putting a path back rather than of inverting an edit — and
+an edit that cannot be inverted exactly cannot be undone honestly. The upload
+itself is never written over. **Set aside** is held for the session only: deciding
+to leave one deck's colour alone is not a decision about the client's house
+style, and writing it to the profile would make it one. For that, `tieout check
+--accept` writes a suppression.
+
 ### The note answers three questions, in order
 
 **Can I send it?** The note opens with a verdict — *Not ready to send*, *Fix
@@ -884,7 +921,8 @@ when the server stops.
    residual list, and the payload verbatim. Nothing is sent until you have read
    the residuals and said so.
 5. **Run.**
-6. **Results.** A verdict, then the work. **Copy note** puts the same thing on
+6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
+   can correct exactly and **Export deck** when you are done. **Copy note** puts the same thing on
    the clipboard as plain text, and the self-contained HTML report is the one
    `tieout check --format html` produces.
 
@@ -1304,11 +1342,12 @@ it cannot tell you that the number you typed is wrong, and a rule reading it
 reports the client's own approved deck as wrong if it does not support it. The
 audit is only ever as good as the profile behind it.
 
-**No auto-fix.** TieOut reports and tells you what to change; it does not edit
-your deck. The fix on a finding is an instruction for a person, not something
-the tool will apply, and for the consistency rules it is deliberately a prompt
-to check rather than a value to type — the tool can see that two figures
-disagree and cannot see which of them is right.
+**Auto-fix is deliberately partial.** The UI will apply a correction where the
+change is a substitution with exactly one right answer — see
+[Fixing what can be fixed](#fixing-what-can-be-fixed). It will not touch
+geometry, and it will not guess at anything the tool can see is wrong without
+knowing what is right. Those stay instructions for a person, and the CLI applies
+nothing at all.
 
 **Ambiguous dates are resolved by order, not by intelligence.** `09/14/2026` is
 unambiguous, but `05/06/2026` is not, and the first matching format in the
@@ -1325,7 +1364,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,144 tests
+.venv/bin/python -m pytest              # 1,182 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
@@ -1396,6 +1435,10 @@ not load the SDK.
 The UI is a third:
 
 ```
+tieout_fix/
+  the corrections, and the refusals: a substitution with one right answer is
+  applied, geometry and judgement are never touched
+
 tieout_ui/
   render.py    LibreOffice -> PDF -> PNG, degrading to nothing on every failure
   session.py   uploaded decks, in memory and in a temp dir; never an API key
@@ -1408,6 +1451,11 @@ tieout_ui/
 It may import a web framework, because serving a loopback socket is what one is
 for; it may not import the SDK, and reaches the model only through
 `tieout_review`'s single transport. That too is asserted rather than assumed.
+
+`tieout_fix` is the fourth, and separate for the same reason: the core promises
+never to write to a deck, and a module inside it that did would make that promise
+a matter of reading the code rather than of its shape. Nothing in `tieout`
+imports it.
 
 Rules read the resolved model and nothing else. If a rule needs something the
 model does not expose, the model gets extended — without that boundary every rule

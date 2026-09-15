@@ -18,6 +18,7 @@ from typing import Any, Final
 from tieout.model.deck import DeckModel
 from tieout.profile.schema import Profile
 from tieout.rules.base import SEVERITY_ORDER, AuditResult, load_all_rules
+from tieout_fix import action_key
 from tieout_ui.edit import can_clear, editable
 
 __all__ = ["audit_view", "profile_view", "rules_view"]
@@ -350,7 +351,7 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
     replacement.
     """
     summaries = {rule_id: rule.summary for rule_id, rule in load_all_rules().items()}
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    grouped: dict[str, dict[str, Any]] = {}
 
     for slide in slides:
         for finding in slide["findings"]:
@@ -360,13 +361,19 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # colours do not and are two. Where a rule states no remedy, the
             # expectation stands in, so unrelated findings cannot collapse
             # together on an empty string.
-            key = (
+            # The same string ``tieout_fix`` keys a correction on, so the page
+            # can put the button that applies it beside the sentence describing
+            # it without either side inventing an identity for the other.
+            key = action_key(
                 finding["rule_id"],
-                finding["remedy"] or f"\0{finding['expected'] or finding['message']}",
+                finding["remedy"],
+                finding["expected"],
+                finding["message"],
             )
             action = grouped.get(key)
             if action is None:
                 action = grouped[key] = {
+                    "key": key,
                     "rule_id": finding["rule_id"],
                     "category": finding["category"],
                     "severity": finding["severity"],
