@@ -8,6 +8,7 @@ about ``check`` refusing to proceed when the redaction has items outstanding.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -392,3 +393,30 @@ def test_a_finding_reaches_the_report_in_the_deck_s_own_words(workspace, stub_tr
     semantic = [f for f in payload["findings"] if f["category"] == "semantic"]
     assert semantic
     assert "[COMPANY_" not in json.dumps(semantic)
+
+
+def test_sending_without_the_review_extra_names_the_extra(workspace, monkeypatch):
+    """`redact` works without the SDK, deliberately: it is the command you run
+    to decide whether to trust any of this. Only `check` needs the transport."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith(("anthropic", "tieout_review.client")):
+            raise ImportError(f"No module named {name!r}", name="anthropic")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+    result = _invoke(
+        "check",
+        "decks/reference_clean.pptx",
+        "--client",
+        "demo",
+        "--forbid",
+        "Ashcombe Partners",
+        "--yes",
+    )
+    assert result.exit_code == EXIT_ERROR
+    assert "tieout[review]" in result.output
+    assert "redact command works without it" in result.output

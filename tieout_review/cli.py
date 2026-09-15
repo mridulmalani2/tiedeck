@@ -303,7 +303,24 @@ def _build_client(model: str | None) -> ReviewClient:
     ``anthropic`` installed, which is the machine an analyst evaluating the
     redaction would rather be on.
     """
-    from tieout_review.client import DEFAULT_MODEL, AnthropicReviewClient, ReviewClientError
+    try:
+        from tieout_review.client import (
+            DEFAULT_MODEL,
+            AnthropicReviewClient,
+            ReviewClientError,
+        )
+    except ImportError as exc:
+        # `redact` works without the SDK, and deliberately so: it is the command
+        # you run to decide whether to trust any of this. Only `check` needs the
+        # transport, and only then is the missing extra worth mentioning.
+        # Escaped: rich reads "[review]" as a markup tag and drops it, which
+        # turns the fix into "pip install 'tieout'".
+        _fail(
+            f"sending needs the review extra: {exc.name} is missing. Install it with "
+            "pip install 'tieout\\[review]'. The redact command works without it, "
+            "and so does tieout itself."
+        )
+        raise AssertionError("unreachable") from exc  # pragma: no cover
 
     try:
         return AnthropicReviewClient(model=model or DEFAULT_MODEL)

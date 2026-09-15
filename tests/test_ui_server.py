@@ -9,6 +9,7 @@ over functions already tested elsewhere, and the tests reflect that.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -627,3 +628,27 @@ def test_the_session_directory_is_removed_when_the_server_stops(monkeypatch):
     assert roots, "the serve command should have created a session store"
     for root in roots:
         assert not root.exists()
+
+
+def test_running_the_ui_without_its_extra_names_the_extra(monkeypatch):
+    """A core-only install that runs `tieout-ui` deserves the one line that
+    fixes it, not a traceback through fastapi's import list."""
+    import builtins
+
+    from typer.testing import CliRunner
+
+    from tieout.cli import EXIT_ERROR
+    from tieout_ui.cli import app
+
+    real_import = builtins.__import__
+
+    def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith(("fastapi", "tieout_ui.server")):
+            raise ImportError(f"No module named {name!r}", name="fastapi")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+    result = CliRunner().invoke(app, ["--no-open"], catch_exceptions=False)
+    assert result.exit_code == EXIT_ERROR
+    assert "tieout[ui]" in result.output
+    assert "unaffected" in result.output

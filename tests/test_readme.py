@@ -50,6 +50,7 @@ def test_the_readme_covers_the_sections_section_14_requires(readme):
         "## A worked onboarding",
         "## How derivation works",
         "## The rule catalogue",
+        "## Deploying it",
         "## Known limitations",
     ):
         assert heading in readme, f"missing {heading}"
@@ -173,6 +174,57 @@ def test_the_air_gap_promise_is_stated_prominently(readme):
     assert "air-gapped" in header
 
 
+@pytest.fixture(scope="module")
+def deployment(readme: str) -> str:
+    return readme.split("## Deploying it", 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_deployment_section_names_the_real_entry_points(deployment):
+    """These are commands people paste. A stale one wastes an afternoon."""
+    import tomllib
+
+    with (README.parent / "pyproject.toml").open("rb") as handle:
+        config = tomllib.load(handle)
+    for command in config["project"]["scripts"]:
+        assert command in deployment, f"{command} is not mentioned"
+
+
+def test_the_offline_install_is_documented_with_the_flag_that_makes_it_offline(
+    deployment,
+):
+    """``--no-index`` is the whole point of the air-gapped recipe: it is what
+    forbids pip from reaching out. A recipe missing it would appear to work on a
+    connected machine and fail on the one it is for."""
+    assert "pip download" in deployment
+    assert "--no-index" in deployment
+    assert "--find-links" in deployment
+
+
+def test_the_deployment_section_states_the_exit_codes_it_relies_on(deployment):
+    from tieout.cli import EXIT_ERROR, EXIT_FINDINGS
+
+    assert f"`{EXIT_FINDINGS}` means findings" in deployment
+    assert f"`{EXIT_ERROR}` means the run itself failed" in deployment
+
+
+def test_the_shared_profile_variable_is_spelled_correctly(deployment):
+    from tieout.profile.loader import PROFILE_DIR_ENV
+
+    assert PROFILE_DIR_ENV in deployment
+
+
+def test_the_non_python_prerequisites_are_both_named(deployment):
+    """Neither is installable by pip, and both are silent when absent: LO-006
+    passes by declining to measure, and the UI falls back to slide cards."""
+    assert "fonts-liberation" in deployment
+    assert "libreoffice-impress" in deployment
+
+
+def test_the_deployment_section_warns_against_exposing_the_ui(deployment):
+    normalised = " ".join(deployment.split())
+    assert "Do not expose the UI" in normalised
+
+
 def test_the_command_reference_covers_every_cli_verb(readme):
     reference = readme.split("## Command reference", 1)[1]
     for command in (
@@ -267,3 +319,15 @@ def test_the_profile_example_in_the_readme_is_valid(readme):
     assert parsed["client"] == "demo"
     assert parsed["slide"]["width_pt"] == 960.0
     assert "not_learned" in parsed
+
+
+def test_the_offline_recipe_warns_about_the_platform_trap(deployment):
+    """`pip download` resolves wheels for the machine it runs on, and lxml,
+    Pillow, pydantic-core and pypdfium2 are all compiled. Vendoring on a Mac for
+    a Linux desk produces a directory that installs on neither, and the failure
+    happens on the machine that cannot easily be debugged."""
+    normalised = " ".join(deployment.split())
+    assert "Download on the same platform you install on" in normalised
+    assert "--only-binary" in deployment
+    for compiled in ("lxml", "Pillow", "pydantic-core", "pypdfium2"):
+        assert compiled in deployment, compiled

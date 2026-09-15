@@ -41,6 +41,7 @@ outstanding. See [Optional: semantic review](#optional-semantic-review).
 - [The rule catalogue](#the-rule-catalogue)
 - [Optional: semantic review](#optional-semantic-review)
 - [Optional: the local UI](#optional-the-local-ui)
+- [Deploying it](#deploying-it)
 - [Command reference](#command-reference)
 - [Known limitations](#known-limitations)
 - [Development](#development)
@@ -49,7 +50,8 @@ outstanding. See [Optional: semantic review](#optional-semantic-review).
 
 ## Install
 
-Python 3.11 or later.
+Python 3.11 or later. This is the development install, from a clone; to put
+TieOut on someone else's machine see [Deploying it](#deploying-it).
 
 ```bash
 python3 -m venv .venv
@@ -801,6 +803,183 @@ asserts each of those separately.
 
 ---
 
+## Deploying it
+
+There is no server to run and no service to operate. TieOut is a command-line
+tool that reads a file and writes a report, so deployment means getting a wheel
+onto the machines that need it and deciding where profiles live.
+
+### Build a wheel
+
+```bash
+.venv/bin/python -m pip install build
+.venv/bin/python -m build
+# dist/tieout-0.1.0-py3-none-any.whl
+# dist/tieout-0.1.0.tar.gz
+```
+
+The wheel carries the three files that are not code and that the tool does not
+work without: the HTML report template, the compressed wordlist TY-009 spells
+against, and the UI's page. Nothing is fetched at runtime.
+
+### One analyst, one laptop
+
+```bash
+python3 -m venv ~/.tieout
+~/.tieout/bin/pip install tieout-0.1.0-py3-none-any.whl
+~/.tieout/bin/tieout --help
+```
+
+Then, once, per client:
+
+```bash
+~/.tieout/bin/tieout learn approved_deck.pptx --client acme
+```
+
+and from then on, before every send:
+
+```bash
+~/.tieout/bin/tieout check draft.pptx --client acme
+```
+
+Put `~/.tieout/bin` on `PATH` and it is just `tieout`.
+
+### An air-gapped desk
+
+The case the whole design is pointed at, and the reason the core has nine local
+dependencies rather than thirty. On a machine with network access:
+
+```bash
+pip download -d vendor dist/tieout-0.1.0-py3-none-any.whl
+```
+
+That collects the wheel and everything it needs — 21 wheels, about 18MB. Copy
+the directory across, then on the isolated machine:
+
+```bash
+python3 -m venv ~/.tieout
+~/.tieout/bin/pip install --no-index --find-links vendor tieout
+```
+
+`--no-index` is the point: pip is forbidden from reaching out, and the install
+succeeds anyway. Nothing afterwards opens a socket either.
+
+For the UI as well, put the extra on the wheel path — 30 wheels instead of 21:
+
+```bash
+pip download -d vendor 'dist/tieout-0.1.0-py3-none-any.whl[ui]'
+```
+
+Leave `[review]` off an air-gapped desk; the thing it does is make a network
+call.
+
+**Download on the same platform you install on.** `pip download` resolves
+wheels for the machine it runs on, and several dependencies are compiled:
+`lxml`, `Pillow`, `pydantic-core` and `pypdfium2` all arrive as
+`manylinux_…_x86_64` or `macosx_…` builds. Vendoring on a Mac for a Linux desk
+produces a directory that installs on neither. Either run `pip download` on a
+machine matching the target, or pass `--platform`, `--python-version`,
+`--implementation cp` and `--only-binary :all:` to name the target explicitly.
+
+### A team
+
+Profiles are the only durable state, and they are text. Two arrangements work:
+
+**A shared drive.** Point everyone at one directory:
+
+```bash
+export TIEOUT_PROFILE_DIR=/Volumes/deals/tieout/profiles
+```
+
+Simple, and the profile a colleague learned is immediately yours. The risk is
+that a profile is a document with authority over other people's work, and a
+shared directory has no history — someone widens a tolerance to silence a
+finding and nobody knows.
+
+**Version control.** Keep `profiles/` in a small repository and have people pull
+it. A profile diff is legible precisely because every value carries its `why:`
+comment, so "widened the palette tolerance from 3.0 to 9.0" arrives with the
+evidence it contradicts. This is the arrangement to prefer if more than two or
+three people share a client.
+
+Either way, one person should own a client's profile. `tieout profile lock`
+exists for the fields that are decisions rather than measurements:
+
+```bash
+tieout profile lock --client acme --field brand.logo.per_archetype.content
+```
+
+A locked field survives `tieout learn --add`, so a later deck cannot quietly
+overwrite a judgement someone made.
+
+### A pre-send gate, or CI
+
+`check` is built to be scripted. Exit `0` means nothing at or above the
+threshold, `1` means findings, `2` means the run itself failed — and a gate that
+cannot tell the last two apart will eventually wave a bad deck through.
+
+```bash
+tieout check draft.pptx --client acme --fail-on major --quiet || exit 1
+```
+
+For a pipeline, `--format json` gives a stable additive schema with `unchecked`
+and `rules_skipped` at the top level, so a dashboard can show what was *not*
+measured as well as what failed:
+
+```bash
+tieout check draft.pptx --client acme --format json --out findings.json
+```
+
+The JSON goes to stdout when `--out` is omitted, and nothing else does.
+
+### Things pip cannot install
+
+Two prerequisites are outside Python, and both are optional:
+
+- **Metric-compatible fonts** for LO-006. The overflow rule measures against the
+  real font file and records a shape as `unchecked` when it cannot resolve one —
+  so without the fonts installed the rule passes by declining to measure. It
+  ships off by default for this reason. On Linux, `fonts-liberation`.
+- **LibreOffice** for slide thumbnails in the UI, and specifically the Impress
+  filters: `libreoffice-core` alone has no PowerPoint filter and fails. On
+  Debian or Ubuntu, `libreoffice-impress`. Without it the UI shows slide cards
+  and says why, and no finding changes.
+
+### The two optional commands
+
+Each is a separate extra, and running one without its extra says so rather than
+producing a traceback:
+
+```console
+$ tieout-ui
+error the local UI needs its extra: fastapi is missing.
+         Install it with pip install 'tieout[ui]'. The tieout and tieout-review
+         commands are unaffected.
+```
+
+`tieout-review redact` is the exception — it works with the core install alone,
+because inspecting what *would* be sent should not require installing the thing
+that sends it.
+
+### Deployment mistakes worth naming
+
+- **Do not expose the UI.** It refuses to bind a non-loopback address, so this
+  takes deliberate effort — a reverse proxy, an SSH tunnel someone forgets. The
+  session token is not authentication for a network service, and the page holds
+  a live deck.
+- **Do not put an API key anywhere near the core.** `tieout` needs none, and CI
+  running the core should assert that none is present; this repository's own
+  workflow does exactly that, and fails if a key appears.
+- **Do not deploy a suppression file as a way of going quiet.** Accepting the
+  same finding three times makes TieOut say what it thinks is really happening,
+  and that message is the useful output. A `*.suppress.yaml` with forty entries
+  means the profile is wrong, not that the deck is fine.
+- **Do not learn from the deck you are about to check.** It will report nothing,
+  which is not the same as there being nothing wrong. Learn from material the
+  client has already approved.
+
+---
+
 ## Command reference
 
 ```
@@ -982,7 +1161,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,080 tests
+.venv/bin/python -m pytest              # 1,089 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

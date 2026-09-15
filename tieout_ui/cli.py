@@ -33,8 +33,23 @@ def serve(
     ] = True,
 ) -> None:
     """Start the local UI."""
-    from tieout_ui.server import create_app, is_loopback
-    from tieout_ui.session import SessionStore
+    try:
+        from tieout_ui.server import create_app, is_loopback
+        from tieout_ui.session import SessionStore
+    except ImportError as exc:
+        # The extra is what installs the web framework. Someone who pip
+        # installed the core and then ran this deserves the one line that fixes
+        # it, not a traceback through fastapi's import list.
+        # The brackets in the package spec are escaped: rich reads "[ui]" as a
+        # markup tag and silently drops it, which turns the one line that fixes
+        # the problem into "pip install 'tieout'".
+        _err.print(
+            f"[bold red]error[/bold red] the local UI needs its extra: {exc.name} is "
+            "missing.\n         "
+            "Install it with [bold]pip install 'tieout\\[ui]'[/bold]. "
+            "The tieout and tieout-review commands are unaffected."
+        )
+        raise typer.Exit(EXIT_ERROR) from exc
 
     if not is_loopback(host):
         _err.print(
