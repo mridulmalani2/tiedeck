@@ -1149,11 +1149,20 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
         if point_count_el is not None and point_count_el.get("val"):
             with contextlib.suppress(ValueError):
                 count = int(str(point_count_el.get("val")))
+        # Labels are usually set for the whole plot, not per series: PowerPoint
+        # writes one `c:dLbls` beside the series rather than inside each. Reading
+        # only the series' own block reports every series of a labelled chart as
+        # unlabelled, which is exactly the false positive CH-004 must not make.
+        labels = ser.find("c:dLbls", _CHART_NS)
+        inherited = ser.getparent().find("c:dLbls", _CHART_NS) \
+            if ser.getparent() is not None else None
         series.append(
             ChartSeries(
                 name=_chart_text(name_el) if name_el is not None else None,
                 point_count=count,
                 fill_hex=_series_fill(ser, context),
+                has_data_labels=_labels_shown(labels, inherited),
+                label_number_format=_label_format(labels) or _label_format(inherited),
             )
         )
 
@@ -1202,6 +1211,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
     )
 
     text_strings = _chart_text_strings(root, title_text, series, categories, axis_titles)
+    axis_minimum, axis_maximum, has_value_axis = _value_axis(root)
 
     return ChartModel(
         chart_type=chart_type,
@@ -1214,7 +1224,74 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
         axis_titles=tuple(axis_titles),
         fonts=fonts,
         text_strings=text_strings,
+        value_axis_minimum=axis_minimum,
+        value_axis_maximum=axis_maximum,
+        has_value_axis=has_value_axis,
     )
+
+
+def _labels_shown(
+    labels: etree._Element | None, inherited: etree._Element | None = None
+) -> bool:
+    """Whether this series draws a data label, its own setting or the plot's.
+
+    Present is not the same as shown: PowerPoint writes a ``dLbls`` block with
+    every flag off whenever the labels have been turned *off*, so reading the
+    element's existence would report labels on a chart that has none. A series
+    that says nothing inherits the plot's setting, and a series that switches
+    them off overrides it.
+    """
+    own = _labels_state(labels)
+    if own is not None:
+        return own
+    return _labels_state(inherited) or False
+
+
+def _labels_state(labels: etree._Element | None) -> bool | None:
+    """``True``/``False`` where the block decides, ``None`` where it is silent."""
+    if labels is None:
+        return None
+    deleted = labels.find("c:delete", _CHART_NS)
+    if deleted is not None and deleted.get("val") in ("1", "true"):
+        return False
+    shown = labels.find("c:showVal", _CHART_NS)
+    if shown is None:
+        return None
+    return shown.get("val") in ("1", "true")
+
+
+def _label_format(labels: etree._Element | None) -> str | None:
+    if labels is None:
+        return None
+    fmt = labels.find("c:numFmt", _CHART_NS)
+    code = fmt.get("formatCode") if fmt is not None else None
+    return code or None
+
+
+def _value_axis(root: etree._Element) -> tuple[float | None, float | None, bool]:
+    """The value axis' manual bounds, and whether it is drawn.
+
+    Only a *manual* bound is read. An axis left to scale itself has no minimum
+    in the XML at all, and inventing one from the data would turn PowerPoint's
+    own default into something the author chose.
+    """
+    axis = root.find(".//c:valAx", _CHART_NS)
+    if axis is None:
+        return None, None, False
+
+    deleted = axis.find("c:delete", _CHART_NS)
+    drawn = not (deleted is not None and deleted.get("val") in ("1", "true"))
+
+    def _bound(tag: str) -> float | None:
+        node = axis.find(f"c:scaling/c:{tag}", _CHART_NS)
+        if node is None or node.get("val") is None:
+            return None
+        try:
+            return float(str(node.get("val")))
+        except ValueError:  # pragma: no cover - malformed chart part
+            return None
+
+    return _bound("min"), _bound("max"), drawn
 
 
 def _series_fill(ser: etree._Element, context: SlideContext) -> str | None:

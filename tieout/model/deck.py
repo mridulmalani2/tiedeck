@@ -202,6 +202,13 @@ class TableModel:
 class ChartSeries:
     name: str | None
     point_count: int
+    #: Whether this series carries data labels of its own. Held per series
+    #: because a chart labelling one series and not another is a chart whose
+    #: reader cannot compare them.
+    has_data_labels: bool = False
+    #: The label number format, where the series states one. Two series
+    #: formatted to different precision is a defect a reader sees immediately.
+    label_number_format: str | None = None
     #: The series' explicit fill, resolved to sRGB. ``None`` where the series
     #: carries no fill of its own and takes the theme's chart colour cycle,
     #: which TieOut does not model: it is set by the template rather than
@@ -231,6 +238,24 @@ class ChartModel:
     fonts: tuple[ResolvedFont, ...] = ()
     #: Every text string in the chart part, for placeholder-marker scanning.
     text_strings: tuple[str, ...] = ()
+    #: Manual value-axis bounds, where the author pinned them. A bar chart whose
+    #: baseline is not zero exaggerates every difference on it, which is why the
+    #: minimum is worth modelling separately from the rest of the scaling.
+    value_axis_minimum: float | None = None
+    value_axis_maximum: float | None = None
+    #: Whether the value axis is drawn at all. A deleted axis is a deliberate
+    #: choice on a labelled chart and a problem on an unlabelled one.
+    has_value_axis: bool = True
+
+    @property
+    def is_baseline_sensitive(self) -> bool:
+        """Whether this chart type is read by comparing bar lengths.
+
+        A bar read against a truncated baseline misleads in proportion to how
+        much was cut off; a line chart zoomed to its range is ordinary practice
+        and often the only legible option.
+        """
+        return self.chart_type in ("bar", "col", "barChart", "colChart")
 
 
 @dataclass

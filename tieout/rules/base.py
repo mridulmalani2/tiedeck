@@ -36,6 +36,11 @@ CATEGORIES: Final[tuple[str, ...]] = (
     "typography",
     "hygiene",
     "consistency",
+    # Charts carry the argument in a banking deck, and the ways one fails are
+    # not the ways a text box fails. Their expectations also come from the craft
+    # rather than from the client's reference material -- see tieout/rules/chart.py
+    # -- which is a second reason to keep them apart from the derived categories.
+    "chart",
 )
 
 #: Categories whose findings are reported but do not drive the exit code.
@@ -276,6 +281,7 @@ def load_all_rules() -> dict[str, type[Rule]]:
     """
     from tieout.rules import (  # noqa: F401
         brand,
+        chart,
         consistency,
         hygiene,
         layout,

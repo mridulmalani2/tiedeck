@@ -420,7 +420,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-40 rules across five categories. Each one is an independent class — rules never
+46 rules across six categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -448,7 +448,7 @@ produce would be measured against a default the client never agreed to.
 | **BR-010** | major | on | Required boilerplate text absent | `brand.footer.boilerplate` |
 | **BR-011** | major | on | Chart series drawn in a colour off the learned palette | `brand.palette_hex` |
 
-### Layout (8 rules)
+### Layout (9 rules)
 
 | Rule | Severity | Default | What it measures | Expectation derived from |
 |---|---|---|---|---|
@@ -460,6 +460,7 @@ produce would be measured against a default the client never agreed to.
 | **LO-006** | major | **off** | Text likely overflows its shape | not learned; fixed behaviour |
 | **LO-007** | major | on | A font size falls outside the learned band for its role | `brand.fonts.roles` |
 | **LO-008** | minor | on | Sibling shapes in a row or column have uneven gutters | `layout.gutter_stdev_pt`, `layout.position_tolerance_pt` |
+| **LO-009** | minor | on | Bullets at one level of a list do not share an indent | the list itself |
 
 ### Typography (9 rules)
 
@@ -488,6 +489,33 @@ produce would be measured against a default the client never agreed to.
 | **HY-007** | blocker | on | External or broken relationship in the package | not learned; fixed behaviour |
 | **HY-008** | major | on | Image effective resolution below the profile's floor | not learned; fixed behaviour |
 | **HY-009** | minor | on | Font neither embedded nor a standard system font | not learned; fixed behaviour |
+
+### Chart (5 rules)
+
+Charts get their own category because in a banking deck they carry the
+argument, and because **these expectations are not learned from a reference
+deck**. The rest of the catalogue derives its expectation from the client's own
+approved material, which is right for a palette: there is no universal correct
+navy. There is a universal correct answer to *can the reader tell what these
+bars are measured in*, and deriving that from one deck would let a deck that
+omits units everywhere teach the tool that omitting units is the house style.
+
+Every one of them takes **multiple pathways to the same fact and fires only
+when none of them leads anywhere** — which is what makes a craft standard safe
+to assert against decks built in different styles. A chart's units may be in
+its axis title, its own title, a caption above it, the slide headline, the data
+labels or a footnote. On a real deck the chart had no title and no axis title;
+the caption above it read `REVENUE AND EBITDA (EUR M)`, which is a house style
+rather than a defect, and a rule that cannot see that is a rule that gets
+switched off.
+
+| Rule | Severity | Default | What it measures | Expectation derived from |
+|---|---|---|---|---|
+| **CH-001** | major | on | A chart is not named by anything on the slide | the craft |
+| **CH-002** | major | on | A chart's units or scale are stated nowhere on the slide | the craft |
+| **CH-003** | major | on | A bar chart's value axis does not start at zero | the craft |
+| **CH-004** | major | on | A multi-series chart gives no way to tell the series apart | the craft |
+| **CH-005** | minor | on | Series in one chart label their values to different precision | the craft |
 
 ### Consistency (3 rules)
 
@@ -1364,7 +1392,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,182 tests
+.venv/bin/python -m pytest              # 1,234 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict
@@ -1466,7 +1494,7 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **40 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **46 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
    tested. A fifth category, **consistency** (3 rules), is then added beyond the

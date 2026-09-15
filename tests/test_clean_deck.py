@@ -31,10 +31,11 @@ ALL_RULE_IDS = sorted(load_all_rules())
 #: updating the README and the round-trip test fails loudly in one place.
 EXPECTED_PER_CATEGORY = {
     "brand": 11,
-    "layout": 8,
+    "layout": 9,
     "typography": 9,
     "hygiene": 9,
     "consistency": 3,
+    "chart": 5,
 }
 EXPECTED_RULE_COUNT = sum(EXPECTED_PER_CATEGORY.values())
 

@@ -456,3 +456,122 @@ def test_lo008_still_reports_a_genuinely_uneven_row(tmp_path, reference_profile)
     findings = findings_for(_run(deck, reference_profile, "LO-008"), "LO-008")
     assert findings, "an unevenly guttered row of siblings must still be reported"
     assert "vary by" in findings[0].message
+
+
+# --------------------------------------------------------------------------------------
+# LO-009 bullet indent
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_bullets(path, indents, *, levels=None):
+    """One slide, one list, with each bullet's left indent set explicitly."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Pt(60), Pt(80), Pt(600), Pt(300))
+    box.name = "Body"
+    frame = box.text_frame
+    for index, indent in enumerate(indents):
+        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+        paragraph.text = f"Bullet point number {index + 1} of the list"
+        paragraph.level = (levels or [0] * len(indents))[index]
+        paragraph._pPr.set("marL", str(int(Pt(indent))))
+        paragraph._pPr.set("indent", str(int(Pt(-12))))
+        _bullet(paragraph)
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _bullet(paragraph):
+    """Give a paragraph an actual bullet glyph.
+
+    An indented paragraph is not a bulleted one: the model only reads a bullet
+    where the file declares one, which is what stops LO-009 reporting an
+    indented block quote as a misaligned list.
+    """
+    from pptx.oxml.ns import qn
+
+    char = paragraph._pPr.makeelement(qn("a:buChar"), {"char": "\u2022"})
+    paragraph._pPr.append(char)
+
+
+def test_lo009_catches_one_bullet_tabbed_out_of_line(tmp_path, reference_profile):
+    """A bullet 4pt right of its siblings is a tab somebody pressed, and it is
+    visible to a reader at a glance even though no other rule looks at it."""
+    deck = _deck_with_bullets(tmp_path / "tabbed.pptx", [27.0, 27.0, 31.0, 27.0])
+    findings = findings_for(_run(deck, reference_profile, "LO-009"), "LO-009")
+
+    assert len(findings) == 1
+    assert "31pt" in findings[0].message
+    assert findings[0].remedy and "27pt" in findings[0].remedy
+
+
+def test_lo009_is_silent_on_a_list_that_lines_up(tmp_path, reference_profile):
+    deck = _deck_with_bullets(tmp_path / "straight.pptx", [27.0, 27.0, 27.0, 27.0])
+    assert findings_for(_run(deck, reference_profile, "LO-009"), "LO-009") == []
+
+
+def test_lo009_does_not_read_a_sub_bullet_as_a_misaligned_one(
+    tmp_path, reference_profile
+):
+    """The level comes from the paragraph, not from the indent. A properly
+    demoted sub-bullet is indented on purpose, and reporting it would make the
+    rule fire on every nested list in the deck."""
+    deck = _deck_with_bullets(
+        tmp_path / "nested.pptx",
+        [27.0, 54.0, 54.0, 54.0, 27.0, 27.0, 27.0],
+        levels=[0, 1, 1, 1, 0, 0, 0],
+    )
+    assert findings_for(_run(deck, reference_profile, "LO-009"), "LO-009") == []
+
+
+def test_lo009_needs_enough_bullets_for_disagreement_to_mean_anything(
+    tmp_path, reference_profile
+):
+    """Two bullets at two indents are a two-level list, not a defect."""
+    deck = _deck_with_bullets(tmp_path / "two.pptx", [27.0, 31.0])
+    assert findings_for(_run(deck, reference_profile, "LO-009"), "LO-009") == []
+
+
+def test_lo009_tolerates_sub_point_rounding(tmp_path, reference_profile):
+    """PowerPoint writes indents in EMU, so a deck that has been resized carries
+    fractional differences nobody typed and nobody can see."""
+    deck = _deck_with_bullets(tmp_path / "rounded.pptx", [27.0, 27.4, 26.7, 27.1])
+    assert findings_for(_run(deck, reference_profile, "LO-009"), "LO-009") == []
+
+
+def test_lo009_compares_within_one_list_only(tmp_path, reference_profile):
+    """A sidebar's bullets and a body's bullets are set to different indents on
+    purpose in most house styles. Comparing them reports every deck with a
+    sidebar."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for column, indent in ((60, 27.0), (520, 45.0)):
+        box = slide.shapes.add_textbox(Pt(column), Pt(80), Pt(380), Pt(300))
+        frame = box.text_frame
+        for index in range(4):
+            paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+            paragraph.text = f"Point {index} in the column at {column}"
+            paragraph._pPr.set("marL", str(int(Pt(indent))))
+            _bullet(paragraph)
+    presentation.save(str(tmp_path / "columns.pptx"))
+
+    deck = load_deck(tmp_path / "columns.pptx")
+    assert findings_for(_run(deck, reference_profile, "LO-009"), "LO-009") == []
+
+
+def test_lo009_is_silent_on_the_clean_deck(clean_deck, reference_profile):
+    assert_silent_on_clean(_run(clean_deck, reference_profile, "LO-009"), "LO-009")

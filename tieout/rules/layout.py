@@ -1098,6 +1098,100 @@ class FontSizeOutsideBand(Rule):
 # --------------------------------------------------------------------------------------
 
 
+#: How far two bullets at the same level may sit apart before it reads as a
+#: mistake rather than as rounding. PowerPoint writes indents in EMU, so exact
+#: equality is too strict for a deck that has been through a resize.
+BULLET_INDENT_TOLERANCE_PT: Final[float] = 1.0
+
+#: Bullets at one level in one list, below which "they disagree" is not a useful
+#: thing to say: two bullets at different indents are a two-level list.
+MIN_BULLETS_PER_LEVEL: Final[int] = 3
+
+
+@register
+class InconsistentBulletIndent(Rule):
+    """Reports one list whose bullets at the same level do not share an indent.
+
+    Measured within a single text frame, not across the deck. A sidebar's bullets
+    and a body's bullets are set to different indents on purpose in most house
+    styles, and comparing them would report every deck that has a sidebar. Inside
+    one list, though, a bullet that sits 4pt right of its siblings is a tab
+    somebody pressed, and it is visible to a reader at a glance even though no
+    other rule in the tool looks at it.
+
+    Measures ``margin_left_pt`` -- where the bullet's text begins -- per indent
+    level, for levels carrying at least three bullets. The level itself is taken
+    from the paragraph rather than inferred from the indent, so a properly
+    demoted sub-bullet is not read as a misaligned one: this reports bullets that
+    *claim* the same level and do not look it.
+
+    Known false-positive mode: a list that deliberately hangs one item further
+    in -- a continuation line styled as a bullet, say -- is reported. That is
+    rare enough, and visible enough in the message, to be worth the alternative.
+    """
+
+    id: ClassVar[str] = "LO-009"
+    category: ClassVar[str] = "layout"
+    severity: ClassVar[Severity] = "minor"
+    confidence: ClassVar[Confidence] = "high"
+    summary: ClassVar[str] = "Bullets at one level of a list do not share an indent"
+
+    def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+        furniture = self.furniture(deck, profile)
+        findings: list[Finding] = []
+        for slide in deck.slides:
+            for shape in content_shapes(slide, furniture):
+                findings.extend(self._in_frame(shape))
+        return findings
+
+    def _in_frame(self, shape: ShapeModel) -> list[Finding]:
+        by_level: dict[int, list[tuple[float, str]]] = {}
+        for paragraph in shape.text_frame_paragraphs:
+            if not paragraph.text.strip() or not paragraph.is_bulleted:
+                continue
+            indent = paragraph.margin_left_pt
+            if indent is None:
+                # Inherited from the layout, which means the deck has not
+                # overridden it and there is nothing here that a person typed.
+                continue
+            by_level.setdefault(paragraph.level, []).append(
+                (indent, paragraph.text.strip())
+            )
+
+        findings: list[Finding] = []
+        for level, entries in sorted(by_level.items()):
+            if len(entries) < MIN_BULLETS_PER_LEVEL:
+                continue
+            clusters = cluster_values(
+                [indent for indent, _ in entries], BULLET_INDENT_TOLERANCE_PT
+            )
+            if len(clusters) < 2:
+                continue
+            dominant = max(clusters, key=lambda c: c.support)
+            odd = [
+                (indent, text)
+                for indent, text in entries
+                if abs(indent - dominant.mode) > BULLET_INDENT_TOLERANCE_PT
+            ]
+            if not odd:  # pragma: no cover - implied by the cluster count
+                continue
+            listed = ", ".join(f"{text[:28]!r} at {indent:g}pt" for indent, text in odd[:3])
+            findings.append(
+                self.finding(
+                    where=shape.ref,
+                    message=(
+                        f"{len(odd)} of {len(entries)} level-{level + 1} bullets sit at a "
+                        f"different indent from the rest ({listed})"
+                    ),
+                    measured=f"{len(clusters)} indents at level {level + 1}",
+                    expected=f"every level-{level + 1} bullet at {dominant.mode:g}pt",
+                    remedy=f"Set these bullets to the same {dominant.mode:g}pt indent",
+                    bbox_pt=shape.bbox_pt,
+                )
+            )
+        return findings
+
+
 @dataclass(frozen=True, slots=True)
 class _Axis:
     """One reading direction, so rows and columns share the gutter arithmetic."""
