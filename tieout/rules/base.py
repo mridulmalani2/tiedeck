@@ -22,7 +22,7 @@ import fnmatch
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import ClassVar, Final
 
@@ -85,6 +85,13 @@ class Finding:
     expected: str | None = None
     expected_provenance: str | None = None
     bbox_pt: tuple[float, float, float, float] | None = None
+    #: What to actually do about it, in the imperative, where the rule knows.
+    #: A finding that states a deviation and stops leaves the reader to work
+    #: out the fix from a Delta-E figure; the rule has usually already computed
+    #: the answer. Empty where there is no single mechanical fix -- an
+    #: overlapping pair or a total that does not sum is a judgement, and a
+    #: confident instruction there would be worse than silence.
+    remedy: str | None = None
 
     @property
     def slide_index(self) -> int:
@@ -190,6 +197,7 @@ class Rule(ABC):
         bbox_pt: tuple[float, float, float, float] | None = None,
         severity: Severity | None = None,
         confidence: Confidence | None = None,
+        remedy: str | None = None,
     ) -> Finding:
         """Build a finding, pulling severity, confidence and provenance from the
         profile so a rule cannot forget to.
@@ -219,6 +227,7 @@ class Rule(ABC):
             expected=expected,
             expected_provenance=provenance,
             bbox_pt=bbox_pt,
+            remedy=remedy,
         )
 
     def note_unchecked(self, where: ShapeRef | int, reason: str) -> None:
@@ -473,10 +482,38 @@ def run_rules(
             f for f in result.findings if SEVERITY_ORDER.get(f.severity, 9) <= limit
         ]
 
+    _locate(result.findings, deck)
     result.findings.sort(key=lambda f: f.sort_key)
     result.rules_skipped.sort(key=lambda s: s.rule_id)
     result.unchecked.sort(key=lambda u: (u.slide_index, u.rule_id))
     return result
+
+
+def _locate(findings: list[Finding], deck: DeckModel) -> None:
+    """Give every finding that names a shape the box that shape occupies.
+
+    A rule that aggregates -- one wrong colour used by six shapes, one typeface
+    across four runs -- anchors its finding on the first of them and mostly did
+    not think to pass a box along with it. That was invisible while nothing drew
+    the box; now that the page outlines the shape a finding is about, a finding
+    without one is a finding the reader cannot be shown.
+
+    Resolved here, once, rather than at forty-two call sites. The rule already
+    said which shape it means; asking the deck where that shape is needs no help
+    from the rule, and a rule added later gets this for free.
+    """
+    boxes: dict[tuple[int, int], tuple[float, float, float, float]] = {}
+    for slide in deck.slides:
+        for shape in slide.all_shapes():
+            if shape.bbox_pt is not None:
+                boxes[(slide.index, shape.ref.shape_id)] = shape.bbox_pt
+
+    for index, finding in enumerate(findings):
+        if finding.bbox_pt is not None or not isinstance(finding.where, ShapeRef):
+            continue
+        box = boxes.get((finding.where.slide_index, finding.where.shape_id))
+        if box is not None:
+            findings[index] = replace(finding, bbox_pt=box)
 
 
 def _explicitly_named(include: Sequence[str] | None) -> frozenset[str]:
@@ -542,21 +579,19 @@ def cluster_findings(
             continue
         first = group[0]
         others = len(group) - 1
+        # ``replace`` rather than a field-by-field rebuild. The rebuild listed
+        # eight fields and silently dropped the ninth when one was added, so a
+        # clustered finding lost its remedy while an unclustered one kept it --
+        # the same defect, reported with a fix on one slide and without on the
+        # next. Naming only what changes cannot go stale.
         out.append(
-            Finding(
-                rule_id=first.rule_id,
-                category=first.category,
+            replace(
+                first,
                 severity=min(
                     (f.severity for f in group),
                     key=lambda s: SEVERITY_ORDER.get(s, 9),
                 ),
-                confidence=first.confidence,
-                where=first.where,
                 message=f"{first.message} (and {others} more on this slide)",
-                measured=first.measured,
-                expected=first.expected,
-                expected_provenance=first.expected_provenance,
-                bbox_pt=first.bbox_pt,
             )
         )
     return sorted(out, key=lambda f: f.sort_key)

@@ -257,6 +257,7 @@ class ContradictoryFigure(Rule):
                     ),
                     measured=_format(other.reading),
                     expected=f"{_format(first.reading)} (slide {first.slide_index})",
+                    remedy="Reconcile the two figures, or label the scopes so they differ",
                     bbox_pt=other.shape.bbox_pt,
                 )
             )
@@ -328,6 +329,7 @@ class ScaleMismatch(Rule):
                     ),
                     measured=_format(larger.reading),
                     expected=f"{_format(smaller.reading)} (slide {smaller.slide_index})",
+                    remedy="State both figures in the same scale",
                     bbox_pt=larger.shape.bbox_pt,
                 )
             )
@@ -408,6 +410,7 @@ class TotalDoesNotSum(Rule):
                         ),
                         measured=f"{stated:,.10g}",
                         expected=f"{computed:,.10g} (+/-{tolerance:,.10g} rounding)",
+                        remedy="Correct the total, or the rows it sums",
                         bbox_pt=shape.bbox_pt,
                     )
                 )

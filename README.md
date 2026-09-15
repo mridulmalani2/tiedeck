@@ -785,11 +785,30 @@ layout they already read decks in.
 
 It is also why the findings are a **review note** rather than a wall of cards.
 PowerPoint's own idiom for "someone has marked up your deck" is a comments task
-pane, so that is where the note goes: continuous numbering across the deck,
-grouped under slide headings, each point as a sentence with the measurement
-subordinated beneath it and the evidence beneath that. Clicking a point moves
-the rail and the canvas to its slide. **Copy note** puts the same thing on the
-clipboard as plain text, which is what actually gets pasted into an email.
+pane, so that is where the note goes.
+
+### The note answers three questions, in order
+
+**Can I send it?** The note opens with a verdict — *Not ready to send*, *Fix
+before sending*, *Ready to send* — because that is the question someone opens
+this with, and "24 points to address" is a count rather than an answer.
+
+**What do I actually have to do?** Findings are grouped by the fix behind them,
+not listed one per slide. One off-palette gold used on four slides is one job;
+read slide by slide it is four problems, and whoever corrects the theme colour
+once then has to work out that the other three were the same thing. On a real
+five-slide deck, 24 findings collapse to 8 things to do, worst first. **By
+slide** is still there, because that is the order a deck actually gets corrected.
+
+**Where is it, and what do I change it to?** Every finding carries a **fix** in
+the imperative — *Recolour #B08D3F to the palette's #6B7280*, *Delete the
+speaker notes before sending* — because the rule has usually already computed
+the answer, and a Delta-E figure on its own leaves the reader to work it out
+again. Where the fix is a judgement rather than a mechanical change — two
+figures that disagree, a total that does not sum — it says what to weigh instead
+of inventing an instruction. And clicking any finding outlines the shape it is
+about on the slide, which is the difference between "Shape 16" and a box you can
+see.
 
 ### What it is, and is not
 
@@ -842,9 +861,9 @@ when the server stops.
    residual list, and the payload verbatim. Nothing is sent until you have read
    the residuals and said so.
 5. **Run.**
-6. **Results.** The review note in the task pane, and a count badge on every
-   slide in the rail. Plus **Copy note** for the plain-text version and the same
-   self-contained HTML report `tieout check --format html` produces.
+6. **Results.** A verdict, then the work. **Copy note** puts the same thing on
+   the clipboard as plain text, and the self-contained HTML report is the one
+   `tieout check --format html` produces.
 
 ### Editing: dropping, and correcting
 
@@ -1253,7 +1272,11 @@ it cannot tell you that the number you typed is wrong, and a rule reading it
 reports the client's own approved deck as wrong if it does not support it. The
 audit is only ever as good as the profile behind it.
 
-**No auto-fix.** TieOut reports; it does not edit your deck.
+**No auto-fix.** TieOut reports and tells you what to change; it does not edit
+your deck. The fix on a finding is an instruction for a person, not something
+the tool will apply, and for the consistency rules it is deliberately a prompt
+to check rather than a value to type — the tool can see that two figures
+disagree and cannot see which of them is right.
 
 **Ambiguous dates are resolved by order, not by intelligence.** `09/14/2026` is
 unambiguous, but `05/06/2026` is not, and the first matching format in the
@@ -1270,7 +1293,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,115 tests
+.venv/bin/python -m pytest              # 1,125 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

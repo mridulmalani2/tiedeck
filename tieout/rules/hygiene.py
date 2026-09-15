@@ -210,6 +210,7 @@ class PlaceholderMarkerRule(Rule):
                     provenance_path="hygiene.placeholder_markers",
                     measured=listed,
                     expected="no placeholder markers",
+                    remedy="Replace the placeholder text with the final wording",
                 )
             )
         return findings
@@ -283,6 +284,7 @@ class SpeakerNotesRule(Rule):
                     provenance_path="hygiene.allow_speaker_notes",
                     measured=f"{len(notes)} characters of notes",
                     expected="no speaker notes",
+                    remedy="Delete the speaker notes before sending",
                 )
             )
         return findings
@@ -337,6 +339,7 @@ class HiddenSlideRule(Rule):
                 provenance_path="hygiene.allow_hidden_slides",
                 measured=f"{len(hidden)} hidden slide{plural} ({listed})",
                 expected="no hidden slides",
+                remedy="Delete the hidden slides, or unhide them deliberately",
             )
         ]
 
@@ -395,6 +398,10 @@ class DocumentMetadataRule(Rule):
                 provenance_path="hygiene.allow_document_metadata",
                 measured=rendered,
                 expected="docProps carries no identifying fields",
+                remedy=(
+                    "Clear the document properties: File > Info > "
+                    "Check for Issues > Inspect Document"
+                ),
             )
         ]
 
@@ -450,6 +457,7 @@ class CommentsRule(Rule):
                 provenance_path="hygiene.allow_comments",
                 measured=f"{count} comment{plural}{attribution}",
                 expected="no comments",
+                remedy="Delete every comment before sending (Review > Delete > All)",
             )
         ]
 
@@ -525,6 +533,7 @@ class EmptyPlaceholderRule(Rule):
                 provenance_path="hygiene",
                 measured="no text, picture, table or chart content",
                 expected="the placeholder is filled or removed",
+                remedy="Fill the placeholder, or delete it",
                 bbox_pt=only.bbox_pt,
             )
         names = ", ".join(shape.ref.display_name for shape in offenders)
@@ -535,6 +544,7 @@ class EmptyPlaceholderRule(Rule):
             provenance_path="hygiene",
             measured=names,
             expected="every placeholder is filled or removed",
+            remedy="Fill each placeholder, or delete it",
         )
 
 
@@ -613,6 +623,7 @@ class ExternalRelationshipRule(Rule):
             provenance_path="hygiene.allow_external_relationships",
             measured=f"{rel.short_type} relationship, {detail}",
             expected="every payload embedded and every target present",
+            remedy="Embed the linked content, or remove the link",
         )
 
 
@@ -773,6 +784,7 @@ class ImageResolutionRule(Rule):
                 f"{dpi:.0f} DPI ({media.pixel_width}px across {rendered_inches:.2f}in)"
             ),
             expected=f"at least {floor:g} DPI",
+            remedy=f"Replace the image with one of at least {floor:g} DPI at this size",
             bbox_pt=shape.bbox_pt,
         )
 
@@ -837,6 +849,7 @@ class NonStandardFontRule(Rule):
                     provenance_path="hygiene.extra_standard_fonts",
                     measured=f"{typeface} set in {char_count} characters",
                     expected="an embedded or standard system font",
+                    remedy=f"Embed {typeface}, or set the text in a standard system font",
                 )
             )
         return findings

@@ -169,6 +169,7 @@ class QuoteStyle(Rule):
                         f"{_plural(len(offenders), 'passage')}"
                     ),
                     expected=f"{convention} quotes and apostrophes",
+                    remedy=f"Use {convention} quotes and apostrophes throughout",
                     bbox_pt=first.shape.bbox_pt,
                 )
             )
@@ -252,6 +253,7 @@ class Whitespace(Rule):
                     provenance_path="typography",
                     measured=first_excerpt,
                     expected="single spaces, and no space before punctuation",
+                    remedy="Collapse the double spaces and drop the space before punctuation",
                     bbox_pt=first_shape.bbox_pt,
                 )
             )
@@ -346,6 +348,7 @@ class BulletTerminal(Rule):
                         provenance_path="typography.bullet_terminal_punctuation",
                         measured=f"{terminal}: ...{paragraph.text.strip()[-32:]}",
                         expected=convention,
+                        remedy=f"Punctuate the bullet as {convention}",
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -424,6 +427,7 @@ class TitleCapitalisation(Rule):
                     provenance_path="typography.title_case",
                     measured=f"{style} case: {text!r}",
                     expected=f"{convention} case",
+                    remedy=f"Recase the title to {convention} case",
                     bbox_pt=title.bbox_pt,
                 )
             )
@@ -520,6 +524,7 @@ class CanonicalTerms(Rule):
                         provenance_path="typography.canon_terms",
                         measured=variant,
                         expected=canonical,
+                        remedy=f"Write it as {canonical}",
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -671,6 +676,7 @@ class ColumnNumberFormat(Rule):
                             provenance_path="typography.decimal_places_by_column",
                             measured="; ".join(detail for _, detail in disagreements),
                             expected="one format for every figure in the column",
+                            remedy="Give every figure in the column the same format",
                             bbox_pt=shape.bbox_pt,
                         )
                     )
@@ -775,6 +781,7 @@ class CurrencyNotation(Rule):
                         provenance_path="typography.currency_pattern",
                         measured=f"{key}: {example.strip()!r}",
                         expected=f"matching {expression}",
+                        remedy=f"Write it to match the house pattern {expression}",
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -839,6 +846,7 @@ class DateFormat(Rule):
                         provenance_path="typography.date_format",
                         measured=f"{example!r} ({found})",
                         expected=convention,
+                        remedy=f"Write dates like {_date_example(convention)}",
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -952,7 +960,26 @@ class Spelling(Rule):
                     provenance_path="hygiene.dictionary",
                     measured=shown,
                     expected="words in the bundled wordlist or the client dictionary",
+                    remedy="Correct the spelling, or add the word to hygiene.dictionary",
                     bbox_pt=shape.bbox_pt,
                 )
             )
         return findings
+
+
+def _date_example(convention: str) -> str:
+    """A date actually written the house way, for the remedy line.
+
+    ``%d %B %Y`` is a correct answer to the wrong question. Nobody reformats a
+    deck from a strftime string, and a reader who has not met one reads it as
+    noise. The same convention shown as "14 March 2026" is a thing to copy.
+    """
+    from datetime import date
+
+    sample = date(2026, 3, 14)
+    try:
+        rendered = sample.strftime(convention)
+    except ValueError:
+        return convention
+    # A convention that renders to nothing useful is better shown as itself.
+    return f"{rendered!r}" if rendered and rendered != convention else convention

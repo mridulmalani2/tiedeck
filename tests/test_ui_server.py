@@ -918,3 +918,108 @@ def test_a_refused_edit_is_reported_rather_than_raised(client, onboarded):
     assert response.status_code == 200, response.text
     assert response.json()["edited"] == []
     assert "sRGB" in response.json()["rejected"][0]["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# The review note as advice rather than a log
+# --------------------------------------------------------------------------- #
+
+
+def _audited(deck, profile):
+    from tieout.rules.base import clear_caches, run_rules
+    from tieout_ui.view import audit_view
+
+    clear_caches()
+    return audit_view(run_rules(deck, profile), deck)
+
+
+def test_the_note_opens_with_a_send_or_do_not_send_call(dirty_deck, reference_profile):
+    """"47 points to address" is a count, not an answer. The question anyone
+    opens this with is whether the deck can go out."""
+    view = _audited(dirty_deck, reference_profile)
+    assert view["verdict"]["state"] == "block"
+    assert view["verdict"]["headline"] == "Not ready to send"
+
+
+def test_a_clean_deck_is_told_it_is_clean(clean_deck, reference_profile):
+    view = _audited(clean_deck, reference_profile)
+    assert view["verdict"]["state"] == "clear"
+    assert view["verdict"]["headline"] == "Ready to send"
+    assert view["actions"] == []
+
+
+def test_findings_collapse_to_the_decisions_behind_them(dirty_deck, reference_profile):
+    """One off-palette colour on four slides is one job. Listed slide by slide
+    it reads as four problems, and a reader who fixes the theme colour once has
+    to work out that the other three were the same thing."""
+    view = _audited(dirty_deck, reference_profile)
+    actions = view["actions"]
+
+    assert actions, "a deck with findings has things to do"
+    assert len(actions) < view["summary"]["total"], (
+        "grouping that collapses nothing is not grouping"
+    )
+    assert sum(action["count"] for action in actions) == view["summary"]["total"], (
+        "every finding belongs to exactly one action, or the note loses some"
+    )
+
+
+def test_the_worst_thing_to_do_is_first(dirty_deck, reference_profile):
+    from tieout.rules.base import SEVERITY_ORDER
+
+    actions = _audited(dirty_deck, reference_profile)["actions"]
+    ranks = [SEVERITY_ORDER[action["severity"]] for action in actions]
+    assert ranks == sorted(ranks), "the list is the order to work through"
+
+
+def test_a_group_states_no_measurement_its_members_disagree_on(
+    dirty_deck, reference_profile
+):
+    """Six shapes off six different grid lines have six expectations. Printing
+    the first one on the group header is a wrong number stated confidently."""
+    for action in _audited(dirty_deck, reference_profile)["actions"]:
+        for field in ("measured", "expected"):
+            values = {instance[field] for instance in action["instances"]}
+            if len(values) > 1:
+                assert action[field] is None, (
+                    f"{action['rule_id']} states one {field} for instances that differ"
+                )
+
+
+def test_a_finding_says_what_to_do_about_it(dirty_deck, reference_profile):
+    """A Delta-E figure is a diagnosis. The tool has already worked out the
+    nearest palette colour; not saying it leaves the reader to do it again."""
+    view = _audited(dirty_deck, reference_profile)
+    findings = [f for slide in view["slides"] for f in slide["findings"]]
+
+    assert findings
+    without = sorted({f["rule_id"] for f in findings if not f["remedy"]})
+    assert not without, f"these rules report a defect without a fix: {without}"
+
+
+def test_a_remedy_never_shows_the_reader_a_format_code(dirty_deck, reference_profile):
+    """``%d %B %Y`` is a correct answer to the wrong question: nobody reformats
+    a deck from a strftime string."""
+    view = _audited(dirty_deck, reference_profile)
+    for slide in view["slides"]:
+        for finding in slide["findings"]:
+            if finding["rule_id"] == "TY-008":
+                assert "%" not in (finding["remedy"] or "")
+
+
+def test_every_finding_that_is_about_a_shape_can_be_pointed_at(
+    dirty_deck, reference_profile
+):
+    """The box has been carried on every finding since the first version and
+    nothing drew it. The page needs it to outline the shape on the canvas."""
+    view = _audited(dirty_deck, reference_profile)
+    shaped = [
+        finding
+        for slide in view["slides"]
+        for finding in slide["findings"]
+        if finding["shape"]
+    ]
+    assert shaped
+    assert all(f["bbox_pt"] and len(f["bbox_pt"]) == 4 for f in shaped), (
+        "a finding that names a shape must say where that shape is"
+    )

@@ -205,6 +205,7 @@ class ShapeOffCanvas(Rule):
                         ),
                         measured=f"{edge} edge at {measured:.1f}pt",
                         expected=f"{edge} edge within {limit:g}pt",
+                        remedy="Move the shape back onto the canvas",
                         bbox_pt=shape.visual_bbox_pt,
                     )
                 )
@@ -298,6 +299,7 @@ class MarginIntrusion(Rule):
                         ),
                         measured=f"{edge} edge at {measured:.1f}pt",
                         expected=f"{edge} edge at {limit:g}pt",
+                        remedy=f"Move the {edge} edge to {limit:g}pt or further in",
                         bbox_pt=shape.visual_bbox_pt,
                     )
                 )
@@ -430,6 +432,11 @@ class NearMissAlignment(Rule):
             message=message,
             measured=f"{first.label} {first.value:g}pt",
             expected=f"{first.line:g}pt",
+            # Deliberately not naming the line. The remedy is the grouping key
+            # in the review note, and five shapes each a point off five
+            # different grid lines is one job -- "snap these to the grid" --
+            # not five. The line each one wants is in `expected`.
+            remedy="Snap the edge to the grid line it is nearly on",
             bbox_pt=first.bbox,
         )
 
@@ -529,6 +536,7 @@ class TextShapeOverlap(Rule):
                         ),
                         measured=f"{share * 100:.1f}% of the smaller shape",
                         expected=f"at most {threshold * 100:g}%",
+                        remedy="Separate the shapes, or confirm the overlap is deliberate",
                         bbox_pt=upper.bbox_pt,
                     )
                 )
@@ -649,6 +657,7 @@ class RecurringElementDisplaced(Rule):
                         ),
                         measured=f"{axis} {measured:.1f}pt",
                         expected=f"{axis} {expected:g}pt",
+                        remedy=f"Move it back to {axis} {expected:g}pt",
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -908,6 +917,7 @@ class TextOverflow(Rule):
             ),
             measured=f"{required:.1f}pt of text",
             expected=f"at most {available_height:.1f}pt",
+            remedy="Shorten the text, or enlarge the shape",
             bbox_pt=shape.bbox_pt,
         )
 
@@ -1077,6 +1087,7 @@ class FontSizeOutsideBand(Rule):
                     ),
                     measured=f"{size_pt:g}pt",
                     expected=band.describe(),
+                    remedy=f"Set the size to {band.describe()}",
                 )
             )
         return findings
@@ -1185,6 +1196,7 @@ class InconsistentGutters(Rule):
                             ),
                             measured=f"stdev {spread:.2f}pt",
                             expected=f"stdev at most {limit:g}pt",
+                            remedy="Distribute the shapes evenly along the row",
                         )
                     )
         return findings

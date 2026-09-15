@@ -219,6 +219,74 @@
   .item .shape { font-size: 11.5px; color: var(--ink-3); }
 
   .empty { padding: 26px 16px; color: var(--ink-3); font-size: 13px; text-align: center; }
+
+  /* The verdict. The counts were always there; what was missing was the answer
+     to the question people actually open this with. */
+  .verdict { padding: 15px 16px 14px; border-bottom: 1px solid var(--line); }
+  .verdict .call { font-size: 17px; font-weight: 650; letter-spacing: -.01em; display: flex;
+    align-items: center; gap: 8px; }
+  .verdict .call i { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .verdict.v-block .call { color: #a4262c; } .verdict.v-block .call i { background: #a4262c; }
+  .verdict.v-fix   .call { color: #8a5700; } .verdict.v-fix   .call i { background: #c19c00; }
+  .verdict.v-polish .call, .verdict.v-clear .call { color: #0b6a0b; }
+  .verdict.v-polish .call i, .verdict.v-clear .call i { background: #0b6a0b; }
+  .verdict .detail { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
+  .verdict .counts { display: flex; gap: 14px; margin-top: 9px; font-size: 11.5px; }
+  .verdict .counts span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); }
+  .verdict .counts b { font-size: 13px; color: var(--ink); }
+
+  /* By fix / by slide. Two ways into the same findings: one to plan the work,
+     one to do it with the deck open. */
+  .modes { display: flex; gap: 0; padding: 0 16px; border-bottom: 1px solid var(--line);
+    background: var(--chrome); }
+  .modes button {
+    font: inherit; font-size: 12px; padding: 7px 12px; border: 0; background: none;
+    color: var(--ink-2); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .modes button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .modes button:hover:not([aria-pressed="true"]) { color: var(--ink); }
+
+  .action { display: flex; gap: 11px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .action .bar { flex: 0 0 3px; border-radius: 2px; }
+  .action:hover { background: #faf9f8; }
+  .action .col { min-width: 0; flex: 1 1 auto; }
+  .action .k { font-size: 13px; font-weight: 600; line-height: 1.35; }
+  .action .scope { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+  .action .scope a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .action .scope a:hover { text-decoration: underline; }
+  /* The instruction, set apart from the diagnosis. It is the line someone acts
+     on, and under the measurement it read as more measurement. */
+  .action .do {
+    margin-top: 7px; padding: 7px 9px; background: var(--accent-wash);
+    border-left: 2px solid var(--accent); font-size: 12.5px; color: var(--ink);
+  }
+  .action .ev { font: 11.5px var(--mono); color: var(--ink-2); margin-top: 6px; }
+  .action .ev .arrow { color: var(--ink-3); }
+  .action .why { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+  .action details { margin-top: 6px; }
+  .action summary {
+    font-size: 11.5px; color: var(--ink-3); cursor: pointer; list-style: none; user-select: none;
+  }
+  .action summary::-webkit-details-marker { display: none; }
+  .action summary::before { content: "\25b8 "; }
+  .action details[open] summary::before { content: "\25be "; }
+  .action .inst {
+    font-size: 11.5px; color: var(--ink-2); padding: 4px 0 0 12px; cursor: pointer;
+    border-left: 1px solid var(--line); margin-left: 2px;
+  }
+  .action .inst:hover { color: var(--accent); }
+  .action .inst .at { font: 11px var(--mono); color: var(--ink-3); }
+
+  /* Where it is. Every finding has carried its box since the first version and
+     nothing ever drew it. */
+  .mark {
+    position: absolute; border: 2px solid var(--accent); background: rgba(183,71,42,.13);
+    box-shadow: 0 0 0 9999px rgba(32,31,30,.30); pointer-events: none; z-index: 2;
+  }
+  .mark span {
+    position: absolute; top: -19px; left: -2px; background: var(--accent); color: #fff;
+    font: 600 10px/1 var(--font); padding: 3px 5px; white-space: nowrap;
+  }
   .empty strong { display: block; color: var(--ok); font-size: 14px; margin-bottom: 4px; }
 
   /* ---- pane content: forms, tables, prose ---- */
@@ -460,6 +528,11 @@ const S = {
   mode: null,
   dirty: false,
   checking: false,
+  // "fix" groups the findings by what to do about them; "slide" keeps the
+  // original per-slide order, which is how a deck actually gets corrected.
+  noteMode: "fix",
+  // The box currently outlined on the canvas, and what to call it.
+  mark: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -933,7 +1006,7 @@ function renderNote() {
          behind the expectation.</p></div>`;
     return;
   }
-  const a = S.audit, s = a.summary;
+  const a = S.audit, s = a.summary, v = a.verdict || { state: "clear", headline: "", detail: "" };
   $("panesub").textContent = `${a.client} · ${a.slide_count} slides`;
 
   const kinds = ["blocker", "major", "minor", "info"].filter((k) => s[k]);
@@ -941,28 +1014,89 @@ function renderNote() {
     ? kinds.map((k) => `${s[k]} ${k}`).join("  \u00b7  ")
     : "no findings";
 
+  const actions = a.actions || [];
   const head = `
+    <div class="verdict v-${esc(v.state)}">
+      <div class="call"><i></i>${esc(v.headline)}</div>
+      <div class="detail">${esc(v.detail)}</div>
+      ${s.total ? `<div class="counts">
+        ${kinds.map((k) => `<span><i class="b-${k}"></i><b>${s[k]}</b> ${k}</span>`).join("")}
+        <span><b>${actions.length}</b> ${actions.length === 1 ? "thing" : "things"} to do</span>
+      </div>` : ""}
+    </div>
     <div class="note-head">
       <div class="line"><b>${esc(a.client)}</b> — ${esc(fileName(a.deck))}</div>
       <div class="line">${a.slide_count} slides checked against ${a.rules_run.length}
         rule${a.rules_run.length === 1 ? "" : "s"}${a.suppressed ? `, ${a.suppressed} previously accepted` : ""}.</div>
-      <div class="line">${s.total
-        ? `<b>${s.total}</b> point${s.total === 1 ? "" : "s"} to address before this deck goes out.`
-        : `<b>Nothing to address.</b> This deck matches the house style it was checked against.`}</div>
-      ${s.total ? `<div class="tallies">${kinds.map((k) =>
-        `<span><i class="b-${k}"></i>${s[k]} ${k}</span>`).join("")}</div>` : ""}
     </div>
     ${reviewBanner(a.review)}`;
 
-  const items = noteItems();
-  if (!items.length) {
+  if (!s.total) {
     $("pane").innerHTML = head + `<div class="empty"><strong>Clean</strong>
       Every rule that ran had nothing to report.</div>`;
     return;
   }
 
-  let html = head, current = null;
-  for (const { n, slide, f } of items) {
+  const modes = `
+    <div class="modes">
+      <button data-mode="fix" aria-pressed="${S.noteMode !== "slide"}">By fix (${actions.length})</button>
+      <button data-mode="slide" aria-pressed="${S.noteMode === "slide"}">By slide (${s.total})</button>
+    </div>`;
+
+  $("pane").innerHTML = head + modes +
+    (S.noteMode === "slide" ? bySlide() : byFix(actions));
+
+  $("pane").querySelectorAll(".modes button").forEach((b) => {
+    b.onclick = () => { S.noteMode = b.dataset.mode; renderNote(); };
+  });
+  wireNote();
+}
+
+// Grouped by what a person would actually do. One off-palette colour used on
+// four slides is one job, and reading it as four problems is how a reader
+// learns to skim the note.
+function byFix(actions) {
+  return actions.map((a, index) => {
+    const where = a.slides.map((n) =>
+      `<a data-goto="${n}">slide ${n}</a>`).join(", ");
+    const times = a.count === 1 ? "" : ` · ${a.count} places`;
+    const delta = a.measured && a.expected
+      ? `<div class="ev">${esc(a.measured)} <span class="arrow">&rarr;</span> ${esc(a.expected)}</div>`
+      : a.measured ? `<div class="ev">${esc(a.measured)}</div>`
+      : a.expected ? `<div class="ev">expected ${esc(a.expected)}</div>` : "";
+    const instances = a.count > 1 || a.instances[0].shape ? `
+      <details>
+        <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
+        ${a.instances.map((i) => `<div class="inst" data-goto="${i.slide}"
+            data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
+            data-label="${esc(a.rule_id)}">
+            <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
+            — ${esc(sentence(i.message))}
+          </div>`).join("")}
+      </details>` : "";
+    return `<div class="action">
+      <div class="bar b-${esc(a.severity)}"></div>
+      <div class="col">
+        <div class="meta">
+          <span class="n">${index + 1}. ${esc(a.rule_id)}</span>
+          <span class="tag b-${esc(a.severity)}">${esc(a.severity)}</span>
+          ${a.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
+        </div>
+        <div class="k">${esc(a.title)}</div>
+        <div class="scope">${where}${times}</div>
+        ${a.remedy ? `<div class="do">${esc(a.remedy)}</div>` : ""}
+        ${delta}
+        ${a.why ? `<div class="why">${esc(a.why)}</div>` : ""}
+        ${instances}
+      </div></div>`;
+  }).join("");
+}
+
+// The original order, kept because it is how a deck actually gets corrected:
+// open slide 7, fix everything wrong with slide 7, move on.
+function bySlide() {
+  let html = "", current = null;
+  for (const { n, slide, f } of noteItems()) {
     if (slide.index !== current) {
       current = slide.index;
       html += `<div class="slide-head" data-goto="${slide.index}">
@@ -971,13 +1105,23 @@ function renderNote() {
     }
     html += item(n, slide, f);
   }
-  $("pane").innerHTML = html;
+  return html;
+}
+
+function wireNote() {
   $("pane").querySelectorAll("[data-goto]").forEach((el) => {
     el.style.cursor = "pointer";
-    el.onclick = () => select(Number(el.dataset.goto));
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
+      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+    };
   });
   $("pane").querySelectorAll(".item").forEach((el) => {
-    el.onclick = () => select(Number(el.dataset.slide));
+    el.onclick = () => {
+      const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
+      select(Number(el.dataset.slide), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+    };
   });
 }
 
@@ -985,7 +1129,8 @@ function item(n, slide, f) {
   const delta = f.measured || f.expected
     ? `<div class="ev">${esc(f.measured || "")}${f.expected
         ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
-  return `<div class="item" data-slide="${slide.index}">
+  return `<div class="item" data-slide="${slide.index}"
+    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}">
     <div class="bar b-${f.severity}"></div>
     <div>
       <div class="meta">
@@ -995,6 +1140,7 @@ function item(n, slide, f) {
         ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
       </div>
       <p class="say">${esc(sentence(f.message))}</p>
+      ${f.remedy ? `<div class="do">${esc(f.remedy)}</div>` : ""}
       ${delta}
       ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
     </div></div>`;
@@ -1029,18 +1175,40 @@ $("copynote").onclick = async () => {
   catch (_) { paneMessage("warn", "The browser refused clipboard access. The HTML report is the other way out."); }
 };
 
+// What gets pasted into an email, so it carries the verdict and the fixes
+// rather than a transcript of the pane. Grouped the same way the note is: a
+// list of eight things to do is a message someone can act on; twenty-four
+// findings in slide order is a document they have to triage first.
 function plainNote() {
   if (!S.audit) return "No check has been run.";
-  const a = S.audit, s = a.summary;
+  const a = S.audit, s = a.summary, v = a.verdict || {};
   const lines = [
-    `TieOut review note — ${a.client}`,
-    fileName(a.deck),
+    `TieOut review — ${a.client} — ${fileName(a.deck)}`,
+    v.headline || "",
     `${a.slide_count} slides, ${a.rules_run.length} rules run`,
-    s.total ? `${s.total} point(s) to address: ${["blocker", "major", "minor", "info"]
-      .filter((k) => s[k]).map((k) => `${s[k]} ${k}`).join(", ")}`
+    s.total
+      ? `${s.total} finding(s): ${["blocker", "major", "minor", "info"]
+          .filter((k) => s[k]).map((k) => `${s[k]} ${k}`).join(", ")}`
       : "Nothing to address.",
     "",
   ];
+
+  const actions = a.actions || [];
+  if (actions.length) {
+    lines.push(`${actions.length} thing(s) to do`, "");
+    actions.forEach((action, index) => {
+      const where = action.slides.length === 1
+        ? `slide ${action.slides[0]}`
+        : `slides ${action.slides.join(", ")}`;
+      lines.push(`${index + 1}. [${action.severity}] ${action.title} — ${where}`);
+      if (action.remedy) lines.push(`   Fix: ${action.remedy}`);
+      if (action.measured || action.expected)
+        lines.push(`   ${action.measured || ""}${action.expected ? ` -> ${action.expected}` : ""}`);
+      lines.push("");
+    });
+  }
+
+  lines.push("Slide by slide", "");
   let current = null;
   for (const { n, slide, f } of noteItems()) {
     if (slide.index !== current) {
@@ -1048,7 +1216,9 @@ function plainNote() {
       lines.push(`Slide ${slide.index} — ${slide.title || slide.archetype}`);
     }
     lines.push(`  ${n}. [${f.severity}] ${f.rule_id}  ${sentence(f.message)}`);
-    if (f.measured || f.expected) lines.push(`      ${f.measured || ""}${f.expected ? ` -> ${f.expected}` : ""}`);
+    if (f.remedy) lines.push(`      Fix: ${f.remedy}`);
+    if (f.measured || f.expected)
+      lines.push(`      ${f.measured || ""}${f.expected ? ` -> ${f.expected}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -1084,13 +1254,34 @@ function renderRail() {
 function renderSlide() {
   if (!S.deck) return;
   const thumbs = S.deck.thumbnails.available;
-  $("slide").innerHTML = thumbs
+  // From the deck rather than assumed: a 4:3 deck in a 16:9 frame would put
+  // every overlay in the wrong place, since the box is positioned as a share
+  // of the slide.
+  if (S.deck.width_pt && S.deck.height_pt)
+    $("slide").style.aspectRatio = `${S.deck.width_pt} / ${S.deck.height_pt}`;
+  $("slide").innerHTML = (thumbs
     ? `<img alt="Slide ${S.slide}"
         src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${encodeURIComponent(TOKEN)}">`
     : `<div class="placeholder"><h2>Slide ${S.slide}</h2>
         <p>${esc(slideTitle(S.slide) || "")}</p>
         <p style="margin-top:12px">${esc(S.deck.thumbnails.reason
-          || "Slide images are still rendering.")}</p></div>`;
+          || "Slide images are still rendering.")}</p></div>`) + markup();
+}
+
+// The outline over the shape a finding is about. Positioned as a percentage of
+// the slide, so it holds at any rendered size and needs no measurement of the
+// image. Drawn over the slide card too, where there is no image: the box is
+// still where the shape is, and on a machine without LibreOffice it is the only
+// indication of where to look.
+function markup() {
+  const m = S.mark;
+  if (!m || !S.deck.width_pt || !S.deck.height_pt) return "";
+  const [left, top, width, height] = m.bbox;
+  const pc = (value, total) => `${(value / total) * 100}%`;
+  return `<div class="mark" style="
+    left:${pc(left, S.deck.width_pt)}; top:${pc(top, S.deck.height_pt)};
+    width:${pc(width, S.deck.width_pt)}; height:${pc(height, S.deck.height_pt)}">
+    ${m.label ? `<span>${esc(m.label)}</span>` : ""}</div>`;
 }
 
 function slideTitle(index) {
@@ -1100,8 +1291,9 @@ function slideTitle(index) {
   return s ? s.archetype.replace(/_/g, " ") : "";
 }
 
-function select(index) {
+function select(index, bbox, label) {
   S.slide = index;
+  S.mark = bbox ? { bbox, label: label || "" } : null;
   $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;
   $("rail").querySelectorAll(".thumb").forEach((el) => {
     const on = Number(el.dataset.slide) === index;

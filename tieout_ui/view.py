@@ -13,7 +13,7 @@ cannot disagree with a number that arrives without its reason.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from tieout.model.deck import DeckModel
 from tieout.profile.schema import Profile
@@ -254,6 +254,7 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
                 "measured": finding.measured,
                 "expected": finding.expected,
                 "why": finding.expected_provenance,
+                "remedy": finding.remedy,
                 "bbox_pt": finding.bbox_pt,
             }
         )
@@ -283,6 +284,8 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
         "client": result.client,
         "slide_count": result.slide_count,
         "summary": result.summary,
+        "verdict": _verdict(result.summary),
+        "actions": _actions(slides),
         "slides": slides,
         "rules_run": sorted(result.rules_run),
         "rules_skipped": [
@@ -291,6 +294,123 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
         ],
         "suppressed": len(result.suppressed),
     }
+
+
+#: What each severity means for the decision the reader is actually making.
+#: "24 points to address" does not answer "can I send this", which is the only
+#: question anyone opens this tool with at eleven at night.
+_VERDICTS: Final[dict[str, tuple[str, str]]] = {
+    "block": (
+        "Not ready to send",
+        "Blockers are defects that embarrass whoever the deck goes to: a leaked "
+        "name, a draft marker, the wrong canvas. Clear these first.",
+    ),
+    "fix": (
+        "Fix before sending",
+        "Nothing here leaks or misleads, but each one is visible to the reader "
+        "as a mistake in the deck.",
+    ),
+    "polish": (
+        "Ready to send",
+        "What is left is polish. None of it would be noticed by a reader who was "
+        "not looking for it.",
+    ),
+    "clear": (
+        "Ready to send",
+        "This deck matches the house style it was checked against.",
+    ),
+}
+
+
+def _verdict(summary: dict[str, int]) -> dict[str, str]:
+    """The send-or-not call, from the severities present."""
+    if summary.get("blocker"):
+        state = "block"
+    elif summary.get("major"):
+        state = "fix"
+    elif summary.get("minor") or summary.get("info"):
+        state = "polish"
+    else:
+        state = "clear"
+    headline, detail = _VERDICTS[state]
+    return {"state": state, "headline": headline, "detail": detail}
+
+
+def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Findings collapsed to the decisions behind them.
+
+    One off-palette gold used on four slides is one decision and four findings.
+    Listed slide by slide it reads as four problems, and a reader who fixes the
+    theme colour once then has to work out that the other three are the same
+    thing. So findings are grouped by what a person would actually do about
+    them: the rule, the expectation it failed and the fix.
+
+    The instances are kept and shown beneath, because the slide-by-slide order
+    is still how a deck gets corrected -- this is a second way in, not a
+    replacement.
+    """
+    summaries = {rule_id: rule.summary for rule_id, rule in load_all_rules().items()}
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for slide in slides:
+        for finding in slide["findings"]:
+            # Keyed on the fix, because the fix is what makes several findings
+            # one job. Six shapes each a point off six different grid lines
+            # share a remedy and are one pass with the mouse; two off-palette
+            # colours do not and are two. Where a rule states no remedy, the
+            # expectation stands in, so unrelated findings cannot collapse
+            # together on an empty string.
+            key = (
+                finding["rule_id"],
+                finding["remedy"] or f"\0{finding['expected'] or finding['message']}",
+            )
+            action = grouped.get(key)
+            if action is None:
+                action = grouped[key] = {
+                    "rule_id": finding["rule_id"],
+                    "category": finding["category"],
+                    "severity": finding["severity"],
+                    "title": summaries.get(finding["rule_id"], finding["message"]),
+                    "measured": finding["measured"],
+                    "expected": finding["expected"],
+                    "remedy": finding["remedy"],
+                    "why": finding["why"],
+                    "slides": [],
+                    "instances": [],
+                }
+            if slide["index"] not in action["slides"]:
+                action["slides"].append(slide["index"])
+            action["instances"].append(
+                {
+                    "slide": slide["index"],
+                    "shape": finding["shape"],
+                    "message": finding["message"],
+                    "measured": finding["measured"],
+                    "expected": finding["expected"],
+                    "bbox_pt": finding["bbox_pt"],
+                }
+            )
+
+    actions = list(grouped.values())
+    # Worst first, then the one affecting most slides: the order in which a
+    # person with an hour before the deck goes out should work through them.
+    actions.sort(
+        key=lambda a: (
+            SEVERITY_ORDER.get(a["severity"], 9),
+            -len(a["instances"]),
+            a["rule_id"],
+        )
+    )
+    for action in actions:
+        action["count"] = len(action["instances"])
+        # A measurement or an expectation on the group header is only true if
+        # every instance shares it. Six shapes off six different grid lines
+        # have six expectations, and printing the first one at the top would
+        # be a wrong number stated confidently.
+        for field in ("measured", "expected"):
+            values = {instance[field] for instance in action["instances"]}
+            action[field] = values.pop() if len(values) == 1 else None
+    return actions
 
 
 def _slide_title(slide: object) -> str:

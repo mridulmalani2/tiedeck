@@ -215,6 +215,7 @@ class LogoMissing(Rule):
                     provenance_path="brand.logo",
                     measured="absent",
                     expected=box.describe(),
+                    remedy=f"Place the logo at {box.describe()}",
                 )
             )
         return findings
@@ -270,6 +271,7 @@ class LogoPosition(Rule):
                     provenance_path="brand.logo.per_archetype",
                     measured=f"left {shape.left_pt:g}pt, top {shape.top_pt:g}pt",
                     expected=box.describe(),
+                    remedy=f"Move the logo to left {box.left:g}pt, top {box.top:g}pt",
                     bbox_pt=shape.bbox_pt,
                 )
             )
@@ -328,6 +330,7 @@ class LogoSize(Rule):
                     provenance_path="brand.logo.per_archetype",
                     measured=f"{shape.width_pt:g}x{shape.height_pt:g}pt",
                     expected=box.describe(),
+                    remedy=f"Resize the logo to {box.width:g}x{box.height:g}pt",
                     bbox_pt=shape.bbox_pt,
                 )
             )
@@ -426,6 +429,7 @@ class OffPaletteColour(Rule):
                         provenance_path="brand.palette_hex",
                         measured=f"{colour_hex}, Delta-E {delta:.1f} from {nearest_hex}",
                         expected=f"a palette colour within Delta-E {tolerance:g}",
+                        remedy=f"Recolour {colour_hex} to the palette's {nearest_hex}",
                     )
                 )
         return findings
@@ -480,6 +484,17 @@ class UnapprovedTypeface(Rule):
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         fonts = profile.brand.fonts
         expected = "one of " + ", ".join(fonts.allowed)
+        # Name the typeface only when there is one to name. A house style with
+        # three approved faces has no single right answer for a given run, and
+        # picking one of them would be an instruction the tool cannot support.
+        approved = sorted(fonts.allowed)
+        remedy = (
+            f"Set the typeface to {approved[0]}"
+            if len(approved) == 1
+            else f"Set the typeface to one of {', '.join(approved)}"
+            if approved
+            else None
+        )
 
         findings: list[Finding] = []
         for slide in deck.slides:
@@ -494,6 +509,7 @@ class UnapprovedTypeface(Rule):
                         ),
                         profile=profile,
                         provenance_path="brand.fonts.allowed",
+                        remedy=remedy,
                         measured=name,
                         expected=expected,
                     )
@@ -597,6 +613,11 @@ class PageNumber(Rule):
                         f"top {observation.box_pt[1]:g}pt"
                     ),
                     expected=box.describe() if box else f"text matching {expectation.regex}",
+                    remedy=(
+                        f"Move the page number to {box.describe()}"
+                        if box
+                        else "Correct the page number to the house pattern"
+                    ),
                     bbox_pt=observation.box_pt,
                 )
             )
@@ -625,6 +646,7 @@ class PageNumber(Rule):
                 provenance_path="brand.footer.page_number",
                 measured=repr(text),
                 expected=f"text matching {regex}",
+                remedy="Replace it with the slide's page number alone",
                 bbox_pt=occupant.bbox_pt,
             )
         return self.finding(
@@ -637,6 +659,11 @@ class PageNumber(Rule):
             provenance_path="brand.footer.page_number",
             measured="absent",
             expected=box.describe() if box else f"text matching {regex}",
+            remedy=(
+                f"Add the page number at {box.describe()}"
+                if box
+                else "Add the page number to this slide"
+            ),
         )
 
     @staticmethod
@@ -698,6 +725,7 @@ class PageNumberSequence(Rule):
                     provenance_path="brand.footer.page_number",
                     measured=str(current.value),
                     expected=f"greater than {previous.value}",
+                    remedy="Renumber the slides so the sequence ascends",
                     bbox_pt=current.box_pt,
                 )
             ]
@@ -782,6 +810,7 @@ class TitleGeometry(Rule):
             provenance_path="brand.title_geometry_tolerance_pt",
             measured=_describe_box(*shape.bbox_pt),
             expected=f"{_describe_box(left, top, width, height)} (+/-{tolerance:g}pt)",
+            remedy="Reset the title placeholder to its layout position",
             bbox_pt=shape.bbox_pt,
         )
 
@@ -826,6 +855,10 @@ class SlideDimensions(Rule):
                 profile=profile,
                 provenance_path="slide",
                 measured=f"{deck.width_pt:g}x{deck.height_pt:g}pt",
+                remedy=(
+                    f"Set the slide size to "
+                    f"{expected.width_pt:g}x{expected.height_pt:g}pt (Design > Slide Size)"
+                ),
                 expected=(
                     f"{expected.width_pt:g}x{expected.height_pt:g}pt (+/-{tolerance:g}pt)"
                 ),
@@ -882,6 +915,7 @@ class MissingBoilerplate(Rule):
                         provenance_path="brand.footer.boilerplate",
                         measured="absent",
                         expected=entry.text,
+                        remedy=f"Add the {label}: {entry.text!r}",
                     )
                 )
         return findings
