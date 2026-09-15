@@ -331,3 +331,20 @@ def test_the_offline_recipe_warns_about_the_platform_trap(deployment):
     assert "--only-binary" in deployment
     for compiled in ("lxml", "Pillow", "pydantic-core", "pypdfium2"):
         assert compiled in deployment, compiled
+
+
+def test_the_ui_section_gives_a_start_to_finish_recipe(readme):
+    """The first question anyone asks is how to open the thing. The commands
+    have to be the real ones, including the branch, since the PR is unmerged."""
+    section = readme.split("## Optional: the local UI", 1)[1].split("\n## ", 1)[0]
+    for needed in (
+        "git clone",
+        "python3 -m venv .venv",
+        '-e ".[ui]"',
+        "tieout-ui",
+        "http://127.0.0.1:8765/",
+        "scaffold-reference",
+        "Scripts",           # Windows paths differ and are spelled out
+        "libreoffice-impress",
+    ):
+        assert needed in section, needed

@@ -706,9 +706,47 @@ enforced as a JSON schema rather than only asked for in the prompt.
 tieout-ui
 ```
 
-That serves one page on `http://127.0.0.1:8765/` and opens it. Upload a deck,
-confirm what was derived from the client's reference material, optionally turn
-on content review, and read the findings slide by slide.
+That serves one page on `http://127.0.0.1:8765/` and opens a browser on it.
+Upload a deck, confirm what was derived from the client's reference material,
+optionally turn on content review, and read the findings slide by slide.
+
+### Start to finish, on your own machine
+
+Nothing here needs a key, a network or an account.
+
+```bash
+git clone https://github.com/mridulmalani2/tiedeck
+cd tiedeck
+git checkout claude/practical-volta-j1yct7      # until the PR is merged
+
+python3 -m venv .venv                            # Python 3.11 or later
+.venv/bin/python -m pip install -e ".[ui]"       # the UI extra; the core comes with it
+
+.venv/bin/tieout-ui                              # then open http://127.0.0.1:8765/
+```
+
+On Windows the interpreter is `.venv\Scripts\python.exe` and the command
+`.venv\Scripts\tieout-ui.exe`; everything else is identical.
+
+`Ctrl-C` stops the server and deletes every deck it was holding. Useful flags:
+`--port 9000` if 8765 is taken, `--no-open` to skip launching a browser.
+
+**No deck to try it on?** The core CLI generates a set:
+
+```bash
+.venv/bin/tieout scaffold-reference --out decks
+```
+
+The two that matter are `decks/reference_clean.pptx`, a well-made deck to learn
+a house style from, and `decks/reference_dirty.pptx`, the same deck with defects
+seeded into it. Learn from the first in the UI, then open the second and check
+it — you should get 47 findings. The rest are single-defect variants the test
+suite uses, plus the YAML spec both decks are generated from.
+
+**Want the slide images?** Install LibreOffice with its Impress filters
+(`libreoffice-impress` on Debian or Ubuntu; the normal LibreOffice download on
+macOS and Windows). Without it the rail and canvas show slide cards instead, and
+no finding changes.
 
 ### It looks like PowerPoint on purpose
 
@@ -1179,7 +1217,7 @@ TieOut measures.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest              # 1,098 tests
+.venv/bin/python -m pytest              # 1,099 tests
 .venv/bin/python -m pytest --cov=tieout --cov=tieout_review --cov=tieout_ui  # floor 85%
 .venv/bin/python -m ruff check .        # lint
 .venv/bin/python -m mypy                # types, strict

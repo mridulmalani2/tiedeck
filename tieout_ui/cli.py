@@ -74,9 +74,9 @@ def serve(
     _out.print("[bold]TieOut[/bold] is serving on this machine only.")
     _out.print(f"  {url}")
     _out.print(
-        "[dim]The link carries a session token, so open it from here rather than "
-        "retyping the address. Uploaded decks live in a temporary directory and are "
-        "deleted when this stops.[/dim]"
+        "[dim]Open that in a browser — typing the address is fine, the page "
+        "collects its own session token. Uploaded decks live in a temporary "
+        "directory and are deleted when this stops. Ctrl-C to stop.[/dim]"
     )
     _out.print()
 
@@ -98,11 +98,13 @@ def _in_use(host: str, port: int) -> bool:
 
 
 def _launch(url: str, token: str) -> None:  # pragma: no cover - opens a browser
-    """Open the page with the token in the query string.
+    """Open the page, passing the token in the query string.
 
-    The one place a token appears in a URL. The page immediately replaces its own
-    address so the token does not stay in the browser's history or in anything
-    the user might copy.
+    Only the launcher does this, and only because a browser opened from here
+    cannot be handed a header. The page immediately rewrites its own address so
+    the token does not stay in history or in anything the user copies. Typing
+    the bare address works too: the page itself is not token-gated, and serves
+    the token inside the document.
     """
     import threading
     import webbrowser

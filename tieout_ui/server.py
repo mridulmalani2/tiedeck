@@ -88,10 +88,17 @@ def _authorise(
     ``<a>`` requests that cannot set one. Compared in constant time, which costs
     nothing and removes the question.
 
-    This is the whole of the access control, and it is enough for what this is: a
-    loopback-only server on one machine. Its job is that a page left open in
-    another tab, or any other process that can reach 127.0.0.1, cannot drive an
-    audit or read a deck.
+    What this actually defends against is worth being precise about. The page
+    itself is not gated — it has to be openable by typing the address — and it
+    carries the token in its body, so any process that can already read from
+    127.0.0.1 can obtain one. The threat it does stop is the real one for a
+    localhost server: a web page on some other origin quietly driving this one.
+    Such a page can neither set the custom header nor read the body of a
+    cross-origin response, so it cannot start an audit or retrieve a deck.
+
+    Against a hostile process already running on the same machine, this is not a
+    defence and is not offered as one. That is why the server refuses to bind
+    anything but a loopback address rather than relying on the token.
     """
     import hmac
 
