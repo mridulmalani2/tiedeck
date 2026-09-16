@@ -1295,7 +1295,7 @@ def _value_axis(root: etree._Element) -> tuple[float | None, float | None, bool]
 
 
 def _series_fill(ser: etree._Element, context: SlideContext) -> str | None:
-    """A chart series' own fill colour, resolved to sRGB.
+    """A chart series' own fill colour, resolved to sRGB, where it draws anything.
 
     Only the series' explicit ``c:spPr`` fill. A series with no fill of its own
     takes its colour from the theme's chart colour cycle, which depends on the
@@ -1303,12 +1303,49 @@ def _series_fill(ser: etree._Element, context: SlideContext) -> str | None:
     the template rather than typed by the author, and reporting a colour nobody
     picked is worse than reporting none.
 
+    ``None`` too when every data point overrides it. A pie or doughnut is drawn
+    a slice at a time, and a chart whose slices each carry a ``c:dPt`` fill
+    paints none of its series colour: the real deck this was written for held a
+    doughnut whose three segments were navy, gold and pale blue -- every one of
+    them on the palette -- above a series fill of PowerPoint's default accent
+    blue that nothing anywhere drew. Reporting that is the same defect as
+    measuring a text frame instead of its text.
+
     Resolved through the slide's own context, so a series painted in a scheme
     colour comes back as the hex that scheme slot actually holds rather than as
     the token.
     """
     fill = ser.find("c:spPr/a:solidFill", _CHART_NS)
-    return context.resolve_color(fill) if fill is not None else None
+    if fill is None:
+        return None
+    if _every_point_overrides(ser):
+        return None
+    return context.resolve_color(fill)
+
+
+def _every_point_overrides(ser: etree._Element) -> bool:
+    """Whether each of the series' points carries a fill of its own.
+
+    Counted against the point count the series declares rather than against the
+    number of ``c:dPt`` elements alone, because a chart that recolours three of
+    its five slices still draws the series colour on the other two.
+    """
+    overrides: set[str] = set()
+    for point in ser.findall("c:dPt", _CHART_NS):
+        if point.find("c:spPr/a:solidFill", _CHART_NS) is None:
+            continue
+        index = point.find("c:idx", _CHART_NS)
+        value = index.get("val") if index is not None else None
+        if value:
+            overrides.add(value)
+    if not overrides:
+        return False
+    counts = [
+        int(node.get("val") or 0)
+        for node in ser.iterfind("c:val/c:numRef/c:numCache/c:ptCount", _CHART_NS)
+    ]
+    declared = max(counts, default=0)
+    return declared > 0 and len(overrides) >= declared
 
 
 def _chart_text_strings(

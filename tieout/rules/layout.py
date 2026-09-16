@@ -418,6 +418,12 @@ class NearMissAlignment(Rule):
     the comparison is the grid line itself -- a learned position that shapes
     across the deck demonstrably do sit on. An edge is reported when it
 
+    * does not belong to a **data series** on that axis -- a set of shapes the
+      same size along it, none of which aligns to anything, which is what a
+      quadrant's dots, a football field's bars and their value labels look
+      like. Where such a shape sits *is the reading*, so snapping one to a grid
+      line moves a competitor or restates a valuation. See
+      :func:`_data_series_axes`.
     * belongs to a shape that is **not already aligned on that axis**, either to
       a learned grid line or to a line the slide establishes for itself -- a
       coordinate at least :data:`LOCAL_ALIGNMENT_SUPPORT` shapes on that slide
@@ -493,8 +499,14 @@ class NearMissAlignment(Rule):
             evenly_spaced = _evenly_spaced_axes(
                 shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
             )
+            settled = {
+                shape.ref.shape_id: _aligned_axes(grid, shape, local)
+                | evenly_spaced.get(shape.ref.shape_id, frozenset())
+                for shape in shapes
+            }
+            plotted = _data_series_axes(shapes, grid.tolerance_pt)
             for shape in shapes:
-                aligned = _aligned_axes(grid, shape, local) | evenly_spaced.get(
+                aligned = settled[shape.ref.shape_id] | plotted.get(
                     shape.ref.shape_id, frozenset()
                 )
                 for edge in _edge_values(shape):
@@ -618,6 +630,122 @@ def _evenly_spaced_axes(
             for shape in group:
                 out.setdefault(shape.ref.shape_id, set()).add(settled)
     return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+
+
+#: Members a data series needs before its shape is evidence of plotting rather
+#: than of carelessness. Two shapes that align to nothing are two loose shapes.
+DATA_SERIES_SUPPORT: Final[int] = 3
+
+#: How each axis is read: the extent shapes share to be one series, the extent
+#: that carries the value, and the leading edge along the axis.
+_SERIES_AXES: Final[tuple[tuple[str, str, str], ...]] = (
+    ("x", "height_pt", "width_pt"),
+    ("y", "width_pt", "height_pt"),
+)
+
+
+def _data_series_axes(
+    shapes: Sequence[ShapeModel], tolerance: float
+) -> dict[int, frozenset[str]]:
+    """Shape id -> the axes on which it is plotting a value rather than sitting.
+
+    A dot on a competitive quadrant, a bar on a football field and the figure
+    printed at the end of that bar are all placed by arithmetic. Nothing in the
+    file says so, but the evidence has a shape, and there are two of them.
+
+    **Bars.** Shapes of one thickness whose *length* varies, none sharing a
+    starting edge. The length is the value. A football field's bars sit on rows
+    shared with their labels, so they are laid out on ``y`` and plotted on
+    ``x`` -- and ``x`` is the axis LO-003 was proposing to snap, where 3.9pt
+    restated $815M as about $821M.
+
+    **Points.** Shapes of one size whose positions are irregular on *both*
+    axes, which is what a scatter is. Both axes matter: a column of cards is
+    spread down the page by construction and its tops alone look like a
+    scatter, but its members share a left edge, so it is not one.
+
+    Between them these two cases cover what a deck draws by hand where a chart
+    would otherwise go, and neither admits a row or a column of equal cards --
+    whose extents do not vary and whose positions are shared -- so five cards
+    nudged 3pt off a column stay reportable.
+
+    The group is partitioned rather than filtered: within one thickness, the
+    members sharing a starting edge with two others are laid out and removed,
+    and what remains is judged on its own. A football field's same-height
+    shapes hold three method names down a left column as well as nine scattered
+    bars and value labels, and discarding the group on account of the three
+    would lose the bars.
+
+    Deliberately not conditioned on whether a member happens to sit on a grid
+    line. With dozens of learned lines a scattered dot lands on one by
+    coincidence, and treating that as evidence of layout shrank a five-dot
+    scatter below the threshold on the deck this was written for.
+    """
+    out: dict[int, set[str]] = {}
+    for axis, thickness_attr, value_attr in _SERIES_AXES:
+        lead_attr = "left_pt" if axis == "x" else "top_pt"
+        sized = [
+            shape for shape in shapes if shape.width_pt > 0 and shape.height_pt > 0
+        ]
+        thicknesses = [getattr(shape, thickness_attr) for shape in sized]
+        for cluster in cluster_values(thicknesses, tolerance):
+            members = [
+                shape
+                for shape in sized
+                if abs(getattr(shape, thickness_attr) - cluster.centre) <= tolerance
+            ]
+            if len(members) < DATA_SERIES_SUPPORT:
+                continue
+            candidates = _not_sharing(members, lead_attr, tolerance)
+            if len(candidates) < DATA_SERIES_SUPPORT:
+                continue
+            if not (
+                _lengths_vary(candidates, value_attr, tolerance)
+                or _irregular(candidates, tolerance)
+            ):
+                continue
+            for shape in candidates:
+                out.setdefault(shape.ref.shape_id, set()).add(axis)
+    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+
+
+def _not_sharing(
+    members: Sequence[ShapeModel], attr: str, tolerance: float
+) -> list[ShapeModel]:
+    """The members that share ``attr`` with no two others.
+
+    The ones that do are a row or a column inside the same-sized group, and
+    belong to the slide's layout rather than to its data.
+    """
+    values = [getattr(shape, attr) for shape in members]
+    shared = [
+        cluster.centre
+        for cluster in cluster_values(values, tolerance)
+        if cluster.support >= DATA_SERIES_SUPPORT
+    ]
+    return [
+        shape
+        for shape in members
+        if not any(
+            abs(getattr(shape, attr) - position) <= tolerance for position in shared
+        )
+    ]
+
+
+def _lengths_vary(
+    members: Sequence[ShapeModel], value_attr: str, tolerance: float
+) -> bool:
+    """Whether these shapes are of more than one length along the value axis."""
+    lengths = [getattr(shape, value_attr) for shape in members]
+    return len(cluster_values(lengths, tolerance)) > 1
+
+
+def _irregular(members: Sequence[ShapeModel], tolerance: float) -> bool:
+    """Whether no two of these shapes share a position on either axis."""
+    return all(
+        len(_not_sharing(members, attr, tolerance)) == len(members)
+        for attr in ("left_pt", "top_pt")
+    )
 
 
 def _aligned_axes(

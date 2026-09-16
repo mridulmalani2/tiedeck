@@ -255,3 +255,86 @@ def test_a_graphic_in_front_of_the_content_is_not_a_bleed() -> None:
     front = _bleed_shape(shape_id=2, z_order=99)
     slide = _slide([back, front])
     assert not is_decorative_bleed(front, slide, CANVAS)
+
+
+# --------------------------------------------------------------------------------------
+# Data series: a shape whose position carries a number
+# --------------------------------------------------------------------------------------
+
+
+def _at(left: float, top: float, width: float, height: float, shape_id: int) -> ShapeModel:
+    return _shape(
+        left=left, top=top, width=width, height=height, kind="autoshape", shape_id=shape_id
+    )
+
+
+def test_a_scatter_of_same_sized_shapes_is_a_data_series() -> None:
+    """Five dots on a quadrant. Where each sits is the reading."""
+    from tieout.rules.layout import _data_series_axes
+
+    dots = [
+        _at(286.85, 235.73, 11.52, 11.52, 1),
+        _at(263.16, 313.56, 11.52, 11.52, 2),
+        _at(212.40, 222.19, 11.52, 11.52, 3),
+        _at(307.15, 347.40, 11.52, 11.52, 4),
+        _at(137.95, 415.08, 11.52, 11.52, 5),
+    ]
+    plotted = _data_series_axes(dots, 2.0)
+    for dot in dots:
+        assert plotted.get(dot.ref.shape_id) == frozenset({"x", "y"})
+
+
+def test_a_row_of_cards_nudged_off_one_column_is_not_a_data_series() -> None:
+    """The protection that keeps a real defect reportable.
+
+    Five same-sized cards 3pt off a column share their left edge with each
+    other. Every one is removed as laid out, and nothing remains to call a
+    series -- so LO-003 still has them to report.
+    """
+    from tieout.rules.layout import _data_series_axes
+
+    cards = [_at(57.6, 100.0 + index * 70.0, 200.0, 60.0, index) for index in range(5)]
+    plotted = _data_series_axes(cards, 2.0)
+    assert all("y" not in plotted.get(card.ref.shape_id, frozenset()) for card in cards)
+
+
+def test_a_group_holding_both_a_column_and_a_scatter_is_partitioned() -> None:
+    """A football field: three method names down a left column, three bars
+    running to wherever their value ends, all the same height.
+
+    Filtering the group on "unaligned" would throw all six away on account of
+    the three; partitioning keeps the column reportable and the bars exempt.
+    """
+    from tieout.rules.layout import _data_series_axes
+
+    column = [_at(39.6, 154.8 + index * 67.68, 198.0, 37.44, index) for index in range(3)]
+    bars = [
+        _at(678.56, 154.80, 113.52, 37.44, 10),
+        _at(719.84, 222.48, 113.52, 37.44, 11),
+        _at(702.64, 290.16, 110.08, 37.44, 12),
+    ]
+    plotted = _data_series_axes([*column, *bars], 2.0)
+    assert all("x" not in plotted.get(entry.ref.shape_id, frozenset()) for entry in column)
+    assert all("x" in plotted.get(bar.ref.shape_id, frozenset()) for bar in bars)
+
+
+def test_two_scattered_shapes_are_not_a_series() -> None:
+    """Two shapes that align to nothing are two loose shapes."""
+    from tieout.rules.layout import _data_series_axes
+
+    pair = [_at(100.0, 100.0, 20.0, 20.0, 1), _at(240.0, 333.0, 20.0, 20.0, 2)]
+    assert _data_series_axes(pair, 2.0) == {}
+
+
+def test_a_row_of_equal_cards_is_not_a_data_series() -> None:
+    """The other half of the protection: equal cards across, not down.
+
+    Their lefts differ by construction, so the shared-position partition keeps
+    them all; what disqualifies them is that their widths do not vary and their
+    tops are shared. A bar chart varies in length; a row of cards does not.
+    """
+    from tieout.rules.layout import _data_series_axes
+
+    cards = [_at(36.0 + index * 300.0, 120.0, 280.0, 106.0, index) for index in range(3)]
+    plotted = _data_series_axes(cards, 2.0)
+    assert all("x" not in plotted.get(card.ref.shape_id, frozenset()) for card in cards)

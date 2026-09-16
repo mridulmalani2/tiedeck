@@ -332,3 +332,57 @@ def test_other_colour_transforms_still_apply():
     )
     resolver = _resolver()
     assert resolver.resolve_color(fill) != "#0F2A4A"
+
+
+# --------------------------------------------------------------------------------------
+# A series fill that every data point overrides draws nothing
+# --------------------------------------------------------------------------------------
+
+_CHART_XMLNS = (
+    'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+)
+
+
+def _series(points: int, overridden: list[int]) -> object:
+    from lxml import etree
+
+    slices = "".join(
+        f'<c:dPt><c:idx val="{index}"/>'
+        f'<c:spPr><a:solidFill><a:srgbClr val="0F2A4A"/></a:solidFill></c:spPr>'
+        f"</c:dPt>"
+        for index in overridden
+    )
+    return etree.fromstring(
+        f"<c:ser {_CHART_XMLNS}>"
+        f'<c:spPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></c:spPr>'
+        f"{slices}"
+        f'<c:val><c:numRef><c:numCache><c:ptCount val="{points}"/>'
+        f"</c:numCache></c:numRef></c:val>"
+        f"</c:ser>"
+    )
+
+
+def test_a_doughnut_whose_every_slice_is_recoloured_has_no_series_colour() -> None:
+    """The false positive this was written for.
+
+    A real deck's doughnut had three segments in navy, gold and pale blue --
+    every one on the palette -- above a series fill of PowerPoint's default
+    accent blue that nothing anywhere drew. BR-011 reported the accent blue.
+    """
+    from tieout.model.loader import _every_point_overrides
+
+    assert _every_point_overrides(_series(points=3, overridden=[0, 1, 2]))
+
+
+def test_a_partly_recoloured_series_still_draws_its_own_colour() -> None:
+    """Three of five slices recoloured leaves two drawn in the series fill."""
+    from tieout.model.loader import _every_point_overrides
+
+    assert not _every_point_overrides(_series(points=5, overridden=[0, 1, 2]))
+
+
+def test_a_series_with_no_point_overrides_draws_its_own_colour() -> None:
+    from tieout.model.loader import _every_point_overrides
+
+    assert not _every_point_overrides(_series(points=3, overridden=[]))

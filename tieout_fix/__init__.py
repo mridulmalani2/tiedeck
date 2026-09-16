@@ -139,8 +139,19 @@ def plan_fixes(result: AuditResult, profile: Profile) -> dict[str, Fix]:
 
     Grouped on the remedy, the same key the review note groups on, so the button
     sits beside the sentence describing what it will do.
+
+    Two rules can also arrive at the *same* correction. A blue used for a shape
+    fill and for a chart series is one colour in one package, reported by BR-004
+    and by BR-011 and repaired by one rewrite. Planned twice, the second
+    application finds the colour already gone and reports that it changed
+    nothing -- a failure notice for work that succeeded, which is worse than
+    either doing it twice or not offering it. Identical operations are therefore
+    collapsed onto the fix that claimed them first, carrying every slide with
+    them.
     """
     fixes: dict[str, Fix] = {}
+    #: (kind, payload) -> the key of the fix already performing that operation.
+    operations: dict[tuple[str, tuple[tuple[str, Any], ...]], str] = {}
     for finding in result.findings:
         builder = _BUILDERS.get(finding.rule_id)
         if builder is None:
@@ -150,6 +161,8 @@ def plan_fixes(result: AuditResult, profile: Profile) -> dict[str, Fix]:
             continue
         kind, payload, summary = built
         key = _action_key(finding)
+        operation = (kind, _operation_signature(payload))
+        key = operations.setdefault(operation, key)
         existing = fixes.get(key)
         slides = (finding.slide_index,)
         if existing is None:
@@ -171,6 +184,18 @@ def plan_fixes(result: AuditResult, profile: Profile) -> dict[str, Fix]:
                 payload=existing.payload,
             )
     return fixes
+
+
+def _operation_signature(payload: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    """A hashable reading of a payload, for recognising the same edit twice.
+
+    Values that cannot be hashed are rendered, because the signature only has to
+    distinguish operations rather than reconstruct them.
+    """
+    return tuple(
+        (name, value if isinstance(value, str | int | float | bool | None) else repr(value))
+        for name, value in sorted(payload.items())
+    )
 
 
 def action_key(

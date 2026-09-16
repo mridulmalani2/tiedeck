@@ -27,6 +27,7 @@ from tieout.learn import learn_from_decks
 from tieout.model.loader import load_deck
 from tieout.model.package import load_package
 from tieout.model.units import EMU_PER_POINT, pt_to_emu
+from tieout.profile.schema import Profile, SlideProfile
 from tieout.rules.base import clear_caches, run_rules
 from tieout_fix import apply_fix, move_fix, plan_fixes
 
@@ -694,3 +695,52 @@ def test_two_findings_sharing_an_identity_are_counted_twice():
     change = delta(twice, [twice[0]])
     assert (change.fixed, change.remaining, change.new) == (1, 1, 0)
     assert change.fixed + change.remaining == 2
+
+
+# --------------------------------------------------------------------------------------
+# One edit, offered once
+# --------------------------------------------------------------------------------------
+
+
+def test_two_rules_reaching_the_same_edit_are_planned_once() -> None:
+    """A colour used by a shape and by a chart series is one rewrite.
+
+    BR-004 and BR-011 both report it and both propose the identical recolour.
+    Planned twice, the second application finds the colour already gone and
+    reports that it changed nothing -- a failure notice for work that
+    succeeded. On a real deck that is exactly what it did.
+    """
+    from tieout.rules.base import AuditResult, Finding
+    from tieout_fix import plan_fixes
+
+    def _finding(rule_id: str, slide: int, message: str) -> Finding:
+        return Finding(
+            rule_id=rule_id,
+            category="brand",
+            severity="major",
+            confidence="high",
+            where=slide,
+            message=message,
+            measured="#5C7EA3, Delta-E 15.6 from #6B7280",
+            expected="a palette colour within Delta-E 2",
+            remedy="Recolour #5C7EA3 to the palette's #6B7280",
+        )
+
+    result = AuditResult(
+        deck_path="x.pptx", client="c", profile_version=1, generated_at=""
+    )
+    result.findings = [
+        _finding("BR-004", 17, "#5C7EA3 is off the palette, used by 1 shape (fill)"),
+        _finding("BR-011", 13, "#5C7EA3 is off the palette, used by 1 series"),
+    ]
+
+    profile = Profile(
+        client="c", slide=SlideProfile(width_pt=960.0, height_pt=540.0)
+    )
+    profile.brand.palette_hex = ["#6B7280", "#0F2A4A"]
+    profile.brand.palette_tolerance_delta_e = 2.0
+
+    fixes = plan_fixes(result, profile)
+    recolours = [fix for fix in fixes.values() if fix.kind == "colour"]
+    assert len(recolours) == 1, [fix.summary for fix in recolours]
+    assert set(recolours[0].slides) == {13, 17}
