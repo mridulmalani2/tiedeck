@@ -1,0 +1,120 @@
+"""``tieout-ui`` — serve the local page.
+
+Loopback only, and enforced rather than defaulted: a non-loopback ``--host`` is
+refused outright. The server holds a live deck and, with content review on,
+accepts an API key, so "we default to localhost" is not a strong enough promise.
+Anyone who genuinely needs this reachable from elsewhere should put it behind
+something that can authenticate, not widen this.
+"""
+
+from __future__ import annotations
+
+import socket
+from typing import Annotated
+
+import typer
+from rich.console import Console
+
+from tieout.cli import EXIT_ERROR
+
+app = typer.Typer(add_completion=False, help="Serve the TieOut page on this machine only.")
+_out = Console()
+_err = Console(stderr=True)
+
+
+@app.command()
+def serve(
+    host: Annotated[
+        str, typer.Option("--host", help="Bind address. Loopback addresses only.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8765,
+    open_browser: Annotated[
+        bool, typer.Option("--open/--no-open", help="Open a browser on start.")
+    ] = True,
+) -> None:
+    """Start the local UI."""
+    try:
+        from tieout_ui.server import create_app, is_loopback
+        from tieout_ui.session import SessionStore
+    except ImportError as exc:
+        # The extra is what installs the web framework. Someone who pip
+        # installed the core and then ran this deserves the one line that fixes
+        # it, not a traceback through fastapi's import list.
+        # The brackets in the package spec are escaped: rich reads "[ui]" as a
+        # markup tag and silently drops it, which turns the one line that fixes
+        # the problem into "pip install 'tieout'".
+        _err.print(
+            f"[bold red]error[/bold red] the local UI needs its extra: {exc.name} is "
+            "missing.\n         "
+            "Install it with [bold]pip install 'tieout\\[ui]'[/bold]. "
+            "The tieout and tieout-review commands are unaffected."
+        )
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    if not is_loopback(host):
+        _err.print(
+            f"[bold red]error[/bold red] {host!r} is not a loopback address. This server "
+            "has no authentication beyond a session token and holds live deck material; "
+            "it will only bind an address reachable from this machine."
+        )
+        raise typer.Exit(EXIT_ERROR)
+
+    if _in_use(host, port):
+        _err.print(
+            f"[bold red]error[/bold red] {host}:{port} is already in use. "
+            "Pass --port to choose another."
+        )
+        raise typer.Exit(EXIT_ERROR)
+
+    store = SessionStore()
+    application = create_app(store)
+    url = f"http://{host}:{port}/"
+
+    _out.print()
+    _out.print("[bold]TieOut[/bold] is serving on this machine only.")
+    _out.print(f"  {url}")
+    _out.print(
+        "[dim]Open that in a browser — typing the address is fine, the page "
+        "collects its own session token. Uploaded decks live in a temporary "
+        "directory and are deleted when this stops. Ctrl-C to stop.[/dim]"
+    )
+    _out.print()
+
+    if open_browser:
+        _launch(url, store.token)
+
+    import uvicorn
+
+    try:
+        uvicorn.run(application, host=host, port=port, log_level="warning")
+    finally:
+        store.close()
+
+
+def _in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
+        probe.settimeout(0.4)
+        return probe.connect_ex((host, port)) == 0
+
+
+def _launch(url: str, token: str) -> None:  # pragma: no cover - opens a browser
+    """Open the page, passing the token in the query string.
+
+    Only the launcher does this, and only because a browser opened from here
+    cannot be handed a header. The page immediately rewrites its own address so
+    the token does not stay in history or in anything the user copies. Typing
+    the bare address works too: the page itself is not token-gated, and serves
+    the token inside the document.
+    """
+    import threading
+    import webbrowser
+
+    threading.Timer(0.6, lambda: webbrowser.open(f"{url}?t={token}")).start()
+
+
+def main() -> None:  # pragma: no cover - console entry point
+    app()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

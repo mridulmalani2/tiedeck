@@ -1,0 +1,2068 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TieOut</title>
+<link rel="icon" href="data:,">
+<!--
+  One file, no build step, no dependencies. Every byte the browser loads comes
+  from this server: the Content-Security-Policy forbids every external origin,
+  the same promise the HTML report makes and for the same reason. A deck open in
+  this page is live client material.
+
+  The chrome deliberately borrows PowerPoint's: a ribbon of tabs, a slide rail
+  on the left, the slide on a neutral canvas, and a task pane on the right. That
+  is not decoration. The people using this spend their day in PowerPoint, and
+  findings about a deck are easiest to act on in the layout they already read
+  decks in — which is also why the findings are a review note in the task pane
+  rather than a wall of cards.
+-->
+<style>
+  /* Office's own neutral ramp and PowerPoint's accent, so the window reads as
+     part of the same toolchain rather than as a web app about PowerPoint. */
+  :root {
+    --accent: #b7472a; --accent-dark: #8c3520; --accent-wash: #fdf5f3;
+    --ink: #201f1e; --ink-2: #484644; --ink-3: #797775;
+    --chrome: #f3f2f1; --chrome-2: #edebe9; --line: #e1dfdd; --line-2: #d2d0ce;
+    --surface: #ffffff; --canvas: #a19f9d;
+    --blocker: #a4262c; --major: #c07206; --minor: #486991; --info: #797775;
+    --semantic: #6b2d90; --ok: #107c10;
+    --rail: 214px; --pane: 384px;
+    --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  /* A ribbon group sets display:flex, which beats the browser's own rule for
+     [hidden] — so the API key field showed with content review switched off,
+     which is exactly the wrong affordance. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font: 14px/1.45 var(--font); color: var(--ink);
+    background: var(--chrome); display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- title bar ---- */
+  .titlebar {
+    background: var(--accent); color: #fff; height: 46px; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 14px; padding: 0 16px;
+  }
+  .titlebar .app { font-weight: 600; font-size: 14.5px; letter-spacing: .01em; }
+  .titlebar .doc {
+    font-size: 13px; opacity: .92; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .titlebar .spacer { flex: 1 1 auto; }
+  .titlebar .badge {
+    font-size: 11.5px; background: rgba(255,255,255,.16); padding: 3px 9px;
+    border-radius: 3px; white-space: nowrap;
+  }
+
+  /* ---- ribbon ---- */
+  .tabs {
+    background: var(--accent); display: flex; gap: 2px; padding: 0 12px;
+    flex: 0 0 auto;
+  }
+  .tabs button {
+    background: none; border: 0; color: #fff; font: inherit; font-size: 13px;
+    padding: 7px 16px; cursor: pointer; border-radius: 3px 3px 0 0; opacity: .85;
+  }
+  .tabs button:hover:not(:disabled) { background: rgba(255,255,255,.14); opacity: 1; }
+  .tabs button[aria-selected="true"] {
+    background: var(--chrome); color: var(--ink); opacity: 1; font-weight: 600;
+  }
+  .tabs button:disabled { opacity: .45; cursor: default; }
+
+  .ribbon {
+    background: var(--chrome); border-bottom: 1px solid var(--line);
+    padding: 10px 14px; flex: 0 0 auto; display: flex; gap: 0;
+    align-items: stretch; overflow-x: auto; min-height: 92px;
+  }
+  .ribbon > .panel { display: none; gap: 0; align-items: stretch; }
+  .ribbon > .panel[data-active] { display: flex; }
+  .grp {
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 0 14px; border-right: 1px solid var(--line-2); min-width: 0;
+  }
+  .grp:last-child { border-right: 0; }
+  .grp > .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .grp > .name {
+    font-size: 11px; color: var(--ink-3); text-align: center; padding-top: 6px;
+    white-space: nowrap;
+  }
+
+  button.big, button.small {
+    font: inherit; cursor: pointer; border-radius: 3px; border: 1px solid transparent;
+    background: none; color: var(--ink);
+  }
+  button.big {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px 12px; font-size: 12px; min-width: 66px;
+  }
+  button.big .ico { font-size: 20px; line-height: 1; }
+  button.small { padding: 5px 11px; font-size: 13px; border-color: var(--line-2); background: var(--surface); }
+  button.big:hover:not(:disabled), button.small:hover:not(:disabled) {
+    background: var(--chrome-2); border-color: var(--line-2);
+  }
+  button.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+  button:disabled { opacity: .4; cursor: default; }
+
+  input[type=text], input[type=password], select, textarea {
+    font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line-2);
+    border-radius: 2px; background: var(--surface); color: var(--ink); min-width: 150px;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { min-height: 46px; resize: vertical; width: 260px; }
+  label.inline { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+  label.stack { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ink-3); }
+
+  /* ---- body: rail | canvas | pane ---- */
+  .body { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  .rail {
+    flex: 0 0 var(--rail); background: var(--surface);
+    border-right: 1px solid var(--line); overflow-y: auto; padding: 10px 8px;
+  }
+  .rail:empty { display: none; }
+  .thumb { display: flex; gap: 7px; margin-bottom: 8px; cursor: pointer; }
+  .thumb .n { font-size: 11px; color: var(--ink-3); width: 17px; text-align: right; padding-top: 2px; flex: 0 0 auto; }
+  .thumb .box {
+    flex: 1 1 auto; aspect-ratio: 16/9; background: var(--surface);
+    border: 1px solid var(--line-2); position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .thumb .box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb .box .stub {
+    font-size: 9.5px; color: var(--ink-3); padding: 5px; text-align: center;
+    line-height: 1.25; max-height: 100%; overflow: hidden;
+  }
+  .thumb[aria-current="true"] .box { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-wash); }
+  .thumb[aria-current="true"] .n { color: var(--accent); font-weight: 700; }
+  .thumb .tally {
+    position: absolute; top: 3px; right: 3px; font-size: 10px; font-weight: 700;
+    color: #fff; border-radius: 9px; min-width: 17px; height: 17px; padding: 0 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .b-blocker { background: var(--blocker); } .b-major { background: var(--major); }
+  .b-minor { background: var(--minor); } .b-info { background: var(--info); }
+  .b-ok { background: var(--ok); }
+
+  .canvas {
+    flex: 1 1 auto; background: var(--canvas); overflow: auto; padding: 24px;
+    display: flex; align-items: flex-start; justify-content: center; min-width: 0;
+  }
+  .slide {
+    width: 100%; max-width: 860px; aspect-ratio: 16/9; background: var(--surface);
+    box-shadow: 0 2px 10px rgba(0,0,0,.28); display: flex; align-items: center;
+    justify-content: center; position: relative;
+  }
+  .slide img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .slide .placeholder { text-align: center; color: var(--ink-3); padding: 34px; max-width: 560px; }
+  .slide .placeholder h2 { font-size: 19px; color: var(--ink); margin: 0 0 8px; font-weight: 600; }
+  .slide .placeholder p { font-size: 12.5px; margin: 0; }
+
+  .pane {
+    flex: 0 0 var(--pane); background: var(--surface); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .pane > header {
+    padding: 11px 16px 9px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .pane > header h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  .pane > header .sub { font-size: 11.5px; color: var(--ink-3); }
+  .pane > .scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 0 26px; }
+
+  /* ---- the review note ---- */
+  .note-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  .note-head .line { font-size: 12px; color: var(--ink-2); }
+  .note-head .line + .line { margin-top: 2px; }
+  .note-head b { color: var(--ink); }
+  .tallies { display: flex; gap: 12px; margin-top: 9px; font-size: 11.5px; }
+  .tallies span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); }
+  .tallies i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .slide-head {
+    padding: 13px 16px 5px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-top: 1px solid var(--line); margin-top: 2px;
+  }
+  .slide-head:first-child { border-top: 0; }
+  .slide-head .title { display: block; text-transform: none; letter-spacing: 0;
+    font-weight: 400; font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+
+  /* A finding reads as a margin note: a rule of colour, the point in prose,
+     then the measurement subordinated beneath it. No boxes. */
+  .item {
+    display: grid; grid-template-columns: 3px 1fr; gap: 0 11px;
+    padding: 9px 16px 10px; cursor: default;
+  }
+  .item:hover { background: #faf9f8; }
+  .item .bar { border-radius: 2px; }
+  .item .n { font: 600 11px var(--mono); color: var(--ink-3); }
+  .item .say { font-size: 13.5px; margin: 1px 0 0; }
+  .item .ev {
+    font: 11.5px var(--mono); color: var(--ink-2); margin-top: 4px;
+    word-break: break-word;
+  }
+  .item .ev .arrow { color: var(--ink-3); }
+  .item .why { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+  .item .meta { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 1px; }
+  .item .tag {
+    font: 600 10px/1 var(--font); letter-spacing: .05em; text-transform: uppercase;
+    padding: 3px 5px; border-radius: 2px; color: #fff;
+  }
+  .item .shape { font-size: 11.5px; color: var(--ink-3); }
+
+  .empty { padding: 26px 16px; color: var(--ink-3); font-size: 13px; text-align: center; }
+
+  /* The verdict. The counts were always there; what was missing was the answer
+     to the question people actually open this with. */
+  .verdict { padding: 15px 16px 14px; border-bottom: 1px solid var(--line); }
+  .verdict .call { font-size: 17px; font-weight: 650; letter-spacing: -.01em; display: flex;
+    align-items: center; gap: 8px; }
+  .verdict .call i { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .verdict.v-block .call { color: #a4262c; } .verdict.v-block .call i { background: #a4262c; }
+  .verdict.v-fix   .call { color: #8a5700; } .verdict.v-fix   .call i { background: #c19c00; }
+  .verdict.v-polish .call, .verdict.v-clear .call { color: #0b6a0b; }
+  .verdict.v-polish .call i, .verdict.v-clear .call i { background: #0b6a0b; }
+  .verdict .detail { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
+  .verdict .counts { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-size: 11.5px; }
+  .verdict .counts span { display: flex; align-items: center; gap: 5px; color: var(--ink-2); white-space: nowrap; }
+  .verdict .counts b { font-size: 13px; color: var(--ink); }
+
+  /* By fix / by slide. Two ways into the same findings: one to plan the work,
+     one to do it with the deck open. */
+  .modes { display: flex; gap: 0; padding: 0 16px; border-bottom: 1px solid var(--line);
+    background: var(--chrome); }
+  .modes button {
+    font: inherit; font-size: 12px; padding: 7px 12px; border: 0; background: none;
+    color: var(--ink-2); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .modes button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .modes button:hover:not([aria-pressed="true"]) { color: var(--ink); }
+
+  .action { display: flex; gap: 11px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .action .bar { flex: 0 0 3px; border-radius: 2px; }
+  .action:hover { background: #faf9f8; }
+  .action .col { min-width: 0; flex: 1 1 auto; }
+  .action .k { font-size: 13px; font-weight: 600; line-height: 1.35; }
+  .action .scope { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+  .action .scope a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .action .scope a:hover { text-decoration: underline; }
+  /* The instruction, set apart from the diagnosis. It is the line someone acts
+     on, and under the measurement it read as more measurement. */
+  .action .do {
+    margin-top: 7px; padding: 7px 9px; background: var(--accent-wash);
+    border-left: 2px solid var(--accent); font-size: 12.5px; color: var(--ink);
+  }
+  .action .acts { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+  .action .acts button {
+    font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line-2);
+    border-radius: 2px; background: var(--surface); color: var(--ink); cursor: pointer;
+  }
+  .action .acts button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .action .acts button.go:hover:not(:disabled) { background: var(--accent-dark); }
+  .action .acts button:hover:not(:disabled):not(.go) { background: var(--chrome-2); }
+  .action .acts button:disabled { opacity: .4; cursor: default; }
+  .action .acts .manual { font-size: 11.5px; color: var(--ink-3); }
+  .action.turned-down { opacity: .5; }
+  .action.turned-down .do { background: var(--chrome); border-left-color: var(--line-2); }
+  .action .ev { font: 11.5px var(--mono); color: var(--ink-2); margin-top: 6px; }
+  .action .ev .arrow { color: var(--ink-3); }
+  .action .why { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+  .action details { margin-top: 6px; }
+  .action summary {
+    font-size: 11.5px; color: var(--ink-3); cursor: pointer; list-style: none; user-select: none;
+  }
+  .action summary::-webkit-details-marker { display: none; }
+  .action summary::before { content: "\25b8 "; }
+  .action details[open] summary::before { content: "\25be "; }
+  .action .inst {
+    font-size: 11.5px; color: var(--ink-2); padding: 4px 0 0 12px; cursor: pointer;
+    border-left: 1px solid var(--line); margin-left: 2px;
+  }
+  .action .inst:hover { color: var(--accent); }
+  .action .inst .at { font: 11px var(--mono); color: var(--ink-3); }
+  .action .inst .mv {
+    font: inherit; font-size: 11px; padding: 1px 7px; margin-left: 4px;
+    border: 1px solid var(--line-2); border-radius: 2px; background: var(--surface);
+    color: var(--ink-2); cursor: pointer; vertical-align: baseline;
+  }
+  .action .inst .mv:hover { background: var(--chrome-2); color: var(--accent); }
+
+  /* Where it is. Every finding has carried its box since the first version and
+     nothing ever drew it. */
+  .mark {
+    position: absolute; border: 2px solid var(--accent); background: rgba(183,71,42,.13);
+    box-shadow: 0 0 0 9999px rgba(32,31,30,.30); pointer-events: none; z-index: 2;
+  }
+  .mark span {
+    position: absolute; top: -19px; left: -2px; background: var(--accent); color: #fff;
+    font: 600 10px/1 var(--font); padding: 3px 5px; white-space: nowrap;
+  }
+
+  /* ---- the position editor ----
+     Geometry is the one thing TieOut will not decide, so this is the one place
+     the deck is edited by hand rather than by a rule. The chrome says so: the
+     outline becomes something you can pick up, the learned grid appears as
+     guides to aim at, and where the shape started stays on screen as a ghost so
+     the move is always readable as a change from something. */
+  /* The spotlight comes off while the shape is in hand. Dimming the slide is
+     right for "look here" and wrong for "put this somewhere": placing a shape is
+     a judgement about its neighbours, and they have to be legible to be judged
+     against. */
+  .mark.live {
+    pointer-events: auto; cursor: grab; touch-action: none; z-index: 5;
+    box-shadow: 0 1px 10px rgba(0,0,0,.30);
+    transition: none;
+  }
+  .mark.live:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .mark.live.dragging { cursor: grabbing; background: rgba(183,71,42,.2); }
+  /* Four corner marks, so the box reads as a handle rather than an annotation.
+     They do not resize: this editor moves, and a control that looked like a
+     resize grip would be promising something it does not do. */
+  .mark.live i {
+    position: absolute; width: 7px; height: 7px; background: #fff;
+    border: 1px solid var(--accent); border-radius: 50%;
+  }
+  .mark.live i.tl { left: -4px; top: -4px; }
+  .mark.live i.tr { right: -4px; top: -4px; }
+  .mark.live i.bl { left: -4px; bottom: -4px; }
+  .mark.live i.br { right: -4px; bottom: -4px; }
+
+  .ghost {
+    position: absolute; border: 1px dashed rgba(255,255,255,.85); z-index: 3;
+    pointer-events: none;
+  }
+
+  .guide {
+    position: absolute; background: #35c1f1; z-index: 4; pointer-events: none;
+    opacity: 0; transition: opacity .09s linear;
+  }
+  .guide.col { top: 0; bottom: 0; width: 1px; margin-left: -.5px; }
+  .guide.row { left: 0; right: 0; height: 1px; margin-top: -.5px; }
+  /* Every learned line, faint, while a shape is in hand: the point of snapping
+     to a derived grid is being able to see what you are aiming at. */
+  .guide.near { opacity: .3; }
+  .guide.on { opacity: 1; box-shadow: 0 0 0 1px rgba(53,193,241,.35); }
+
+  /* The readout. Floating over the canvas rather than docked in the ribbon,
+     because during a drag the eye is on the shape and a number four inches away
+     is a number nobody reads. */
+  .posbar {
+    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+    z-index: 6; display: flex; align-items: stretch; gap: 0;
+    background: rgba(32,31,30,.94); color: #fff; border-radius: 5px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.4); font-size: 12px; max-width: calc(100% - 28px);
+  }
+  .posbar > div {
+    display: flex; align-items: center; gap: 9px; padding: 8px 12px;
+    border-right: 1px solid rgba(255,255,255,.14);
+  }
+  .posbar > div:last-child { border-right: 0; }
+  .posbar .who { font-weight: 600; max-width: 190px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .posbar .who em { font-style: normal; opacity: .6; font-weight: 400; }
+  .posbar .read { font: 12px var(--mono); white-space: nowrap; }
+  .posbar .read b { font-weight: 600; }
+  .posbar .read .d { opacity: .62; }
+  .posbar .read .snapped { color: #7fd6f7; }
+  .posbar label { display: flex; align-items: center; gap: 6px; white-space: nowrap;
+    cursor: pointer; opacity: .9; }
+  .posbar button {
+    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.28); background: transparent; color: #fff;
+    cursor: pointer; white-space: nowrap;
+  }
+  .posbar button:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+  .posbar button.go {
+    background: var(--accent); border-color: var(--accent); font-weight: 600;
+  }
+  .posbar button.go:hover:not(:disabled) { background: var(--accent-dark); }
+  .posbar button:disabled { opacity: .4; cursor: default; }
+  /* Its own pill rather than text on the canvas: the canvas behind it is a
+     slide, which can be any colour, and white-on-white is a hint nobody reads. */
+  .posbar .hint {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: -25px;
+    background: rgba(32,31,30,.86); color: #fff; padding: 3px 9px; border-radius: 3px;
+    font-size: 11px; white-space: nowrap; pointer-events: none;
+  }
+  .empty strong { display: block; color: var(--ok); font-size: 14px; margin-bottom: 4px; }
+
+  /* ---- what the last correction changed ----
+     A new total is a number to compare from memory. These are the three counts
+     that answer "did that help": what went, what is left, and — the one that
+     cannot be inferred from a total going down — what the correction exposed. */
+  .delta { padding: 11px 16px; border-bottom: 1px solid var(--line); background: #fbfbfa; }
+  .delta.exposed { background: #fff8f0; border-left: 3px solid var(--major); }
+  .delta .what { font-size: 12px; color: var(--ink-2); margin-bottom: 7px; }
+  .delta .what b { color: var(--ink); font-weight: 600; }
+  .delta .counts { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .delta .c {
+    display: flex; align-items: baseline; gap: 5px; font-size: 11.5px;
+    padding: 3px 9px; border-radius: 3px; background: var(--chrome-2); color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .delta .c b { font-size: 13px; font-weight: 650; color: var(--ink); }
+  .delta .c.fixed { background: #e9f5e9; } .delta .c.fixed b { color: #0b6a0b; }
+  .delta .c.new { background: #fde7d9; } .delta .c.new b { color: #a4262c; }
+  .delta .arrived { margin-top: 9px; }
+  .delta .arrived .head {
+    font-size: 11.5px; font-weight: 600; color: #8a3b0b; margin-bottom: 4px;
+  }
+  .delta .arrived .one {
+    font-size: 11.5px; color: var(--ink-2); padding: 3px 0 3px 9px;
+    border-left: 2px solid var(--major); cursor: pointer; margin-bottom: 2px;
+  }
+  .delta .arrived .one:hover { color: var(--accent); }
+  .delta .arrived .one .at { font: 11px var(--mono); color: var(--ink-3); }
+  .delta .act { margin-top: 9px; display: flex; gap: 7px; align-items: center; }
+  .delta .act button {
+    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 2px;
+    border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+    cursor: pointer;
+  }
+  .delta .act button:hover { background: var(--chrome-2); }
+  .delta .act .note { font-size: 11px; color: var(--ink-3); }
+
+  /* A finding the last correction brought into existence. */
+  .item.arrived, .action .inst.arrived { background: #fff8f0; }
+  .tag.now {
+    background: var(--major) !important; color: #fff; font-weight: 700;
+  }
+
+  /* ---- pane content: forms, tables, prose ---- */
+  .block { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .block h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 4px; }
+  .block p { font-size: 12.5px; color: var(--ink-2); margin: 0 0 10px; }
+  .block p:last-child { margin-bottom: 0; }
+  .block label.stack { margin-bottom: 10px; width: 100%; }
+  .block label.stack input, .block label.stack textarea, .block label.stack select { width: 100%; }
+
+  .fact {
+    display: grid; grid-template-columns: 16px 1fr; gap: 0 9px; padding: 7px 16px;
+    align-items: start;
+  }
+  .fact input { margin: 2px 0 0; }
+  .fact .k { font-size: 12.5px; font-weight: 600; }
+  .fact .v { font-size: 12.5px; color: var(--ink-2); }
+  .fact .why { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .fact.off .k, .fact.off .v { opacity: .4; text-decoration: line-through; }
+  .fact .fixed { font-size: 10.5px; color: var(--ink-3); }
+
+  /* Retyping a derived value. The controls sit under the measured value rather
+     than replacing it, so the number a person is overriding stays on screen
+     while they override it. */
+  .fact .edit { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+  .fact .ctl { display: flex; flex-direction: column; gap: 2px; }
+  .fact .ctl .el {
+    font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em;
+  }
+  .fact .ctl input, .fact .ctl select {
+    font-size: 12px; padding: 3px 6px; min-width: 0; width: 88px;
+  }
+  .fact .ctl input[data-wide], .fact .ctl select { width: 176px; }
+  .fact .ctl input.changed, .fact .ctl select.changed {
+    border-color: var(--accent); background: var(--accent-wash);
+  }
+  .fact.off .edit { display: none; }
+  .hint { font-size: 11.5px; color: var(--ink-3); margin: 0; }
+
+  /* One message slot, rewritten in place. It used to be prepended into the
+     pane, so a second failed run stacked a second copy of the same error above
+     the first and the pane grew a history of its own mistakes. */
+  #flash:empty { display: none; }
+  #flash { flex: 0 0 auto; border-bottom: 1px solid var(--line); padding: 10px 16px; }
+  #flash .msg { margin: 0; }
+  .sw { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+  .sw figure { margin: 0; text-align: center; }
+  .sw i {
+    display: block; width: 50px; height: 24px; border: 1px solid var(--line-2);
+    border-radius: 2px;
+  }
+  .sw figcaption { font: 9.5px var(--mono); color: var(--ink-3); margin-top: 2px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--ink-3); padding: 0 8px 4px 0; font-weight: 600; }
+  td { padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
+  td.mono, .mono { font-family: var(--mono); }
+
+  pre.payload {
+    margin: 8px 0 0; max-height: 220px; overflow: auto; background: var(--chrome);
+    border: 1px solid var(--line); padding: 9px; font: 11px/1.5 var(--mono);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg { font-size: 12.5px; padding: 9px 11px; border-left: 3px solid; margin: 10px 0 0; }
+  .msg.warn { background: #fff9f0; border-color: var(--major); }
+  .msg.bad { background: #fdf3f4; border-color: var(--blocker); }
+  .msg.good { background: #f3f9f3; border-color: var(--ok); }
+  .drop {
+    border: 1px dashed var(--line-2); padding: 20px; text-align: center;
+    color: var(--ink-3); font-size: 12.5px; cursor: pointer; background: var(--chrome);
+  }
+  .drop.over { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+
+  /* ---- status bar ---- */
+  .status {
+    flex: 0 0 auto; background: var(--accent); color: #fff; font-size: 12px;
+    padding: 4px 16px; display: flex; gap: 18px; align-items: center;
+  }
+  .status .spacer { flex: 1 1 auto; }
+  .status a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+  .status .busy::after { content: "…"; }
+
+  @media (max-width: 1100px) { :root { --pane: 320px; --rail: 168px; } }
+  @media (max-width: 860px) {
+    .body { flex-direction: column; }
+    .rail { flex: 0 0 auto; display: flex; overflow-x: auto; }
+    .thumb { flex: 0 0 132px; flex-direction: column; }
+    .pane { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+
+<div class="titlebar">
+  <span class="app">TieOut</span>
+  <span class="doc" id="doc">No deck open</span>
+  <span class="spacer"></span>
+  <span class="badge" id="guarantee">Offline &middot; nothing leaves this machine</span>
+</div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="deck">Deck</button>
+  <button role="tab" aria-selected="false" data-tab="style" id="tab-style" disabled>House style</button>
+  <button role="tab" aria-selected="false" data-tab="review" id="tab-review" disabled>Review</button>
+</nav>
+
+<div class="ribbon">
+  <div class="panel" data-tab="deck" data-active>
+    <div class="grp">
+      <div class="row">
+        <button class="big" id="open"><span class="ico">&#128194;</span>Open deck</button>
+      </div>
+      <div class="name">File</div>
+    </div>
+    <div class="grp" id="grp-choose" hidden>
+      <div class="row">
+        <button class="big" id="pick-existing"><span class="ico">&#128193;</span>Use existing profile</button>
+        <button class="big" id="pick-new"><span class="ico">&#10010;</span>Create profile</button>
+      </div>
+      <div class="name">House style</div>
+    </div>
+    <div class="grp" id="grp-existing" hidden>
+      <div class="row">
+        <label class="stack">Saved profiles
+          <select id="client"></select>
+        </label>
+        <button class="small primary" id="useclient">Use this profile</button>
+        <button class="small" id="back-existing">Back</button>
+      </div>
+      <div class="name">Audit against a client already onboarded</div>
+    </div>
+    <div class="grp" id="grp-new" hidden>
+      <div class="row">
+        <label class="stack">Name this client
+          <input type="text" id="newclient" placeholder="e.g. acme" autocomplete="off">
+        </label>
+        <button class="small primary" id="learn">Create profile</button>
+        <button class="small" id="back-new">Back</button>
+      </div>
+      <div class="name">Learn the house style from this deck</div>
+    </div>
+  </div>
+
+  <div class="panel" data-tab="style">
+    <div class="grp">
+      <div class="row">
+        <button class="big" id="save" disabled><span class="ico">&#10003;</span>Save changes</button>
+        <button class="big" id="revert" disabled><span class="ico">&#8635;</span>Discard changes</button>
+      </div>
+      <div class="name" id="savestate">No unsaved changes</div>
+    </div>
+    <div class="grp">
+      <div class="row"><span class="mono" id="stylestat" style="font-size:12px;color:var(--ink-2)"></span></div>
+      <div class="name">Derived from the reference deck</div>
+    </div>
+  </div>
+
+  <div class="panel" data-tab="review">
+    <div class="grp">
+      <div class="row">
+        <button class="big primary" id="check"><span class="ico">&#9654;</span>Check deck</button>
+      </div>
+      <div class="name">Run</div>
+    </div>
+    <div class="grp">
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="semantic"> Content review</label>
+        <label class="inline"><input type="checkbox" id="notes"> Speaker notes</label>
+      </div>
+      <div class="name">Optional, off by default</div>
+    </div>
+    <div class="grp" id="keygrp" hidden>
+      <div class="row">
+        <label class="stack">API key
+          <input type="password" id="apikey" placeholder="sk-ant-…" autocomplete="off">
+        </label>
+        <label class="stack">Forbidden words
+          <textarea id="forbidden" placeholder="Meridian Capital, Project Atlas, Jane Okafor"></textarea>
+        </label>
+        <button class="small" id="preview">Show what would be sent</button>
+      </div>
+      <div class="name">Redaction</div>
+    </div>
+    <div class="grp">
+      <div class="row">
+        <button class="big" id="export" disabled><span class="ico">&#11015;</span>Export deck</button>
+        <button class="big" id="undo" disabled><span class="ico">&#8630;</span>Undo</button>
+      </div>
+      <div class="name" id="editstate">No corrections made</div>
+    </div>
+    <div class="grp">
+      <div class="row">
+        <button class="small" id="copynote">Copy note</button>
+        <button class="small" id="openreport" disabled>HTML report</button>
+      </div>
+      <div class="name">Share</div>
+    </div>
+  </div>
+</div>
+
+<div class="body">
+  <div class="rail" id="rail"></div>
+  <div class="canvas">
+    <div class="slide" id="slide">
+      <div class="placeholder">
+        <h2>Open a deck to begin</h2>
+        <p>The file is copied into a temporary directory on this machine and deleted
+           when the server stops. Nothing is uploaded anywhere.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="pane">
+    <header><h2 id="panetitle">Review note</h2><span class="sub" id="panesub"></span></header>
+    <div id="flash"></div>
+    <div class="scroll" id="pane"></div>
+  </aside>
+</div>
+
+<div class="status">
+  <span id="pos">No deck</span>
+  <span id="tally"></span>
+  <span class="spacer"></span>
+  <span id="busy"></span>
+  <span id="thumbstate"></span>
+</div>
+
+<input type="file" id="file" accept=".pptx,.potx,.ppsx" hidden>
+
+<script>
+// The token is substituted into this document by the server rather than read
+// from the URL, so it is never in a link. The launcher opens the page with a
+// ?t= query so the browser can carry it in; drop that immediately, or the token
+// stays in the browser's history and in anything the user copies.
+if (location.search) history.replaceState(null, "", location.pathname);
+
+const TOKEN = "__TIEOUT_TOKEN__";
+const S = {
+  deck: null, client: null, profile: null, audit: null, plan: null,
+  approved: false, slide: 1,
+  // The house style derived from the open deck on upload, before anyone has
+  // named it. Shown on the House style tab so that tab is never empty and never
+  // makes someone wait for work the server has already done.
+  draft: null,
+  // Which onboarding choice is open on the Deck tab: null, "existing" or "new".
+  // The two panels used to sit side by side with no indication that they were
+  // alternatives, which is the question people actually arrived with.
+  mode: null,
+  dirty: false,
+  checking: false,
+  // "fix" groups the findings by what to do about them; "slide" keeps the
+  // original per-slide order, which is how a deck actually gets corrected.
+  noteMode: "fix",
+  // The box currently outlined on the canvas, and what to call it.
+  mark: null,
+  // The shape currently in the person's hands, or null. Every coordinate on it
+  // is whole EMU: x0/y0 where the shape was when it was picked up, x/y where it
+  // is now, cx/cy its size. Integers all the way through, so a nudge out and a
+  // nudge back are addition and subtraction that cancel exactly — in points they
+  // would accumulate a fraction of an EMU per move and the shape would come back
+  // to somewhere very close to where it started instead of to where it started.
+  edit: null,
+  // Whether dragging pulls onto the learned grid. A preference, so it survives
+  // moving from one shape to the next.
+  snap: true,
+  // What the last correction or undo changed: {what, kind, delta}. Null until
+  // something has been done to the deck, because a first check changes nothing.
+  lastChange: null,
+};
+
+// OOXML's unit. Declared once here for the same reason model/units.py declares
+// it once there: a second copy of 12700 is a second place for it to be wrong.
+const EMU_PT = 12700;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const busy = (t) => { $("busy").textContent = t || ""; $("busy").className = t ? "busy" : ""; };
+
+async function api(path, { method = "GET", body = null, form = null } = {}) {
+  const headers = { "X-TieOut-Token": TOKEN };
+  if (body) headers["Content-Type"] = "application/json";
+  const r = await fetch(path, { method, headers, body: form || (body ? JSON.stringify(body) : null) });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = { detail: text }; }
+  if (!r.ok) throw new Error((data && data.detail) || r.statusText);
+  return data;
+}
+
+/* ---------- tabs ---------- */
+
+function tab(name) {
+  document.querySelectorAll('.tabs button').forEach((b) =>
+    b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll('.ribbon > .panel').forEach((p) => {
+    if (p.dataset.tab === name) p.setAttribute("data-active", ""); else p.removeAttribute("data-active");
+  });
+  if (name === "style") renderStyle();
+  if (name === "review") renderNote();
+  if (name === "deck" && !S.audit) renderIntro();
+}
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.onclick = () => { if (!b.disabled) tab(b.dataset.tab); };
+});
+
+/* ---------- 1. open a deck ---------- */
+
+$("open").onclick = () => $("file").click();
+$("file").onchange = (e) => { if (e.target.files.length) upload(e.target.files[0]); };
+const canvasEl = document.querySelector(".canvas");
+canvasEl.ondragover = (e) => { e.preventDefault(); };
+canvasEl.ondrop = (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) upload(e.dataTransfer.files[0]);
+};
+
+async function upload(file) {
+  busy(`Opening ${file.name}`);
+  const form = new FormData();
+  form.append("file", file);
+  try { S.deck = await api("/api/decks", { method: "POST", form }); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy("");
+  // A new deck invalidates everything measured about the last one. Leaving the
+  // tally up made the status bar read "16 blocker" under a deck that had not
+  // been checked.
+  S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
+  S.lastChange = null;
+  $("tally").textContent = "";
+  $("openreport").disabled = true;
+  $("undo").disabled = true;
+  $("editstate").textContent = "No corrections made";
+  $("tab-style").disabled = !S.client;
+  $("tab-review").disabled = !S.client;
+  $("doc").textContent = S.deck.filename;
+  $("pos").textContent = `Slide 1 of ${S.deck.slide_count}`;
+  clearFlash();
+  renderRail(); renderSlide(); renderIntro(); thumbState(); deckPanel();
+  loadClients();
+  pollThumbs();
+  pollDraft();
+}
+
+// The house style is derived the moment the deck lands, not when someone asks
+// for it, so the House style tab has an answer in it by the time they open it.
+async function pollDraft() {
+  const id = S.deck?.deck_id;
+  for (let i = 0; i < 90 && S.deck?.deck_id === id; i++) {
+    let d;
+    try { d = await api(`/api/decks/${id}/draft`); }
+    catch (e) { S.draft = { error: e.message }; break; }
+    if (d.ready) { S.draft = d; break; }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  if (S.deck?.deck_id !== id) return;
+  if (S.draft && !S.draft.error) $("tab-style").disabled = false;
+  if (current() === "style") renderStyle();
+}
+
+function current() {
+  const on = document.querySelector('.tabs button[aria-selected="true"]');
+  return on ? on.dataset.tab : "deck";
+}
+
+function thumbState() {
+  const t = S.deck?.thumbnails;
+  $("thumbstate").textContent = !t ? ""
+    : t.available ? `${t.count} slide images`
+    : t.rendering ? "rendering slide images…" : "no slide images";
+  $("thumbstate").title = t?.reason || "";
+}
+
+async function pollThumbs() {
+  for (let i = 0; i < 90 && S.deck; i++) {
+    if (S.deck.thumbnails.available || S.deck.thumbnails.reason) break;
+    await new Promise((r) => setTimeout(r, 2000));
+    try { S.deck = await api(`/api/decks/${S.deck.deck_id}`); } catch (_) { return; }
+    thumbState(); renderRail(); renderSlide();
+  }
+}
+
+async function loadClients() {
+  let d;
+  try { d = await api("/api/profiles"); } catch (e) { return; }
+  $("client").innerHTML = d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
+  $("useclient").disabled = !d.clients.length;
+}
+
+// The Deck tab shows one decision at a time: open a deck, then choose between
+// an existing house style and a new one, then fill in only that choice.
+function deckPanel() {
+  const open = !!S.deck;
+  $("grp-choose").hidden = !open || S.mode !== null;
+  $("grp-existing").hidden = S.mode !== "existing";
+  $("grp-new").hidden = S.mode !== "new";
+}
+
+function setMode(mode) { S.mode = mode; deckPanel(); }
+
+$("pick-existing").onclick = async () => {
+  await loadClients();
+  if (!$("client").options.length || !$("client").value)
+    return paneMessage("warn",
+      "No client has been onboarded yet. Use Create profile to learn one from an approved deck.");
+  clearFlash(); setMode("existing"); $("client").focus();
+};
+$("pick-new").onclick = () => { clearFlash(); setMode("new"); $("newclient").focus(); };
+$("back-existing").onclick = () => setMode(null);
+$("back-new").onclick = () => setMode(null);
+
+$("useclient").onclick = async () => {
+  const c = $("client").value;
+  if (!c) return;
+  busy(`Loading ${c}`);
+  try { S.profile = await api(`/api/profiles/${encodeURIComponent(c)}`); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); S.client = c; setMode(null); onProfile();
+};
+
+$("learn").onclick = async () => {
+  const c = $("newclient").value.trim();
+  if (!c) { paneMessage("warn", "Name the client first."); return $("newclient").focus(); }
+  if (!S.deck) return paneMessage("warn", "Open a deck first.");
+  busy(`Deriving the house style for ${c}`);
+  try {
+    S.profile = await api("/api/learn", { method: "POST", body: { deck_id: S.deck.deck_id, client: c } });
+  } catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); S.client = c; setMode(null);
+  await loadClients();
+  const where = String(S.profile.written_to || "").split("/").slice(-2).join("/");
+  onProfile(`Created ${c} from ${S.deck.filename}, written to ${where}. You can edit any value below.`);
+};
+
+function onProfile(note) {
+  $("tab-style").disabled = false;
+  $("tab-review").disabled = false;
+  $("guarantee").textContent = `Profile: ${S.client}`;
+  setDirty(false);
+  tab("style");
+  if (note) paneMessage("good", note); else clearFlash();
+}
+
+/* ---------- 2. house style ---------- */
+
+function styleSource() { return S.profile || (S.draft && !S.draft.error ? S.draft : null); }
+
+function setDirty(on) {
+  S.dirty = on && !!S.client;
+  $("save").disabled = !S.dirty;
+  $("revert").disabled = !S.dirty;
+  if (!S.client) $("savestate").textContent = S.draft ? "Draft — not saved anywhere" : "No profile";
+  else $("savestate").textContent = S.dirty ? "Unsaved changes" : "No unsaved changes";
+}
+
+function renderStyle() {
+  const p = styleSource();
+  $("panetitle").textContent = "House style";
+  if (!p) {
+    $("panesub").textContent = "";
+    $("stylestat").textContent = "";
+    $("pane").innerHTML = `<div class="block"><p>${S.deck
+      ? (S.draft?.error
+          ? "The house style could not be derived from this deck: " + esc(S.draft.error)
+          : "Deriving the house style from this deck\u2026")
+      : "Open a deck, or choose a saved profile on the Deck tab."}</p></div>`;
+    return;
+  }
+  const draft = !S.client;
+  $("panesub").textContent = draft ? "draft \u00b7 unsaved" : `${p.client} \u00b7 v${p.version}`;
+  $("stylestat").textContent =
+    `${p.sources.join(", ")} \u00b7 ${Object.keys(p.archetypes).length} slide types`;
+
+  const outstanding = (p.questions || []).filter((q) => !q.answered);
+  const questions = outstanding.length ? `
+    <div class="block">
+      <h3>${outstanding.length} question${outstanding.length === 1 ? "" : "s"} the evidence did not settle</h3>
+      ${outstanding.map((q) => `
+        <label class="stack">${esc(q.question)}
+          <select data-question="${esc(q.id)}"${draft ? " disabled" : ""}>
+            ${(q.options.length ? q.options : [q.default]).map((o) =>
+              `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
+          </select>
+        </label>`).join("")}
+    </div>` : `
+    <div class="block"><h3>No questions</h3>
+      <p>Every rule was settled from the evidence in the reference deck.</p></div>`;
+
+  const groups = (p.groups || []).map((g) => `
+    <div class="slide-head">${esc(g.title)}</div>
+    ${g.facts.map((f) => fact(f, draft)).join("")}`).join("");
+
+  const unlearned = (p.not_learned || []).length ? `
+    <div class="slide-head">Deliberately not derived</div>
+    <div class="block"><p>${p.not_learned.map((n) =>
+      `<span class="mono">${esc(n.key)}</span> \u2014 ${esc(n.reason)}`).join("<br>")}</p></div>` : "";
+
+  const preamble = draft ? `
+    <div class="block">
+      <div class="msg warn"><b>This is a draft, derived from the open deck.</b>
+        Nothing has been written. Name it with <b>Create profile</b> on the Deck tab to
+        keep it and to edit any of these values.</div>
+      <p class="hint">Derive the house style from a deck the client has <i>already approved</i>.
+         Learning it from the deck you are about to check tells you nothing.</p>
+    </div>` : `
+    <div class="block">
+      <p>Every line below was measured from the reference deck, with the evidence
+         for it. Clear the checkbox on anything that is not really a house rule:
+         the rule that reads it stops running, and the profile records that you
+         decided so.</p>
+      <p>You can also retype a value. A value you set by hand is validated, marked
+         in the profile as yours rather than measured, and locked so a later
+         re-learn cannot overwrite it \u2014 but it is no longer evidence from the
+         deck, so a number the client's own approved material does not support
+         will report that material as wrong.</p>
+    </div>`;
+
+  $("pane").innerHTML = preamble + questions + groups + unlearned;
+
+  $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
+    b.onchange = () => { b.closest(".fact").classList.toggle("off", !b.checked); setDirty(true); };
+  });
+  $("pane").querySelectorAll("[data-edit]").forEach((el) => {
+    const mark = () => {
+      el.classList.toggle("changed", el.value !== el.dataset.original);
+      setDirty(true);
+    };
+    el.oninput = mark; el.onchange = mark;
+  });
+  $("pane").querySelectorAll("select[data-question]").forEach((el) => {
+    el.onchange = () => setDirty(true);
+  });
+  setDirty(false);
+}
+
+function fact(f, draft) {
+  const value = f.kind === "swatches"
+    ? `<div class="sw">${f.value.map((s) =>
+        `<figure><i style="background:${esc(s.hex)}"></i>
+         <figcaption>${esc(s.label)}</figcaption></figure>`).join("")}</div>`
+    : f.kind === "list" ? `<div class="v mono">${f.value.map(esc).join(", ") || "\u2014"}</div>`
+    : `<div class="v">${esc(f.value)}</div>`;
+  const box = f.droppable
+    ? `<input type="checkbox" checked data-path="${esc(f.path)}"${draft ? " disabled" : ""}>`
+    : `<span class="fixed" title="This field cannot be cleared: it has no meaningful empty value.">&middot;</span>`;
+  const edit = draft || !f.edit?.length ? ""
+    : `<div class="edit">${f.edit.map(control).join("")}</div>`;
+  return `<div class="fact">${box}<div>
+      <div class="k">${esc(f.label)}${f.confidence !== "high"
+        ? ` <span class="fixed">(${esc(f.confidence)} confidence)</span>` : ""}</div>
+      ${value}
+      ${edit}
+      ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+    </div></div>`;
+}
+
+// One control per editable member, prefilled with what is there now. The
+// original is kept on the element so that only fields a person actually changed
+// are sent, and only those are recorded as hand-set.
+function control(c) {
+  const label = c.label ? `<span class="el">${esc(c.label)}</span>` : "";
+  const common = `data-edit="${esc(c.path)}" data-original="${esc(c.value)}"`;
+  if (c.type === "choice") {
+    const opts = (c.optional ? [""] : []).concat(c.options);
+    return `<label class="ctl">${label}<select ${common}>${opts.map((o) =>
+      `<option value="${esc(o)}"${o === c.value ? " selected" : ""}>${esc(o || "\u2014")}</option>`
+    ).join("")}</select></label>`;
+  }
+  const wide = c.type === "text" || c.type === "list" || c.type === "numbers";
+  const hint = c.type === "list" ? "comma separated"
+    : c.type === "numbers" ? "numbers, comma separated" : "";
+  return `<label class="ctl">${label}<input
+    type="${c.type === "number" ? "number" : "text"}"${c.type === "number" ? ' step="any"' : ""}
+    ${wide ? "data-wide" : ""} ${common}
+    value="${esc(c.value)}" placeholder="${esc(hint)}"></label>`;
+}
+
+$("save").onclick = async () => {
+  if (!S.client) return paneMessage("warn",
+    "This is an unsaved draft. Use Create profile on the Deck tab to name it first.");
+
+  const answers = {};
+  $("pane").querySelectorAll("select[data-question]").forEach((el) => {
+    answers[el.dataset.question] = el.value;
+  });
+
+  const dropped = [];
+  $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
+    if (!b.checked) dropped.push(b.dataset.path);
+  });
+
+  // Only what actually changed, and nothing under a fact being dropped in the
+  // same save -- sending both would record a hand-set value on a field that is
+  // about to be cleared.
+  const edits = {};
+  $("pane").querySelectorAll("[data-edit]").forEach((el) => {
+    if (el.value === el.dataset.original) return;
+    if (el.closest(".fact")?.classList.contains("off")) return;
+    edits[el.dataset.edit] = el.value;
+  });
+
+  busy("Saving the profile");
+  $("save").disabled = true;
+  try {
+    S.profile = await api("/api/confirm", { method: "POST", body: {
+      client: S.client, answers, dropped, edits,
+    }});
+  } catch (e) { busy(""); setDirty(true); return paneMessage("bad", e.message); }
+  busy("");
+
+  const bits = [];
+  if (S.profile.edited?.length) bits.push(`${S.profile.edited.length} value(s) set by hand`);
+  if (S.profile.dropped?.length) bits.push(`${S.profile.dropped.length} field(s) cleared`);
+  if (S.profile.applied?.length) bits.push(`applied ${S.profile.applied.join(", ")}`);
+  if (S.profile.recorded_only?.length)
+    bits.push(`recorded and locked, but needing a re-learn to take effect: ${S.profile.recorded_only.join(", ")}`);
+
+  renderStyle();
+  setDirty(false);
+  $("savestate").textContent = `Saved ${new Date().toLocaleTimeString()}`;
+
+  const where = String(S.profile.written_to || "").split("/").slice(-2).join("/");
+  const rejected = S.profile.rejected || [];
+  if (rejected.length) {
+    paneMessage("warn", `Saved to ${where}, but ${rejected.length} change(s) were refused: `
+      + rejected.map((r) => `${r.path} — ${r.reason}`).join("; "));
+  } else {
+    paneMessage("good", `Saved to ${where}. ${bits.join("; ") || "Nothing had changed."}`);
+  }
+};
+
+$("revert").onclick = async () => {
+  if (!S.client) return;
+  busy("Reloading the saved profile");
+  try { S.profile = await api(`/api/profiles/${encodeURIComponent(S.client)}`); }
+  catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy("");
+  renderStyle();
+  paneMessage("good", "Reloaded from the saved profile. Unsaved changes were discarded.");
+};
+
+/* ---------- 3. review ---------- */
+
+$("semantic").onchange = () => {
+  $("keygrp").hidden = !$("semantic").checked;
+  S.approved = false;
+};
+
+$("preview").onclick = async () => {
+  busy("Redacting");
+  try {
+    S.plan = await api("/api/redact", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client || "",
+      forbidden: $("forbidden").value, include_notes: $("notes").checked,
+    }});
+  } catch (e) { busy(""); return paneMessage("bad", e.message); }
+  busy(""); renderPlan(S.plan);
+};
+
+function renderPlan(plan) {
+  $("panetitle").textContent = "What would be sent";
+  $("panesub").textContent = `${plan.characters.toLocaleString()} characters`;
+  const rows = plan.redactions.length ? `
+    <table><thead><tr><th>Placeholder</th><th>Uses</th><th>Original</th><th>From</th></tr></thead>
+    <tbody>${plan.redactions.map((r) => `<tr><td class="mono">${esc(r.placeholder)}</td>
+      <td>${r.occurrences}</td><td>${esc(r.original)}</td>
+      <td class="mono">${esc(r.source)}</td></tr>`).join("")}</tbody></table>`
+    : `<p>Nothing matched a term or a detector.</p>`;
+
+  const residuals = plan.residuals.length ? `
+    <div class="msg warn">
+      <b>${plan.residuals.length} item${plan.residuals.length === 1 ? "" : "s"} could not be cleared
+      confidently.</b> Each is a judgement only you can make. Add the ones that identify
+      someone to the forbidden words and preview again.
+      <table style="margin-top:8px"><thead><tr><th>Line</th><th>Text</th><th>Why</th></tr></thead>
+      <tbody>${plan.residuals.map((r) => `<tr><td>${r.first_line}</td>
+        <td class="mono">${esc(r.text)}</td><td>${esc(r.reason)}</td></tr>`).join("")}</tbody></table>
+      <label class="inline" style="margin-top:9px"><input type="checkbox" id="approve">
+        I have read these and am content to send them</label>
+    </div>`
+    : `<div class="msg good">Nothing outstanding — every identifier was redacted.</div>`;
+
+  $("pane").innerHTML = `
+    <div class="block"><h3>${plan.redactions.length} term(s) redacted</h3>${rows}${residuals}</div>
+    <div class="block"><h3>The payload, exactly as it would be sent</h3>
+      <pre class="payload">${esc(plan.text)}</pre></div>`;
+  const a = $("approve");
+  if (a) a.onchange = () => { S.approved = a.checked; };
+  S.approved = plan.is_clear;
+}
+
+$("check").onclick = async () => {
+  // A second click while the first run is in flight used to start a second
+  // audit and render both. The button is disabled below, but a disabled button
+  // is a suggestion during the await before it; the flag is the actual guard.
+  if (S.checking) return;
+  if (!S.client) return paneMessage("warn",
+    "Choose an existing profile or create one on the Deck tab first.");
+  const semantic = $("semantic").checked;
+  if (semantic && !$("apikey").value.trim())
+    return paneMessage("warn", "Content review needs an API key, or turn it off.");
+  S.checking = true;
+  clearFlash();
+  // Drop the previous run before starting this one, so nothing on screen is
+  // left describing a check that is no longer the current one.
+  S.audit = null; S.edit = null; S.lastChange = null;
+  $("tally").textContent = ""; renderRail(); renderNote();
+  busy(semantic ? "Auditing, then reviewing the content" : "Auditing");
+  $("check").disabled = true;
+  try {
+    S.audit = await api("/api/check", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client, semantic,
+      forbidden: $("forbidden").value, include_notes: $("notes").checked,
+      approved: S.approved, api_key: semantic ? $("apikey").value.trim() : null,
+    }});
+  } catch (e) {
+    S.checking = false; $("check").disabled = false; busy("");
+    renderNote();
+    return paneMessage("bad", e.message);
+  }
+  S.checking = false; $("check").disabled = false; busy("");
+  $("openreport").disabled = false;
+  tab("review"); renderRail(); renderNote(); editState();
+};
+
+/* ---------- the review note ---------- */
+
+function noteItems() {
+  if (!S.audit) return [];
+  const out = [];
+  let n = 0;
+  for (const slide of S.audit.slides) {
+    for (const f of slide.findings) out.push({ n: ++n, slide, f });
+  }
+  return out;
+}
+
+function renderNote() {
+  $("panetitle").textContent = "Review note";
+  if (!S.audit) {
+    $("panesub").textContent = "";
+    $("pane").innerHTML = `<div class="block">
+      <p>${S.client
+        ? `Run <b>Check deck</b> to audit this deck against <b>${esc(S.client)}</b>.`
+        : "Choose an existing profile or create one on the Deck tab, then run <b>Check deck</b>."}
+         Every finding states what it measured, what it expected, and the evidence
+         behind the expectation.</p></div>`;
+    return;
+  }
+  const a = S.audit, s = a.summary, v = a.verdict || { state: "clear", headline: "", detail: "" };
+  $("panesub").textContent = `${a.client} · ${a.slide_count} slides`;
+
+  const kinds = ["blocker", "major", "minor", "info"].filter((k) => s[k]);
+  $("tally").textContent = s.total
+    ? kinds.map((k) => `${s[k]} ${k}`).join("  \u00b7  ")
+    : "no findings";
+
+  const actions = a.actions || [];
+  const head = `
+    <div class="verdict v-${esc(v.state)}">
+      <div class="call"><i></i>${esc(v.headline)}</div>
+      <div class="detail">${esc(v.detail)}</div>
+      ${s.total ? `<div class="counts">
+        ${kinds.map((k) => `<span><i class="b-${k}"></i><b>${s[k]}</b> ${k}</span>`).join("")}
+        <span><b>${actions.length}</b> ${actions.length === 1 ? "thing" : "things"} to do</span>
+        ${a.fixable_count ? `<span><b>${a.fixable_count}</b> TieOut can fix</span>` : ""}
+      </div>` : ""}
+    </div>
+    <div class="note-head">
+      <div class="line"><b>${esc(a.client)}</b> — ${esc(fileName(a.deck))}</div>
+      <div class="line">${a.slide_count} slides checked against ${a.rules_run.length}
+        rule${a.rules_run.length === 1 ? "" : "s"}${a.suppressed ? `, ${a.suppressed} previously accepted` : ""}.</div>
+    </div>
+    ${deltaBlock()}
+    ${reviewBanner(a.review)}`;
+
+  if (!s.total) {
+    $("pane").innerHTML = head + `<div class="empty"><strong>Clean</strong>
+      Every rule that ran had nothing to report.</div>`;
+    return;
+  }
+
+  const modes = `
+    <div class="modes">
+      <button data-mode="fix" aria-pressed="${S.noteMode !== "slide"}">By fix (${actions.length})</button>
+      <button data-mode="slide" aria-pressed="${S.noteMode === "slide"}">By slide (${s.total})</button>
+    </div>`;
+
+  $("pane").innerHTML = head + modes +
+    (S.noteMode === "slide" ? bySlide() : byFix(actions));
+
+  $("pane").querySelectorAll(".modes button").forEach((b) => {
+    b.onclick = () => { S.noteMode = b.dataset.mode; renderNote(); };
+  });
+  wireNote();
+}
+
+/* ---------- what the last correction changed ----------
+
+   A correction that takes the count from 24 to 22 has not necessarily fixed
+   two things. It may have fixed three and exposed one — moving a shape onto
+   its grid line can put it over its neighbour, which is exactly how automatic
+   snapping damaged a real deck. A total going down hides that, and the person
+   who would have undone it never knows there was anything to undo.
+
+   So the three counts are shown separately, and the findings that arrived are
+   named and linked rather than counted. */
+
+function deltaBlock() {
+  // Only after something has been done to the deck. On a first check the
+  // "delta" is every finding merely being present, which is not a change.
+  if (!S.lastChange || !S.audit) return "";
+  const d = S.lastChange.delta, what = S.lastChange.what;
+  if (!d) return "";
+
+  // An undo restores the findings the correction had cleared, so its "new"
+  // count is those coming back rather than anything exposed. Calling that
+  // exposure would cry wolf on every undo, and the warning has to mean
+  // something the first time it is seen.
+  if (S.lastChange.kind === "undo") {
+    return `<div class="delta">
+      <div class="what">Undone: <b>${esc(what)}</b></div>
+      <div class="counts">
+        <span class="c"><b>${d.new}</b> back</span>
+        <span class="c"><b>${d.after}</b> now reported</span>
+        ${d.fixed ? `<span class="c fixed"><b>${d.fixed}</b> it had exposed, gone</span>` : ""}
+      </div></div>`;
+  }
+
+  const exposed = d.new > 0;
+  const arrived = !exposed ? "" : `
+    <div class="arrived">
+      <div class="head">${d.new === 1
+        ? "This correction exposed a finding that was not reported before:"
+        : `This correction exposed ${d.new} findings that were not reported before:`}</div>
+      ${d.arrived.map((f) => `<div class="one" data-goto="${f.slide}"
+          data-label="${esc(f.rule_id)}">
+          <span class="at">Slide ${f.slide} · ${esc(f.rule_id)} · ${esc(f.severity)}</span>
+          — ${esc(sentence(f.message))}</div>`).join("")}
+    </div>
+    <div class="act">
+      <button id="undodelta">Undo this correction</button>
+      <span class="note">Nothing else is changed by undoing it.</span>
+    </div>`;
+  return `<div class="delta${exposed ? " exposed" : ""}">
+    <div class="what"><b>${esc(what)}</b></div>
+    <div class="counts">
+      <span class="c fixed"><b>${d.fixed}</b> fixed</span>
+      <span class="c"><b>${d.remaining}</b> remain</span>
+      ${exposed ? `<span class="c new"><b>${d.new}</b> new</span>` : ""}
+    </div>
+    ${arrived}
+  </div>`;
+}
+
+// Grouped by what a person would actually do. One off-palette colour used on
+// four slides is one job, and reading it as four problems is how a reader
+// learns to skim the note.
+function byFix(actions) {
+  return actions.map((a, index) => {
+    const where = a.slides.map((n) =>
+      `<a data-goto="${n}">slide ${n}</a>`).join(", ");
+    const times = a.count === 1 ? "" : ` · ${a.count} places`;
+    const delta = a.measured && a.expected
+      ? `<div class="ev">${esc(a.measured)} <span class="arrow">&rarr;</span> ${esc(a.expected)}</div>`
+      : a.measured ? `<div class="ev">${esc(a.measured)}</div>`
+      : a.expected ? `<div class="ev">expected ${esc(a.expected)}</div>` : "";
+    const instances = a.count > 1 || a.instances[0].shape ? `
+      <details>
+        <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
+        ${a.instances.map((i, k) => `<div class="inst${i.arrived ? " arrived" : ""}" data-goto="${i.slide}"
+            data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
+            data-label="${esc(a.rule_id)}">
+            <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
+            — ${esc(sentence(i.message))}${
+              a.movable && i.move && !i.move.refused
+                ? ` <button class="mv" data-moveinst="${index}:${k}">Move</button>` : ""}
+          </div>`).join("")}
+      </details>` : "";
+    return `<div class="action${a.rejected ? " turned-down" : ""}">
+      <div class="bar b-${esc(a.severity)}"></div>
+      <div class="col">
+        <div class="meta">
+          <span class="n">${index + 1}. ${esc(a.rule_id)}</span>
+          <span class="tag b-${esc(a.severity)}">${esc(a.severity)}</span>
+          ${a.arrived ? `<span class="tag now" title="Not reported before the last correction">${
+            a.arrived === a.count ? "new" : `${a.arrived} new`}</span>` : ""}
+          ${a.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
+        </div>
+        <div class="k">${esc(a.title)}</div>
+        <div class="scope">${where}${times}</div>
+        ${a.remedy ? `<div class="do">${esc(a.remedy)}</div>` : ""}
+        ${actionButtons(a, index)}
+        ${delta}
+        ${a.why ? `<div class="why">${esc(a.why)}</div>` : ""}
+        ${instances}
+      </div></div>`;
+  }).join("");
+}
+
+// Fix where the change is a substitution with one correct outcome; say so, and
+// why, where it is not. A button that moved shapes *for* the reader would be the
+// useful-looking one and the one that breaks decks — so where the answer is a
+// position, the offer is the mouse rather than the correction.
+function actionButtons(a, index) {
+  if (a.rejected) {
+    return `<div class="acts">
+      <span class="manual">Set aside for this deck.</span>
+      <button data-unreject="${esc(a.key)}">Put it back</button></div>`;
+  }
+  // Everything can be set aside, whether or not TieOut can correct it: a
+  // finding someone has looked at and decided about should stop competing for
+  // attention with the ones they have not. Session-only, deliberately — see the
+  // note on Deck.rejected.
+  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>`;
+  if (a.fixable) {
+    return `<div class="acts">
+      <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
+  }
+  if (a.movable) {
+    return `<div class="acts">
+      <button class="go" data-move="${index}">Move it</button>${aside}
+      <span class="manual">${esc(whyManual(a))}</span></div>`;
+  }
+  return `<div class="acts">${aside}
+    <span class="manual">${esc(whyManual(a))}</span></div>`;
+}
+
+// Named per rule rather than as one sentence, because the reasons are not the
+// same and the difference is the whole basis for the refusal. Where the shape
+// can be picked up, the sentence says what the refusal actually is: TieOut will
+// not choose the position, which is not the same as nothing being possible.
+const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003",
+                  "LO-004","LO-005","LO-006","LO-007","LO-008"];
+function whyManual(a) {
+  if (a.movable)
+    return "Yours to place — TieOut will not choose where it goes.";
+  if (GEOMETRY.includes(a.rule_id))
+    return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
+  return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
+}
+
+// The original order, kept because it is how a deck actually gets corrected:
+// open slide 7, fix everything wrong with slide 7, move on.
+function bySlide() {
+  let html = "", current = null;
+  for (const { n, slide, f } of noteItems()) {
+    if (slide.index !== current) {
+      current = slide.index;
+      html += `<div class="slide-head" data-goto="${slide.index}">
+        Slide ${slide.index}${slide.hidden ? " · hidden" : ""}
+        <span class="title">${esc(slide.title || slide.archetype)}</span></div>`;
+    }
+    html += item(n, slide, f);
+  }
+  return html;
+}
+
+async function correct(path, body, working) {
+  if (S.checking) return;
+  // A correction — or an undo of one — can move the shape the editor is holding,
+  // so the editor's coordinates stop being true the moment either lands.
+  S.edit = null;
+  S.checking = true;
+  busy(working);
+  let next;
+  try { next = await api(path, { method: "POST", body }); }
+  catch (e) { S.checking = false; busy(""); return paneMessage("bad", e.message); }
+  S.checking = false; busy("");
+  S.audit = next;
+  if (next.fixed) S.lastChange = { what: next.fixed, kind: "fix", delta: next.delta };
+  else if (next.undone) S.lastChange = { what: next.undone, kind: "undo", delta: next.delta };
+  renderRail(); renderNote(); editState();
+  if (next.fixed) flashChange(next.fixed, next.delta);
+  else if (next.undone) paneMessage("good",
+    `Undone: ${next.undone}. ${next.summary.total} finding${
+      next.summary.total === 1 ? "" : "s"} reported.`);
+  else clearFlash();
+}
+
+// One line in the flash, saying what the correction cost as well as what it
+// achieved. A correction that exposed something is not good news reported in
+// the good-news colour.
+function flashChange(what, d) {
+  if (!d) return paneMessage("good", `${what}.`);
+  if (!d.new)
+    return paneMessage("good", `${what}. ${d.fixed} fixed, ${d.remaining} remain.`);
+  paneMessage("warn",
+    `${what}. ${d.fixed} fixed, ${d.remaining} remain, and ${d.new} `
+    + `${d.new === 1 ? "finding was" : "findings were"} exposed that had not been `
+    + `reported before. They are listed at the top of the note, and Undo is on the `
+    + `ribbon.`);
+}
+
+// The ribbon's account of what has been done to the deck — and what it cost.
+// This is the summary that goes out with the export, so a correction that
+// traded one finding for another has to be countable here too.
+function editState() {
+  const a = S.audit;
+  const applied = (a && a.applied) || [];
+  const log = (a && a.corrections) || [];
+  $("undo").disabled = !(a && a.can_undo);
+  $("export").disabled = !S.deck;
+  const exposed = log.reduce((n, c) => n + ((c.delta && c.delta.new) || 0), 0);
+  const fixed = log.reduce((n, c) => n + ((c.delta && c.delta.fixed) || 0), 0);
+  $("editstate").textContent = !applied.length
+    ? "No corrections made"
+    : `${applied.length} correction${applied.length === 1 ? "" : "s"}, `
+      + `${fixed} fixed${exposed ? `, ${exposed} exposed` : ""}`;
+}
+
+function wireNote() {
+  $("pane").querySelectorAll("[data-fix]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      correct("/api/fix",
+        { deck_id: S.deck.deck_id, client: S.client, key: el.dataset.fix },
+        "Correcting the deck");
+    };
+  });
+  $("pane").querySelectorAll("[data-reject],[data-unreject]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const key = el.dataset.reject || el.dataset.unreject;
+      correct("/api/reject",
+        { deck_id: S.deck.deck_id, client: S.client, key,
+          rejected: el.dataset.reject !== undefined },
+        "");
+    };
+  });
+  // Picking a shape up. The group's button takes the first shape it can move,
+  // which is the one a reader means by "this"; each instance carries its own so
+  // a finding on six shapes is six separate decisions rather than one.
+  const undoHere = $("undodelta");
+  if (undoHere) undoHere.onclick = () => {
+    correct("/api/undo", { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
+  };
+  $("pane").querySelectorAll("[data-move]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const action = (S.audit.actions || [])[Number(el.dataset.move)];
+      const instance = action && action.instances.find((i) => movableOf(i));
+      if (instance) beginMove(instance.slide, instance);
+    };
+  });
+  $("pane").querySelectorAll("[data-moveinst]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const [a, k] = el.dataset.moveinst.split(":").map(Number);
+      const instance = ((S.audit.actions || [])[a] || { instances: [] }).instances[k];
+      if (instance) beginMove(instance.slide, instance);
+    };
+  });
+  $("pane").querySelectorAll("[data-goto]").forEach((el) => {
+    el.style.cursor = "pointer";
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
+      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+    };
+  });
+  $("pane").querySelectorAll(".item").forEach((el) => {
+    el.onclick = () => {
+      const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
+      select(Number(el.dataset.slide), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+    };
+  });
+}
+
+function item(n, slide, f) {
+  const delta = f.measured || f.expected
+    ? `<div class="ev">${esc(f.measured || "")}${f.expected
+        ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
+  return `<div class="item${f.arrived ? " arrived" : ""}" data-slide="${slide.index}"
+    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}">
+    <div class="bar b-${f.severity}"></div>
+    <div>
+      <div class="meta">
+        <span class="n">${n}. ${esc(f.rule_id)}</span>
+        <span class="tag b-${f.severity}">${esc(f.severity)}</span>
+        ${f.arrived ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
+        ${f.category === "semantic" ? `<span class="tag" style="background:var(--semantic)">semantic</span>` : ""}
+        ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
+      </div>
+      <p class="say">${esc(sentence(f.message))}</p>
+      ${f.remedy ? `<div class="do">${esc(f.remedy)}</div>` : ""}
+      ${delta}
+      ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+    </div></div>`;
+}
+
+// Findings are written as fragments so they read in a table; in a note they
+// want to be sentences.
+function sentence(text) {
+  const t = String(text || "").trim();
+  if (!t) return t;
+  const first = t[0] === t[0].toLowerCase() && /[a-z]/.test(t[0])
+    ? t[0].toUpperCase() + t.slice(1) : t;
+  return /[.!?]$/.test(first) ? first : first + ".";
+}
+
+function fileName(path) { return String(path || "").split("/").pop(); }
+
+function reviewBanner(r) {
+  if (!r) return "";
+  if (r.held) return `<div class="block"><div class="msg bad"><b>Nothing was sent.</b>
+    ${esc(r.detail || "")}</div></div>`;
+  return `<div class="block"><div class="msg good">Content review: ${r.finding_count}
+    finding${r.finding_count === 1 ? "" : "s"} from <span class="mono">${esc(r.model || "")}</span>,
+    ${r.redactions.length} term(s) withheld, ${r.characters.toLocaleString()} characters sent.
+    ${r.dropped?.length ? `${r.dropped.length} answer(s) discarded as unreadable.` : ""}
+    Semantic findings never affect the exit code.</div></div>`;
+}
+
+$("copynote").onclick = async () => {
+  const text = plainNote();
+  try { await navigator.clipboard.writeText(text); busy("Note copied"); setTimeout(() => busy(""), 1600); }
+  catch (_) { paneMessage("warn", "The browser refused clipboard access. The HTML report is the other way out."); }
+};
+
+// What gets pasted into an email, so it carries the verdict and the fixes
+// rather than a transcript of the pane. Grouped the same way the note is: a
+// list of eight things to do is a message someone can act on; twenty-four
+// findings in slide order is a document they have to triage first.
+function plainNote() {
+  if (!S.audit) return "No check has been run.";
+  const a = S.audit, s = a.summary, v = a.verdict || {};
+  const lines = [
+    `TieOut review — ${a.client} — ${fileName(a.deck)}`,
+    v.headline || "",
+    `${a.slide_count} slides, ${a.rules_run.length} rules run`,
+    s.total
+      ? `${s.total} finding(s): ${["blocker", "major", "minor", "info"]
+          .filter((k) => s[k]).map((k) => `${s[k]} ${k}`).join(", ")}`
+      : "Nothing to address.",
+    "",
+  ];
+
+  // What was done to the deck, and what each one cost. This is the summary that
+  // travels with the exported file, so a correction that traded one finding for
+  // another has to be legible here and not only on screen.
+  const log = a.corrections || [];
+  if (log.length) {
+    lines.push(`Corrections applied to the exported deck (${log.length})`, "");
+    log.forEach((entry, index) => {
+      const d = entry.delta;
+      lines.push(`${index + 1}. ${entry.summary}`);
+      if (d) {
+        lines.push(`   ${d.fixed} fixed, ${d.remaining} remain`
+          + (d.new ? `, ${d.new} newly exposed` : ""));
+        d.arrived.forEach((f) =>
+          lines.push(`   exposed: [${f.severity}] ${f.rule_id} slide ${f.slide} — `
+            + sentence(f.message)));
+      }
+    });
+    lines.push("");
+  }
+
+  const actions = a.actions || [];
+  if (actions.length) {
+    lines.push(`${actions.length} thing(s) to do`, "");
+    actions.forEach((action, index) => {
+      const where = action.slides.length === 1
+        ? `slide ${action.slides[0]}`
+        : `slides ${action.slides.join(", ")}`;
+      lines.push(`${index + 1}. [${action.severity}] ${action.title} — ${where}`);
+      if (action.remedy) lines.push(`   Fix: ${action.remedy}`);
+      // Only where both halves exist does the arrow mean anything; a group whose
+      // instances disagree carries no measurement, and "   -> no speaker notes"
+      // is an arrow from nowhere.
+      if (action.measured && action.expected)
+        lines.push(`   ${action.measured} -> ${action.expected}`);
+      else if (action.measured) lines.push(`   ${action.measured}`);
+      else if (action.expected) lines.push(`   expected ${action.expected}`);
+      lines.push("");
+    });
+  }
+
+  lines.push("Slide by slide", "");
+  let current = null;
+  for (const { n, slide, f } of noteItems()) {
+    if (slide.index !== current) {
+      current = slide.index;
+      lines.push(`Slide ${slide.index} — ${slide.title || slide.archetype}`);
+    }
+    lines.push(`  ${n}. [${f.severity}] ${f.rule_id}  ${sentence(f.message)}`);
+    if (f.remedy) lines.push(`      Fix: ${f.remedy}`);
+    if (f.measured && f.expected) lines.push(`      ${f.measured} -> ${f.expected}`);
+    else if (f.measured) lines.push(`      ${f.measured}`);
+    else if (f.expected) lines.push(`      expected ${f.expected}`);
+  }
+  return lines.join("\n");
+}
+
+$("undo").onclick = () => correct("/api/undo",
+  { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
+
+$("export").onclick = () => {
+  window.open(
+    `/api/export/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`,
+    "_blank", "noopener");
+};
+
+$("openreport").onclick = () => {
+  window.open(`/api/report/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`, "_blank", "noopener");
+};
+
+/* ---------- slides ---------- */
+
+function renderRail() {
+  if (!S.deck) { $("rail").innerHTML = ""; return; }
+  const byIndex = {};
+  (S.audit?.slides || []).forEach((s) => { byIndex[s.index] = s; });
+  const thumbs = S.deck.thumbnails.available;
+  $("rail").innerHTML = S.deck.slides.map((s) => {
+    const a = byIndex[s.index];
+    const tally = !a ? "" : a.findings.length
+      ? `<span class="tally b-${a.worst}">${a.findings.length}</span>`
+      : `<span class="tally b-ok">&#10003;</span>`;
+    const inner = thumbs
+      ? `<img loading="lazy" alt="Slide ${s.index}"
+          src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}">`
+      : `<span class="stub">${esc(a?.title || s.archetype.replace(/_/g, " "))}</span>`;
+    return `<div class="thumb" data-slide="${s.index}" aria-current="${s.index === S.slide}">
+      <span class="n">${s.index}</span><span class="box">${inner}${tally}</span></div>`;
+  }).join("");
+  $("rail").querySelectorAll(".thumb").forEach((el) => {
+    el.onclick = () => select(Number(el.dataset.slide));
+  });
+}
+
+function renderSlide() {
+  if (!S.deck) return;
+  const thumbs = S.deck.thumbnails.available;
+  // From the deck rather than assumed: a 4:3 deck in a 16:9 frame would put
+  // every overlay in the wrong place, since the box is positioned as a share
+  // of the slide.
+  if (S.deck.width_pt && S.deck.height_pt)
+    $("slide").style.aspectRatio = `${S.deck.width_pt} / ${S.deck.height_pt}`;
+  $("slide").innerHTML = (thumbs
+    ? `<img alt="Slide ${S.slide}"
+        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${encodeURIComponent(TOKEN)}&v=${S.deck.thumbnails.version || 0}">`
+    : `<div class="placeholder"><h2>Slide ${S.slide}</h2>
+        <p>${esc(slideTitle(S.slide) || "")}</p>
+        <p style="margin-top:12px">${esc(S.deck.thumbnails.reason
+          || "Slide images are still rendering.")}</p></div>`) + markup();
+  wireEdit();
+}
+
+// The outline over the shape a finding is about. Positioned as a percentage of
+// the slide, so it holds at any rendered size and needs no measurement of the
+// image. Drawn over the slide card too, where there is no image: the box is
+// still where the shape is, and on a machine without LibreOffice it is the only
+// indication of where to look.
+function markup() {
+  const m = S.mark;
+  if (!m || !S.deck.width_pt || !S.deck.height_pt) return "";
+  const pc = (value, total) => `${(value / total) * 100}%`;
+  const e = S.edit;
+  // While a shape is being moved the same outline is the thing being moved: it
+  // is drawn from the editor's own coordinates rather than from the finding's
+  // box, and it is the only overlay on the page that takes a pointer.
+  const [left, top, width, height] = e
+    ? [e.x / EMU_PT, e.y / EMU_PT, e.cx / EMU_PT, e.cy / EMU_PT]
+    : m.bbox;
+  const box = `<div class="mark${e ? " live" : ""}"${e ? ' tabindex="0"' : ""} style="
+    left:${pc(left, S.deck.width_pt)}; top:${pc(top, S.deck.height_pt)};
+    width:${pc(width, S.deck.width_pt)}; height:${pc(height, S.deck.height_pt)}">
+    ${m.label ? `<span>${esc(m.label)}</span>` : ""}${
+      e ? `<i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>` : ""}</div>`;
+  return editLayer() + box;
+}
+
+/* ---------- the position editor ----------
+
+   TieOut will not choose where a shape belongs — snapping the six shapes LO-003
+   reported on a real deck to their nearest grid line drove one text box into its
+   neighbour and pulled an evenly spaced column out of true. Which alignment
+   matters is a judgement about what the slide is for, and that judgement is the
+   person's. What the tool can supply is precision: the learned grid to aim at,
+   a pointer, and arrow keys that move by exactly a point.
+
+   So every coordinate that leaves this block came from a mouse or a keypress.
+   Nothing here rounds toward a rule, and the server writes the number it is
+   given without consulting the grid at all. */
+
+function grid() {
+  const g = S.audit && S.audit.grid;
+  return g && (g.columns_pt.length || g.rows_pt.length) ? g : null;
+}
+
+// The move block the server put on a finding, when it names a shape this can
+// actually pick up. `refused` is set for a shape inside a group: its offset is
+// stored in the group's coordinate space, so a slide-space number written there
+// would move it somewhere nobody asked for.
+function movableOf(source) {
+  const m = source && source.move;
+  return m && !m.refused && m.x_emu !== undefined ? m : null;
+}
+
+function beginMove(slideIndex, source) {
+  const m = movableOf(source);
+  if (!m) return;
+  select(slideIndex, [m.left_pt, m.top_pt, m.width_pt, m.height_pt], m.shape);
+  S.edit = {
+    slide: slideIndex, shapeId: m.shape_id, name: m.shape,
+    x0: m.x_emu, y0: m.y_emu, x: m.x_emu, y: m.y_emu,
+    cx: m.cx_emu, cy: m.cy_emu,
+    rotation: m.rotation || 0,
+    lineX: null, lineY: null, busy: false,
+  };
+  renderSlide();
+  const box = $("slide").querySelector(".mark");
+  if (box) box.focus();
+}
+
+function endMove() {
+  if (!S.edit) return;
+  S.edit = null;
+  renderSlide();
+}
+
+// Snap one axis. `value` and `size` are EMU; `lines` are the learned grid in
+// points, exactly as the profile holds them. Both edges are candidates — a
+// shape can be aligned by its right edge as readily as its left — and the
+// nearer wins. Mirrors what LO-003 measures (left and right against columns,
+// top and bottom against rows), so a shape dragged onto a line clears the
+// finding that named it rather than landing merely near it.
+//
+// `tolerance` is the server's snap_pt, which is the near-miss window rather
+// than the grid's own tolerance — see _snap_reach. Every shape LO-003 reports
+// sits further from the line than grid.tolerance_pt, so a magnet that size
+// could not reach one of them.
+function snapAxis(value, size, lines, tolerance) {
+  let best = null;
+  for (const line of lines) {
+    const at = Math.round(line * EMU_PT);
+    for (const candidate of [at, at - size]) {
+      const off = Math.abs(candidate - value);
+      if (off <= tolerance * EMU_PT && (best === null || off < best.off))
+        best = { at: candidate, line, off };
+    }
+  }
+  return best;
+}
+
+// Where the shape would go for a raw pointer position, with the grid applied.
+// Arrow keys deliberately do not come through here: a nudge of one point that
+// a snap pulls straight back is a nudge that did nothing, and the keyboard is
+// the precision instrument of the two.
+function withSnap(x, y) {
+  const g = grid();
+  const e = S.edit;
+  e.lineX = e.lineY = null;
+  if (!g || !S.snap) { e.x = x; e.y = y; return; }
+  const cx = snapAxis(x, e.cx, g.columns_pt, g.snap_pt);
+  const cy = snapAxis(y, e.cy, g.rows_pt, g.snap_pt);
+  e.x = cx ? cx.at : x;
+  e.y = cy ? cy.at : y;
+  e.lineX = cx ? cx.line : null;
+  e.lineY = cy ? cy.line : null;
+}
+
+// The editor's furniture, drawn once per render: the ghost of where the shape
+// started, one guide per learned grid line, and the readout.
+function editLayer() {
+  const e = S.edit, g = grid();
+  if (!e) return "";
+  const pcx = (v) => `${(v / (S.deck.width_pt * EMU_PT)) * 100}%`;
+  const pcy = (v) => `${(v / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  const guides = !g ? "" :
+    g.columns_pt.map((c) => `<div class="guide col" data-col="${c}"
+        style="left:${(c / S.deck.width_pt) * 100}%"></div>`).join("") +
+    g.rows_pt.map((r) => `<div class="guide row" data-row="${r}"
+        style="top:${(r / S.deck.height_pt) * 100}%"></div>`).join("");
+  return guides + `
+    <div class="ghost" style="left:${pcx(e.x0)}; top:${pcy(e.y0)};
+      width:${pcx(e.cx)}; height:${pcy(e.cy)}"></div>` + posbar();
+}
+
+function posbar() {
+  const g = grid();
+  return `<div class="posbar" id="posbar">
+    <div><span class="who">${esc(S.edit.name)}<em> · slide ${S.edit.slide}</em></span></div>
+    <div><span class="read" id="posread"></span></div>
+    ${g ? `<div><label title="Within ${g.snap_pt}pt of a learned grid line, dragging pulls onto it — the same distance LO-003 calls a near miss. Arrow keys always move by exactly the amount shown.">
+      <input type="checkbox" id="snaptoggle" ${S.snap ? "checked" : ""}> Snap to grid</label></div>` : ""}
+    <div>
+      <button class="go" id="applymove">Apply move</button>
+      <button id="resetmove">Reset</button>
+      <button id="cancelmove">Done</button>
+    </div>
+    <span class="hint">Drag, or use the arrow keys — 1pt, or 10pt with Shift.
+      Esc closes without writing anything.</span>
+  </div>`;
+}
+
+// Style updates only, never innerHTML: a drag repaints on every pointer event,
+// and rebuilding the canvas would reload the slide image sixty times a second.
+function paintEdit() {
+  const e = S.edit;
+  if (!e) return;
+  const box = $("slide").querySelector(".mark");
+  if (box) {
+    box.style.left = `${(e.x / (S.deck.width_pt * EMU_PT)) * 100}%`;
+    box.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  }
+  $("slide").querySelectorAll(".guide").forEach((el) => {
+    const mine = el.dataset.col !== undefined
+      ? Number(el.dataset.col) === e.lineX
+      : Number(el.dataset.row) === e.lineY;
+    el.className = `guide ${el.dataset.col !== undefined ? "col" : "row"} `
+      + (mine ? "on" : "near");
+  });
+  const read = $("posread");
+  if (read) {
+    const dx = (e.x - e.x0) / EMU_PT, dy = (e.y - e.y0) / EMU_PT;
+    const moved = e.x !== e.x0 || e.y !== e.y0;
+    read.innerHTML =
+      `<b>X</b> ${(e.x / EMU_PT).toFixed(1)}<span class="${e.lineX !== null ? "snapped" : ""}">${
+        e.lineX !== null ? " │" : ""}</span>  `
+      + `<b>Y</b> ${(e.y / EMU_PT).toFixed(1)}<span class="${e.lineY !== null ? "snapped" : ""}">${
+        e.lineY !== null ? " ─" : ""}</span>`
+      + (moved ? `  <span class="d">(${dx >= 0 ? "+" : ""}${dx.toFixed(1)}, ${
+        dy >= 0 ? "+" : ""}${dy.toFixed(1)}pt)</span>` : `  <span class="d">(unmoved)</span>`);
+  }
+  const apply = $("applymove"), reset = $("resetmove");
+  const moved = e.x !== e.x0 || e.y !== e.y0;
+  if (apply) apply.disabled = !moved || e.busy;
+  if (reset) reset.disabled = !moved || e.busy;
+}
+
+function wireEdit() {
+  const e = S.edit;
+  if (!e) return;
+  const box = $("slide").querySelector(".mark");
+  if (!box) return;
+
+  let from = null;
+  box.onpointerdown = (event) => {
+    if (e.busy || event.button !== 0) return;
+    event.preventDefault();
+    box.setPointerCapture(event.pointerId);
+    box.classList.add("dragging");
+    from = { px: event.clientX, py: event.clientY, x: e.x, y: e.y };
+  };
+  box.onpointermove = (event) => {
+    if (!from) return;
+    // From the rendered width each time rather than once on pointerdown: the
+    // window can be resized mid-drag, and a stale scale silently moves the
+    // shape by the wrong amount.
+    const rect = $("slide").getBoundingClientRect();
+    const perPx = (S.deck.width_pt * EMU_PT) / rect.width;
+    withSnap(
+      Math.round(from.x + (event.clientX - from.px) * perPx),
+      Math.round(from.y + (event.clientY - from.py) * perPx),
+    );
+    paintEdit();
+  };
+  const release = (event) => {
+    if (!from) return;
+    from = null;
+    box.classList.remove("dragging");
+    try { box.releasePointerCapture(event.pointerId); } catch (_) { /* already gone */ }
+  };
+  box.onpointerup = release;
+  box.onpointercancel = release;
+
+  const toggle = $("snaptoggle");
+  if (toggle) toggle.onchange = () => {
+    S.snap = toggle.checked;
+    // Re-apply to where the shape is now, so switching snap on pulls it onto the
+    // line it is beside instead of waiting for the next drag.
+    withSnap(e.x, e.y);
+    paintEdit();
+  };
+  $("applymove").onclick = applyMove;
+  $("resetmove").onclick = () => {
+    e.x = e.x0; e.y = e.y0; e.lineX = e.lineY = null;
+    paintEdit();
+  };
+  $("cancelmove").onclick = endMove;
+  paintEdit();
+}
+
+// 1pt, or 10pt with Shift, and exactly that: no snap, no rounding. EMU_PT is an
+// integer, so the shape returns to the offset it started from however many times
+// it is nudged away from it and back.
+function nudge(dx, dy, big) {
+  const e = S.edit;
+  const step = EMU_PT * (big ? 10 : 1);
+  e.x += dx * step;
+  e.y += dy * step;
+  e.lineX = e.lineY = null;
+  paintEdit();
+}
+
+const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+
+document.addEventListener("keydown", (event) => {
+  if (!S.edit || S.edit.busy) return;
+  const on = document.activeElement;
+  if (on && /^(INPUT|TEXTAREA|SELECT)$/.test(on.tagName) && on.id !== "snaptoggle") return;
+  if (event.key === "Escape") { event.preventDefault(); return endMove(); }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (S.edit.x !== S.edit.x0 || S.edit.y !== S.edit.y0) applyMove();
+    return;
+  }
+  const arrow = ARROWS[event.key];
+  if (!arrow) return;
+  event.preventDefault();  // or the canvas scrolls out from under the shape
+  nudge(arrow[0], arrow[1], event.shiftKey);
+});
+
+async function applyMove() {
+  const e = S.edit;
+  if (!e || e.busy || (e.x === e.x0 && e.y === e.y0)) return;
+  e.busy = true; paintEdit();
+  busy("Moving the shape");
+  let next;
+  try {
+    next = await api("/api/move", { method: "POST", body: {
+      deck_id: S.deck.deck_id, client: S.client,
+      slide: e.slide, shape_id: e.shapeId, x_emu: e.x, y_emu: e.y,
+    } });
+  } catch (err) {
+    e.busy = false; busy(""); paintEdit();
+    return paneMessage("bad", err.message);
+  }
+  busy("");
+  S.audit = next;
+  S.lastChange = { what: next.moved, kind: "fix", delta: next.delta };
+  S.edit = null;
+  // The move changes what a slide looks like, so the images are being made
+  // again in the background. Everything else — the note, the counts, the mark —
+  // is already right.
+  refreshThumbs();
+  renderRail(); renderNote(); editState(); renderSlide();
+  flashChange(next.moved, next.delta);
+}
+
+// Poll until the re-render lands, then redraw. Separate from pollThumbs, which
+// waits for a deck's first images; this one waits for a newer set of them.
+async function refreshThumbs() {
+  if (!S.deck) return;
+  const was = S.deck.thumbnails.version;
+  for (let i = 0; i < 90 && S.deck; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let d;
+    try { d = await api(`/api/decks/${S.deck.deck_id}`); } catch (_) { return; }
+    S.deck = d;
+    thumbState();
+    if (d.thumbnails.version !== was || d.thumbnails.reason) {
+      renderRail(); renderSlide(); return;
+    }
+    if (!d.thumbnails.rendering) return;
+  }
+}
+
+function slideTitle(index) {
+  const a = (S.audit?.slides || []).find((s) => s.index === index);
+  if (a) return a.title || a.archetype.replace(/_/g, " ");
+  const s = S.deck.slides.find((s) => s.index === index);
+  return s ? s.archetype.replace(/_/g, " ") : "";
+}
+
+function select(index, bbox, label) {
+  // Selecting anything else puts the shape down. Nothing has been written, so
+  // there is nothing to undo — but a move abandoned in silence reads as a move
+  // that was applied and did nothing, so it says so.
+  if (S.edit && !S.edit.busy) {
+    const moved = S.edit.x !== S.edit.x0 || S.edit.y !== S.edit.y0;
+    S.edit = null;
+    if (moved) paneMessage("warn", "Move discarded — nothing was written to the deck.");
+  }
+  S.slide = index;
+  S.mark = bbox ? { bbox, label: label || "" } : null;
+  $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;
+  $("rail").querySelectorAll(".thumb").forEach((el) => {
+    const on = Number(el.dataset.slide) === index;
+    el.setAttribute("aria-current", String(on));
+    if (on) el.scrollIntoView({ block: "nearest" });
+  });
+  renderSlide();
+  const head = $("pane").querySelector(`.slide-head[data-goto="${index}"]`);
+  if (head) head.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+/* ---------- pane helpers ---------- */
+
+function renderIntro() {
+  $("panetitle").textContent = "Getting started";
+  $("panesub").textContent = "";
+  $("pane").innerHTML = `
+    <div class="block">
+      <h3>1. Open the deck you want checked</h3>
+      <p>Drop it on the slide area, or use <b>Open deck</b>.</p>
+      <h3>2. Choose a house style</h3>
+      <p><b>Use existing profile</b> audits against a client already onboarded.
+         <b>Create profile</b> learns a new one from the open deck — do that only from a
+         deck the client has <i>already approved</i>, because learning from the deck you
+         are about to check tells you nothing.</p>
+      <p>Either way the derived style is waiting on the <b>House style</b> tab, where you
+         can clear anything that is not a house rule and correct anything that is.</p>
+      <h3>3. Check</h3>
+      <p>The findings arrive as a review note, slide by slide, each with the
+         measurement and the evidence behind what was expected.</p>
+    </div>
+    <div class="block">
+      <h3>Offline unless you ask otherwise</h3>
+      <p>TieOut needs no key and no network. <b>Content review</b> on the Review tab
+         is the one exception: it sends the deck's text to a language model with every
+         name replaced, and shows you exactly what would go before anything does.</p>
+    </div>`;
+}
+
+// One message, in its own slot above the pane. The previous version prepended
+// into the pane itself and kept whatever was already there, so two failed runs
+// left two copies of the same error stacked above the content -- the "it
+// repeats itself if you press it twice" defect. Writing to a dedicated node
+// makes that impossible rather than merely unlikely.
+function paneMessage(kind, text) {
+  $("flash").innerHTML = `<div class="msg ${kind}">${esc(text)}</div>`;
+}
+function clearFlash() { $("flash").innerHTML = ""; }
+
+renderIntro();
+deckPanel();
+setDirty(false);
+// The client list does not depend on a deck being open, and someone arriving at
+// this page usually wants to know which clients are already onboarded.
+loadClients();
+</script>

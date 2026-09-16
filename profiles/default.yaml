@@ -1,0 +1,622 @@
+# A starting-point profile, NOT used automatically.
+#
+# `tieout check --client NAME` reads profiles/NAME.yaml. This file is here as a
+# worked example of what `tieout learn` produces, and as a base to copy when a
+# client's reference deck is not yet available:
+#
+#     cp profiles/default.yaml profiles/acme.yaml
+#     # edit the client name, palette, fonts and logo, then
+#     tieout check deck.pptx --client acme
+#
+# Every value below was derived from the synthetic reference deck that
+# `tieout scaffold-reference` generates, so none of it describes a real client.
+# The 'why:' comments record the evidence behind each value; they are what make
+# a finding explicable rather than arbitrary, and `tieout learn` regenerates
+# them. Anything you edit by hand should be added to `locks` so a later
+# `tieout learn --add` cannot overwrite it.
+#
+# The `not_learned` section at the end is as important as the rest: those are
+# checks TieOut declined to invent from thin evidence, and they are not run.
+client: default
+version: 1
+generated_at: '2026-09-14'
+sources:
+  - tieout's synthetic reference deck (26 slides)
+slide:
+  width_pt: 960.0
+  height_pt: 540.0
+  tolerance_pt: 0.5
+# learned slide classification; edit if a slide is wrong
+archetypes:
+  agenda:
+    - 2
+  appendix_divider:
+    - 23
+  chart_heavy:
+    - 8
+    - 13
+  content:
+    - 4
+    - 5
+    - 7
+    - 10
+    - 11
+    - 15
+    - 16
+    - 17
+    - 20
+    - 21
+    - 22
+    - 24
+  disclaimer:
+    - 25
+    - 26
+  section_divider:
+    - 3
+    - 9
+    - 14
+    - 19
+  table_heavy:
+    - 6
+    - 12
+    - 18
+  title:
+    - 1
+brand:
+  fonts:
+    # why: character-weighted typefaces across 26 slides: Gill Sans MT 96.8%, Arial 3.2%
+    allowed:
+      - Gill Sans MT
+      - Arial
+    roles:
+      # why: 4 distinct sizes observed across 72 runs on 13 slides (10, 11, 12, 14pt);
+      # emitted as a band [confidence medium]
+      body:
+        min_pt: 10.0
+        max_pt: 14.0
+      # why: 1 distinct size observed across 68 runs on 26 slides: 7pt; emitted as an exact
+      # set because fewer than 4 distinct sizes do not describe a band
+      footnote:
+        exact_pt:
+          - 7.0
+      # why: 3 distinct sizes observed across 8 runs on 6 slides: 10pt, 12pt, 14pt; emitted
+      # as an exact set because fewer than 4 distinct sizes do not describe a band
+      # [confidence medium]
+      subtitle:
+        exact_pt:
+          - 10.0
+          - 12.0
+          - 14.0
+      # why: 2 distinct sizes observed across 90 runs on 3 slides: 9pt, 10pt; emitted as an
+      # exact set because fewer than 4 distinct sizes do not describe a band [confidence
+      # medium]
+      table:
+        exact_pt:
+          - 9.0
+          - 10.0
+      # why: 1 distinct size observed across 26 runs on 26 slides: 20pt; emitted as an exact
+      # set because fewer than 4 distinct sizes do not describe a band
+      title:
+        exact_pt:
+          - 20.0
+  # why: area and character weighted colour clusters across 26 slides: #A6A6A6 46.7%,
+  # #000000 36.1%, #1F3864 12.2%, #FFFFFF 5.0%
+  palette_hex:
+    - '#A6A6A6'
+    - '#000000'
+    - '#1F3864'
+    - '#FFFFFF'
+  # why: half the minimum inter-cluster distance is 15.9, capped at 6 so the rule
+  # retains discriminating power
+  palette_tolerance_delta_e: 6.0
+  palette_discarded: []
+  # why: one image present on 23 of 26 slides
+  logo:
+    image_sha1:
+      - 88bc0b3dee318829b33683909755cf35e27bddf9
+    per_archetype:
+      # why: logo geometry from the single agenda slide in the reference deck, so there is
+      # no second placement to corroborate it [confidence medium]
+      agenda:
+        left: 852.0
+        top: 24.0
+        width: 72.0
+        height: 24.0
+        tolerance_pt: 2.0
+      # why: logo geometry from the single appendix_divider slide in the reference deck, so
+      # there is no second placement to corroborate it [confidence medium]
+      appendix_divider:
+        left: 420.0
+        top: 240.0
+        width: 120.0
+        height: 40.0
+        tolerance_pt: 2.0
+      # why: logo geometry on 2 chart_heavy slides, invariant with an observed spread of
+      # 0.0pt giving a tolerance of 2pt
+      chart_heavy:
+        left: 852.0
+        top: 24.0
+        width: 72.0
+        height: 24.0
+        tolerance_pt: 2.0
+      # why: logo geometry on 12 content slides, invariant with an observed spread of 0.0pt
+      # giving a tolerance of 2pt
+      content:
+        left: 852.0
+        top: 24.0
+        width: 72.0
+        height: 24.0
+        tolerance_pt: 2.0
+      # why: logo absent on all 2 disclaimer slides, so the archetype is exempt rather than
+      # unchecked
+      disclaimer: exempt
+      # why: logo geometry on 4 section_divider slides, invariant with an observed spread of
+      # 0.0pt giving a tolerance of 2pt
+      section_divider:
+        left: 420.0
+        top: 240.0
+        width: 120.0
+        height: 40.0
+        tolerance_pt: 2.0
+      # why: logo geometry on 3 table_heavy slides, invariant with an observed spread of
+      # 0.0pt giving a tolerance of 2pt
+      table_heavy:
+        left: 852.0
+        top: 24.0
+        width: 72.0
+        height: 24.0
+        tolerance_pt: 2.0
+      # why: logo absent on all 1 title slide, so the archetype is exempt rather than
+      # unchecked
+      title: exempt
+    # why: median aspect ratio 3.000 across 23 placements, worst observed deviation 0.00%
+    aspect_ratio_tolerance: 0.01
+    size_tolerance_pt: 2.0
+  footer:
+    # why: 17 ascending page numbers in bare digits on 17 of 26 slides, required on
+    # chart_heavy, content, table_heavy
+    page_number:
+      required_on:
+        - chart_heavy
+        - content
+        - table_heavy
+      regex: ^\d+$
+      box_pt:
+        left: 36.0
+        top: 504.0
+        width: 48.0
+        height: 12.0
+        tolerance_pt: 2.0
+      must_ascend: true
+    boilerplate:
+      - text: Strictly Private and Confidential
+        required_on:
+          - agenda
+          - appendix_divider
+          - chart_heavy
+          - content
+          - disclaimer
+          - section_divider
+          - table_heavy
+          - title
+        is_confidentiality: true
+        match_normalised: true
+  # why: default 2pt: a title is expected to sit where its own layout places it, which
+  # is not inferred from the reference deck [confidence medium]
+  title_geometry_tolerance_pt: 2.0
+layout:
+  safe_margin_pt:
+    # why: 5th percentile of 6 content edge observations across 1 agenda slide, excluding
+    # the logo, the footer and full-bleed shapes, rounded down to 2pt; the bottom, top
+    # margins were clamped to the tightest edge observed so the rule cannot fail this deck
+    agenda:
+      top: 36.0
+      right: 36.0
+      bottom: 252.0
+      left: 36.0
+    # why: 5th percentile of 10 content edge observations across 2 chart_heavy slides,
+    # excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+    chart_heavy:
+      top: 36.0
+      right: 36.0
+      bottom: 48.0
+      left: 36.0
+    # why: 5th percentile of 77 content edge observations across 12 content slides,
+    # excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+    content:
+      top: 36.0
+      right: 36.0
+      bottom: 48.0
+      left: 36.0
+    # why: 5th percentile of 6 content edge observations across 2 disclaimer slides,
+    # excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+    disclaimer:
+      top: 36.0
+      right: 36.0
+      bottom: 84.0
+      left: 36.0
+    # why: 5th percentile of 15 content edge observations across 3 table_heavy slides,
+    # excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+    table_heavy:
+      top: 36.0
+      right: 36.0
+      bottom: 48.0
+      left: 36.0
+  grid:
+    # why: 7 vertical edge clusters with support of 5 or more across 26 slides (support:
+    # 36pt on 111, 324pt on 20, 420pt on 5, 468pt on 9, 492pt on 9, 540pt on 5, 924pt on
+    # 94)
+    columns_pt:
+      - 36.0
+      - 324.0
+      - 420.0
+      - 468.0
+      - 492.0
+      - 540.0
+      - 924.0
+    # why: 12 horizontal edge clusters with support of 5 or more across 26 slides
+    # (support: 36pt on 20, 84pt on 20, 96pt on 40, 120pt on 37, 300pt on 5, 336pt on 15,
+    # 348pt on 5, 372pt on 5, 456pt on 33, 468pt on 34, 480pt on 17, 492pt on 17)
+    rows_pt:
+      - 36.0
+      - 84.0
+      - 96.0
+      - 120.0
+      - 300.0
+      - 336.0
+      - 348.0
+      - 372.0
+      - 456.0
+      - 468.0
+      - 480.0
+      - 492.0
+    tolerance_pt: 2.0
+  # why: default window, not inferred: below 0.5pt is indistinguishable from aligned and
+  # above 4pt is a different position rather than a mistake [confidence medium]
+  near_miss_alignment_pt:
+    min: 0.5
+    max: 4.0
+  recurring:
+    - key: name:financial table
+      box_pt:
+        left: 36.0
+        top: 120.0
+        width: 888.0
+        height: 144.0
+        tolerance_pt: 2.0
+      archetypes:
+        - table_heavy
+      support: 3
+    - key: name:footnote
+      box_pt:
+        left: 36.0
+        top: 480.0
+        width: 888.0
+        height: 12.0
+        tolerance_pt: 2.0
+      archetypes:
+        - chart_heavy
+        - content
+        - table_heavy
+      support: 17
+    - key: name:rule
+      box_pt:
+        left: 36.0
+        top: 96.0
+        width: 888.0
+        height: 1.5
+        tolerance_pt: 2.0
+      archetypes:
+        - disclaimer
+      support: 2
+    - key: name:rule
+      box_pt:
+        left: 420.0
+        top: 336.0
+        width: 120.0
+        height: 1.5
+        tolerance_pt: 2.0
+      archetypes:
+        - section_divider
+      support: 4
+    - key: placeholder:body
+      box_pt:
+        left: 36.0
+        top: 348.0
+        width: 888.0
+        height: 24.0
+        tolerance_pt: 2.0
+      archetypes:
+        - appendix_divider
+        - section_divider
+      support: 5
+    - key: placeholder:title
+      box_pt:
+        left: 36.0
+        top: 36.0
+        width: 888.0
+        height: 48.0
+        tolerance_pt: 2.0
+      archetypes:
+        - chart_heavy
+      support: 2
+    - key: placeholder:title
+      box_pt:
+        left: 36.0
+        top: 36.0
+        width: 888.0
+        height: 48.0
+        tolerance_pt: 2.0
+      archetypes:
+        - content
+      support: 12
+    - key: placeholder:title
+      box_pt:
+        left: 36.0
+        top: 36.0
+        width: 888.0
+        height: 48.0
+        tolerance_pt: 2.0
+      archetypes:
+        - disclaimer
+      support: 2
+    - key: placeholder:title
+      box_pt:
+        left: 36.0
+        top: 300.0
+        width: 888.0
+        height: 36.0
+        tolerance_pt: 2.0
+      archetypes:
+        - section_divider
+      support: 4
+    - key: placeholder:title
+      box_pt:
+        left: 36.0
+        top: 36.0
+        width: 888.0
+        height: 48.0
+        tolerance_pt: 2.0
+      archetypes:
+        - table_heavy
+      support: 3
+  overlap_area_share: 0.05
+  gutter_stdev_pt: 1.0
+  position_tolerance_pt: 2.0
+typography:
+  # why: observed identically on 3 of 26 slides, invariant
+  quotes: curly
+  # why: observed identically on 16 of 26 slides, invariant
+  title_case: sentence
+  # why: 100% of 29 bulleted lists (51 bullets in total) across 26 slides end in none
+  bullet_terminal_punctuation: none
+  # why: observed identically on 2 of 26 slides, invariant
+  thousands_separator: ','
+  # why: observed identically on 2 of 26 slides, invariant
+  negative_style: parentheses
+  # why: all 11 numeric table columns across 26 slides use one decimal precision
+  # throughout
+  decimal_places_by_column: consistent_within_column
+  # why: observed identically on 6 of 26 slides, invariant
+  date_format: '%d-%B-%Y'
+  # why: 4 currency-prefixed figures across 3 slides, written as 'US$'
+  currency_pattern: ^(US\$)\s?[\d(]
+  canon_terms:
+    # why: one consistent spelling, 20 occurrences across 16 slides
+    Ashcombe Partners: []
+    # why: one consistent spelling, 3 occurrences across 3 slides
+    EBITDA: []
+# why: default, not inferred: nothing in the reference deck indicates whether notes,
+# hidden slides or document metadata are acceptable [confidence medium]
+hygiene:
+  allow_speaker_notes: false
+  allow_hidden_slides: false
+  allow_document_metadata: false
+  allow_comments: false
+  allow_external_relationships: false
+  # why: default marker list, not inferred from the reference deck [confidence medium]
+  placeholder_markers:
+    - TODO
+    - TBD
+    - TK
+    - XXX
+    - lorem ipsum
+    - '[ ]'
+    - FIXME
+    - PLACEHOLDER
+    - INSERT
+    - ??
+  # why: default 150 DPI, the conventional floor for print-quality artwork; not inferred
+  # [confidence medium]
+  min_image_dpi: 150.0
+  extra_standard_fonts: []
+  dictionary: []
+rules:
+  # why: TY-009, LO-006 ship disabled: one needs a client dictionary and the other needs
+  # the real font files to be worth reading. Add a rule id to `rules.enabled` to switch
+  # it on [confidence medium]
+  disabled:
+    - TY-009
+    - LO-006
+  enabled: []
+  severity_overrides: {}
+# rules deliberately not derived, and why. Silence is correct when the evidence is
+# thin
+not_learned:
+  - key: brand.fonts.roles.chart_label
+    reason: only 2 observations, below min_support of 3
+  - key: layout.safe_margin_pt.appendix_divider
+    reason: appendix_divider slides carry too little content for a margin to be meaningful
+  - key: layout.safe_margin_pt.section_divider
+    reason: section_divider slides carry too little content for a margin to be meaningful
+  - key: layout.safe_margin_pt.title
+    reason: title slides carry too little content for a margin to be meaningful
+  - key: layout.recurring.name:column
+    reason: name:column appears on 29 shapes but at no consistent position, deck-wide or within any 
+      archetype
+  - key: layout.gutter_pt
+    reason: no consistent gutter found, spread 12pt to 24pt
+# questions the interview raised. Answer them with `tieout learn --review`
+questions: []
+# field paths protected from re-learning. Add one after editing a value by hand, or
+# run `tieout profile lock`
+locks: []
+# generated: the evidence behind each value, so a finding can tell you where its
+# expectation came from. Mirrors the 'why:' comments above. Rewritten by `tieout
+# learn`; editing it changes only what findings cite, not what they check
+provenance:
+  brand.palette_hex: 'area and character weighted colour clusters across 26 slides: #A6A6A6 46.7%, #000000
+    36.1%, #1F3864 12.2%, #FFFFFF 5.0%'
+  brand.palette_tolerance_delta_e: half the minimum inter-cluster distance is 15.9, capped at 6 so 
+    the rule retains discriminating power
+  brand.fonts.allowed: 'character-weighted typefaces across 26 slides: Gill Sans MT 96.8%, Arial 3.2%'
+  brand.fonts.roles.body: 4 distinct sizes observed across 72 runs on 13 slides (10, 11, 12, 14pt); 
+    emitted as a band
+  brand.fonts.roles.footnote: '1 distinct size observed across 68 runs on 26 slides: 7pt; emitted as an
+    exact set because fewer than 4 distinct sizes do not describe a band'
+  brand.fonts.roles.subtitle: '3 distinct sizes observed across 8 runs on 6 slides: 10pt, 12pt, 14pt;
+    emitted as an exact set because fewer than 4 distinct sizes do not describe a band'
+  brand.fonts.roles.table: '2 distinct sizes observed across 90 runs on 3 slides: 9pt, 10pt; emitted as
+    an exact set because fewer than 4 distinct sizes do not describe a band'
+  brand.fonts.roles.title: '1 distinct size observed across 26 runs on 26 slides: 20pt; emitted as an
+    exact set because fewer than 4 distinct sizes do not describe a band'
+  brand.logo: one image present on 23 of 26 slides
+  brand.logo.per_archetype.agenda: logo geometry from the single agenda slide in the reference deck,
+    so there is no second placement to corroborate it
+  brand.logo.per_archetype.appendix_divider: logo geometry from the single appendix_divider slide in
+    the reference deck, so there is no second placement to corroborate it
+  brand.logo.per_archetype.chart_heavy: logo geometry on 2 chart_heavy slides, invariant with an 
+    observed spread of 0.0pt giving a tolerance of 2pt
+  brand.logo.per_archetype.content: logo geometry on 12 content slides, invariant with an observed 
+    spread of 0.0pt giving a tolerance of 2pt
+  brand.logo.per_archetype.disclaimer: logo absent on all 2 disclaimer slides, so the archetype is 
+    exempt rather than unchecked
+  brand.logo.per_archetype.section_divider: logo geometry on 4 section_divider slides, invariant 
+    with an observed spread of 0.0pt giving a tolerance of 2pt
+  brand.logo.per_archetype.table_heavy: logo geometry on 3 table_heavy slides, invariant with an 
+    observed spread of 0.0pt giving a tolerance of 2pt
+  brand.logo.per_archetype.title: logo absent on all 1 title slide, so the archetype is exempt 
+    rather than unchecked
+  brand.logo.aspect_ratio_tolerance: median aspect ratio 3.000 across 23 placements, worst observed 
+    deviation 0.00%
+  brand.footer.page_number: 17 ascending page numbers in bare digits on 17 of 26 slides, required on
+    chart_heavy, content, table_heavy
+  brand.footer.boilerplate.Strictly Private and Confidential: repeated verbatim on 26 of 26 slides, 
+    required on agenda, appendix_divider, chart_heavy, content, disclaimer, section_divider, 
+    table_heavy, title
+  layout.safe_margin_pt.agenda: 5th percentile of 6 content edge observations across 1 agenda slide,
+    excluding the logo, the footer and full-bleed shapes, rounded down to 2pt; the bottom, top 
+    margins were clamped to the tightest edge observed so the rule cannot fail this deck
+  layout.safe_margin_pt.chart_heavy: 5th percentile of 10 content edge observations across 2 
+    chart_heavy slides, excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+  layout.safe_margin_pt.content: 5th percentile of 77 content edge observations across 12 content 
+    slides, excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+  layout.safe_margin_pt.disclaimer: 5th percentile of 6 content edge observations across 2 
+    disclaimer slides, excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+  layout.safe_margin_pt.table_heavy: 5th percentile of 15 content edge observations across 3 
+    table_heavy slides, excluding the logo, the footer and full-bleed shapes, rounded down to 2pt
+  layout.grid.columns_pt: '7 vertical edge clusters with support of 5 or more across 26 slides (support:
+    36pt on 111, 324pt on 20, 420pt on 5, 468pt on 9, 492pt on 9, 540pt on 5, 924pt on 94)'
+  layout.grid.rows_pt: '12 horizontal edge clusters with support of 5 or more across 26 slides (support:
+    36pt on 20, 84pt on 20, 96pt on 40, 120pt on 37, 300pt on 5, 336pt on 15, 348pt on 5, 372pt on 5,
+    456pt on 33, 468pt on 34, 480pt on 17, 492pt on 17)'
+  layout.recurring.name:financial table: name:financial table observed on 3 shapes across 3 of 26 
+    slides, invariant at a modal position with a 2pt tolerance
+  layout.recurring.name:footnote: name:footnote observed on 17 shapes across 17 of 26 slides, 
+    invariant at a modal position with a 2pt tolerance
+  layout.recurring.name:rule.disclaimer: name:rule has no single deck-wide position, but is 
+    invariant across the 2 disclaimer slides that carry it
+  layout.recurring.name:rule.section_divider: name:rule has no single deck-wide position, but is 
+    invariant across the 4 section_divider slides that carry it
+  layout.recurring.placeholder:body: placeholder:body observed on 5 shapes across 5 of 26 slides, 
+    invariant at a modal position with a 2pt tolerance
+  layout.recurring.placeholder:title.chart_heavy: placeholder:title has no single deck-wide 
+    position, but is invariant across the 2 chart_heavy slides that carry it
+  layout.recurring.placeholder:title.content: placeholder:title has no single deck-wide position, 
+    but is invariant across the 12 content slides that carry it
+  layout.recurring.placeholder:title.disclaimer: placeholder:title has no single deck-wide position,
+    but is invariant across the 2 disclaimer slides that carry it
+  layout.recurring.placeholder:title.section_divider: placeholder:title has no single deck-wide 
+    position, but is invariant across the 4 section_divider slides that carry it
+  layout.recurring.placeholder:title.table_heavy: placeholder:title has no single deck-wide 
+    position, but is invariant across the 3 table_heavy slides that carry it
+  layout.near_miss_alignment_pt: 'default window, not inferred: below 0.5pt is indistinguishable from
+    aligned and above 4pt is a different position rather than a mistake'
+  typography.quotes: observed identically on 3 of 26 slides, invariant
+  typography.title_case: observed identically on 16 of 26 slides, invariant
+  typography.bullet_terminal_punctuation: 100% of 29 bulleted lists (51 bullets in total) across 26 
+    slides end in none
+  typography.decimal_places_by_column: all 11 numeric table columns across 26 slides use one decimal
+    precision throughout
+  typography.thousands_separator: observed identically on 2 of 26 slides, invariant
+  typography.negative_style: observed identically on 2 of 26 slides, invariant
+  typography.currency_pattern: 4 currency-prefixed figures across 3 slides, written as 'US$'
+  typography.date_format: observed identically on 6 of 26 slides, invariant
+  typography.canon_terms.Ashcombe: one consistent spelling, 20 occurrences across 16 slides
+  typography.canon_terms.Ashcombe Partners: one consistent spelling, 20 occurrences across 16 slides
+  typography.canon_terms.EBITDA: one consistent spelling, 3 occurrences across 3 slides
+  hygiene: 'default, not inferred: nothing in the reference deck indicates whether notes, hidden slides
+    or document metadata are acceptable'
+  hygiene.placeholder_markers: default marker list, not inferred from the reference deck
+  hygiene.min_image_dpi: default 150 DPI, the conventional floor for print-quality artwork; not 
+    inferred
+  brand.title_geometry_tolerance_pt: 'default 2pt: a title is expected to sit where its own layout places
+    it, which is not inferred from the reference deck'
+  rules.disabled: 'TY-009, LO-006 ship disabled: one needs a client dictionary and the other needs the
+    real font files to be worth reading. Add a rule id to `rules.enabled` to switch it on'
+# generated: how well evidenced each value is
+confidence:
+  brand.palette_hex: high
+  brand.palette_tolerance_delta_e: high
+  brand.fonts.allowed: high
+  brand.fonts.roles.body: medium
+  brand.fonts.roles.footnote: high
+  brand.fonts.roles.subtitle: medium
+  brand.fonts.roles.table: medium
+  brand.fonts.roles.title: high
+  brand.logo: high
+  brand.logo.per_archetype.agenda: medium
+  brand.logo.per_archetype.appendix_divider: medium
+  brand.logo.per_archetype.chart_heavy: high
+  brand.logo.per_archetype.content: high
+  brand.logo.per_archetype.disclaimer: high
+  brand.logo.per_archetype.section_divider: high
+  brand.logo.per_archetype.table_heavy: high
+  brand.logo.per_archetype.title: high
+  brand.logo.aspect_ratio_tolerance: high
+  brand.footer.page_number: high
+  brand.footer.boilerplate.Strictly Private and Confidential: high
+  layout.safe_margin_pt.agenda: high
+  layout.safe_margin_pt.chart_heavy: high
+  layout.safe_margin_pt.content: high
+  layout.safe_margin_pt.disclaimer: high
+  layout.safe_margin_pt.table_heavy: high
+  layout.grid.columns_pt: high
+  layout.grid.rows_pt: high
+  layout.recurring.name:financial table: high
+  layout.recurring.name:footnote: high
+  layout.recurring.name:rule.disclaimer: medium
+  layout.recurring.name:rule.section_divider: medium
+  layout.recurring.placeholder:body: high
+  layout.recurring.placeholder:title.chart_heavy: medium
+  layout.recurring.placeholder:title.content: medium
+  layout.recurring.placeholder:title.disclaimer: medium
+  layout.recurring.placeholder:title.section_divider: medium
+  layout.recurring.placeholder:title.table_heavy: medium
+  layout.near_miss_alignment_pt: medium
+  typography.quotes: high
+  typography.title_case: high
+  typography.bullet_terminal_punctuation: high
+  typography.decimal_places_by_column: high
+  typography.thousands_separator: high
+  typography.negative_style: high
+  typography.currency_pattern: high
+  typography.date_format: high
+  typography.canon_terms.Ashcombe: high
+  typography.canon_terms.Ashcombe Partners: high
+  typography.canon_terms.EBITDA: high
+  hygiene: medium
+  hygiene.placeholder_markers: medium
+  hygiene.min_image_dpi: medium
+  brand.title_geometry_tolerance_pt: medium
+  rules.disabled: medium
