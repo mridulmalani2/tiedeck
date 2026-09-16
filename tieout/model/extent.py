@@ -7,7 +7,16 @@ gutters that no reader can see -- which is the single largest source of false
 positives on a real deck, where generously sized text boxes are the norm.
 
 This module narrows a text shape's box to a rectangle that **provably contains**
-its ink, and never to anything smaller. Every estimate here is an upper bound:
+its ink, and never to anything smaller. It works in two regimes, run by run.
+
+**Measured.** Where the run's typeface is installed, or a metric-compatible
+substitute is -- Carlito for Calibri, Caladea for Cambria, Liberation Sans for
+Arial -- :mod:`tieout.model.fonts` returns the real advance width. Metric
+compatibility means exactly that the advances match, so this is a measurement
+rather than an approximation, and it narrows a frame far more tightly than any
+bound can.
+
+**Bounded.** Where no honest measurement is available, an upper bound stands in:
 
 * :data:`MAX_ADVANCE_EM` bounds the width of one character. No widely used
   proportional Latin face advances more than about 0.95 em on its widest glyph,
@@ -15,13 +24,13 @@ its ink, and never to anything smaller. Every estimate here is an upper bound:
   practice, so 1.15 em per character cannot be exceeded by real text.
 * :data:`MAX_LINE_EM` bounds one line's height against the largest run on it.
 
-Bounds rather than metrics because the font files are usually absent. TieOut
-runs on servers that have never had Calibri installed, and LO-006 already ships
-disabled for exactly that reason. A bound needs no font file, and being an upper
-bound it can only ever *fail to narrow* -- it cannot shrink a box past its ink
-and hide a real defect. Where the narrowed box still reaches the edge of the
-frame on an axis, that axis is left at the frame, and the caller measures what
-the file says.
+The fallback is not a detail: TieOut runs on servers that have never had
+Calibri installed, and cannot ship it, so the bound is what most deployments
+will actually use. Being an upper bound it can only ever *fail to narrow* -- it
+cannot shrink a box past its ink and hide a real defect -- and a mixture of
+measured and bounded runs on one line is still an upper bound, because each
+term is. Where the narrowed box still reaches the edge of the frame on an axis,
+that axis is left at the frame, and the caller measures what the file says.
 
 The second thing this module names is a **deliberate bleed**: an untexted shape
 crossing a slide edge, which is how a cover graphic is drawn and not how a
@@ -37,6 +46,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from tieout.model.deck import ShapeModel, SlideModel, TextParagraph, TextRun
+from tieout.model.fonts import measure_text, resolve_font_path
 
 #: Upper bound on one character's advance, in ems. The widest glyph in a bold
 #: proportional Latin face runs about 0.95 em; PowerPoint's ``spc`` tracking
@@ -91,20 +101,55 @@ def _run_size(run: TextRun) -> float:
     return float(size) if size and size > 0 else ASSUMED_SIZE_PT
 
 
+def _run_font_path(run: TextRun) -> str | None:
+    """The file to measure this run in, where one honestly stands for it."""
+    font = run.font
+    if font is None or not font.name:
+        return None
+    return resolve_font_path(font.name, bold=bool(font.bold), italic=bool(font.italic))
+
+
+def _run_width(run: TextRun) -> float:
+    """The run's advance, measured where the face is available and bounded where not."""
+    size_pt = _run_size(run)
+    path = _run_font_path(run)
+    if path is not None:
+        try:
+            return measure_text(path, run.text, size_pt)[0]
+        except OSError:  # pragma: no cover - a font file that stops being readable
+            pass
+    return len(run.text) * size_pt * MAX_ADVANCE_EM
+
+
+def _run_line_height(run: TextRun) -> float:
+    """One line's height for this run, measured where possible and bounded where not."""
+    size_pt = _run_size(run)
+    path = _run_font_path(run)
+    if path is not None:
+        try:
+            return measure_text(path, run.text or "M", size_pt)[1]
+        except OSError:  # pragma: no cover - a font file that stops being readable
+            pass
+    return size_pt * MAX_LINE_EM
+
+
 def _paragraph_width_bound(paragraph: TextParagraph) -> float:
     """An upper bound on the width one paragraph would need on a single line."""
-    return sum(len(run.text) * _run_size(run) * MAX_ADVANCE_EM for run in paragraph.runs)
+    return sum(_run_width(run) for run in paragraph.runs)
 
 
 def _paragraph_line_height_bound(paragraph: TextParagraph) -> float:
     """An upper bound on one line of this paragraph, honouring explicit spacing."""
-    largest = max((_run_size(run) for run in paragraph.runs), default=ASSUMED_SIZE_PT)
-    height = largest * MAX_LINE_EM
+    largest = max(
+        (_run_line_height(run) for run in paragraph.runs),
+        default=ASSUMED_SIZE_PT * MAX_LINE_EM,
+    )
+    height = largest
     # ``line_spacing`` is a multiple when it is a multiple and points when it is
     # points; both are in the model as a float, so the larger reading is taken.
     spacing = paragraph.line_spacing
     if spacing and spacing > 0:
-        height = max(height, largest * MAX_LINE_EM * spacing, float(spacing))
+        height = max(height, largest * spacing, float(spacing))
     return height
 
 

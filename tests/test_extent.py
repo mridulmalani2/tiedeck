@@ -338,3 +338,68 @@ def test_a_row_of_equal_cards_is_not_a_data_series() -> None:
     cards = [_at(36.0 + index * 300.0, 120.0, 280.0, 106.0, index) for index in range(3)]
     plotted = _data_series_axes(cards, 2.0)
     assert all("x" not in plotted.get(card.ref.shape_id, frozenset()) for card in cards)
+
+
+# --------------------------------------------------------------------------------------
+# Measured where the face is available, bounded where it is not
+# --------------------------------------------------------------------------------------
+
+
+def _arial_run(text: str, size_pt: float = 10.0) -> TextParagraph:
+    """Arial, for which Liberation Sans is a metric-compatible substitute.
+
+    Installed on this machine and on CI, which is why the measured path can be
+    asserted at all; Calibri and Cambria cannot be shipped to a build machine.
+    """
+    font = ResolvedFont(
+        name="Arial",
+        size_pt=size_pt,
+        bold=False,
+        italic=False,
+        underline=False,
+        color_hex="000000",
+    )
+    return TextParagraph(runs=(TextRun(text=text, font=font),), level=0)
+
+
+def test_an_available_face_is_measured_rather_than_bounded() -> None:
+    """The measurement is tighter than the bound, and still contains the ink."""
+    from tieout.model.fonts import resolve_font_path
+
+    if resolve_font_path("Arial", bold=False, italic=False) is None:
+        pytest.skip("no metric-compatible substitute for Arial is installed")
+
+    text = "Measured rather than bounded"
+    shape = _shape(width=600.0, paragraphs=[_arial_run(text)])
+    extent = ink_extent(shape)
+    assert extent is not None
+    assert extent.narrowed_x
+
+    bound = len(text) * 10.0 * MAX_ADVANCE_EM
+    assert extent.width < bound, "the measurement should be tighter than the bound"
+    assert extent.width > 0
+
+
+def test_an_unavailable_face_falls_back_to_the_bound() -> None:
+    """A face nothing stands in for is bounded, never substituted.
+
+    A measurement taken in the wrong typeface is worse than no measurement,
+    because it looks like a measurement.
+    """
+    from tieout.model.fonts import resolve_font_path
+
+    invented = "Halyard Display Grotesk"
+    assert resolve_font_path(invented, bold=False, italic=False) is None
+
+    font = ResolvedFont(
+        name=invented,
+        size_pt=10.0,
+        bold=False,
+        italic=False,
+        underline=False,
+        color_hex="000000",
+    )
+    paragraph = TextParagraph(runs=(TextRun(text="Hi", font=font),), level=0)
+    extent = ink_extent(_shape(width=400.0, paragraphs=[paragraph]))
+    assert extent is not None
+    assert extent.width == pytest.approx(2 * 10.0 * MAX_ADVANCE_EM)

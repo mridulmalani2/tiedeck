@@ -164,7 +164,32 @@ def _build(path: Path) -> Path:
         _text(highlights, 48, top + 8, 850, 22, f"Highlight number {index + 1}")
     _chrome(highlights, 4)
 
-    # --- 5. one term in the two casings a deck legitimately uses -----------------
+    # --- 5. a quadrant and a football field: shapes whose position is a number ---
+    #     LO-003 proposed snapping a dot and a bar. The bar's 3.9pt snap would
+    #     have restated $815M as about $821M.
+    plotted = _blank(presentation)
+    _rect(plotted, 36, 30, 4, 24, GOLD)
+    _text(plotted, 48, 36, 600, 24, "COMPETITIVE POSITIONING", size=14)
+    _rect(plotted, 36, 96, 400, 340, GREY, alpha_pct=6)
+    for left, top in (
+        (286.85, 235.73),
+        (263.16, 313.56),
+        (212.40, 222.19),
+        (307.15, 347.40),
+        (137.95, 415.08),
+    ):
+        _rect(plotted, left, top, 11.52, 11.52, NAVY)
+    # A football field: three method names down a column, three bars whose
+    # length is the value, and the figures printed at each end.
+    for index, (bar_left, bar_width) in enumerate(
+        ((678.56, 113.52), (719.84, 113.52), (702.64, 110.08))
+    ):
+        top = 154.8 + index * 67.68
+        _text(plotted, 470, top, 198, 37.44, f"Method {index + 1}")
+        _rect(plotted, bar_left, top, bar_width, 37.44, NAVY)
+    _chrome(plotted, 5)
+
+    # --- 6. one term in the two casings a deck legitimately uses -----------------
     #     Caps in the eyebrow, title case in prose. TY-005 reported every
     #     occurrence of whichever one it did not pick.
     segment = _blank(presentation)
@@ -174,10 +199,10 @@ def _build(path: Path) -> Path:
     _text(segment, 36, 102, 880, 22, "KESTREL ANALYTICS is set out overleaf.")
     _text(segment, 36, 138, 880, 22, "Kestrel Analytics is the platform segment.")
     _text(segment, 36, 174, 880, 22, "Kestrel Analytics carries the margin.")
-    # --- 6. a padded field separator, deliberate and not a typing slip ----------
+    # --- 7. a padded field separator, deliberate and not a typing slip ----------
     _text(segment, 36, 210, 880, 22, "Revenue CAGR: 19.9%   |   EBITDA margin: 24.8%")
     _text(segment, 36, 460, 400, 22, "Source: management accounts.", size=9, colour=GREY)
-    _chrome(segment, 5)
+    _chrome(segment, 6)
 
     presentation.save(str(path))
     return path
@@ -229,3 +254,18 @@ def test_both_casings_of_the_term_are_accepted(reviewed) -> None:
         "kestrel analytics" in {canonical, *forms}
         for canonical, forms in both.items()
     ), f"neither casing was recorded as accepted: {accepted}"
+
+
+def test_the_plotted_shapes_are_recognised_as_data(reviewed) -> None:
+    """The quadrant's dots and the football field's bars are exempt on the axes
+    that carry their value, and nothing else on the slide is."""
+    from tieout.rules.layout import _data_series_axes
+
+    slide = next(s for s in reviewed.decks[0].slides if s.index == 5)
+    plotted = _data_series_axes(list(slide.leaf_shapes()), 2.0)
+    assert plotted, "no data series was recognised on the quadrant slide"
+    # The chrome is laid out, not plotted, on every slide it appears on.
+    wordmark = next(
+        shape for shape in slide.leaf_shapes() if shape.text.strip() == "KESTREL PARTNERS"
+    )
+    assert wordmark.ref.shape_id not in plotted

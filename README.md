@@ -1412,6 +1412,13 @@ other names — a named individual, a counterparty, a codename. Without it the
 rule blocks on the client's own name in the client's own deck, which tells you
 only that TieOut cannot tell whose deck it is looking at.
 
+**Chart series colours are read as drawn.** A series fill that every data point
+overrides paints nothing: a doughnut whose three segments are set to navy, gold
+and pale blue is not drawn in the series' own colour at all. BR-011 measures the
+fill only where some point still takes it, counted against the point count the
+series declares, so a chart recolouring three of five slices is still measured
+on the other two.
+
 **`brand.palette_tolerance_delta_e`** is derived from the distance *between*
 palette entries, and then raised if it has to be to admit the widest cluster's
 own members. Clustering gathers colours within 3 Delta-E of each other, so a
@@ -1485,13 +1492,19 @@ dominant value are queued as a question, and `learn` ends by
 — but it cannot detect a systematic error. Learn from a deck you are confident
 in, read the emitted profile, and correct and `lock` anything wrong.
 
-**A shape whose position carries a number is still measured as geometry.** A dot
-on a competitive quadrant, a bar on a football field and a marker on a timeline
-sit where their value puts them. LO-003 sees a shape 3pt off a learned grid line
-and proposes snapping it, which would move a competitor or restate a valuation.
-TieOut cannot tell a data mark from a misplaced box — nothing in the file says
-which it is — so these are the findings to accept rather than act on, with
-`tieout check --accept LO-003@slide10` and a note saying why.
+**A shape whose position carries a number is recognised, but only by its
+shape.** A dot on a competitive quadrant, a bar on a football field and a marker
+on a timeline sit where their value puts them, and snapping one to a grid line
+would move a competitor or restate a valuation. Nothing in the file says which
+shapes are plotting, so TieOut infers it from two signatures — *bars*, of one
+thickness and varying length with no shared starting edge, and *points*, of one
+size and irregular on both axes — and exempts those from the geometry rules.
+
+The inference can be wrong in both directions. A hand-drawn diagram of three
+same-sized boxes placed freely reads as a scatter and stops being checked; a
+bar chart of two series does not reach the three-member floor and keeps being
+checked. Where it is wrong, `tieout check --accept LO-003@slide10` records the
+judgement with a note.
 
 **A single reference deck is thin evidence for deck-wide conventions.** Rules
 scoped to an archetype with two or three slides, or deck-wide keys with few
@@ -1499,6 +1512,18 @@ observations, fall below the support thresholds and land in `not_learned` rather
 than being derived. That is the correct behaviour, but it means one deck gives
 you a partial ruleset. `tieout learn --add` with further approved decks is what
 promotes dominant rules to invariant and fills the gaps.
+
+**Text is measured where its typeface is available, and bounded where it is
+not.** `tieout.model.fonts` resolves a run's face, or a metric-compatible
+substitute — Carlito for Calibri, Caladea for Cambria, Liberation Sans for
+Arial — and measures the real advance. Where nothing honest stands in, an upper
+bound of 1.15 em per character is used instead, which can only ever fail to
+narrow a box and so cannot hide a real defect. Since Calibri and Cambria cannot
+be installed on a build machine for licensing reasons, **the bound is what most
+deployments actually use**, and it is looser than a measurement: on text-heavy
+decks LO-001, LO-002 and LO-004 will narrow less than they could. Installing
+`fonts-crosextra-carlito` and `fonts-crosextra-caladea` is the cheapest way to
+sharpen them.
 
 **Overflow detection is approximate and off by default (LO-006).** Text
 overflow is measured with Pillow against the resolved TrueType font, accounting

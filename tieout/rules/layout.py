@@ -26,20 +26,17 @@ Three module-wide decisions, stated once rather than in eight docstrings:
 
 from __future__ import annotations
 
-import functools
 import itertools
 import re
 import statistics
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import ClassVar, Final
-
-from PIL import ImageFont
 
 from tieout.cluster import cluster_values
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel, TextParagraph
 from tieout.model.extent import ink_bbox_pt, ink_extent, is_decorative_bleed
+from tieout.model.fonts import measure_text, resolve_font_path
 from tieout.model.furniture import Furniture, content_shapes, detect_furniture, font_role
 from tieout.model.units import rect_intersection_area_pt2
 from tieout.profile.schema import (
@@ -636,6 +633,17 @@ def _evenly_spaced_axes(
 #: than of carelessness. Two shapes that align to nothing are two loose shapes.
 DATA_SERIES_SUPPORT: Final[int] = 3
 
+#: How nearly two shapes must agree in thickness to be one series.
+#:
+#: Far tighter than the tolerance used for *positions*, and deliberately so.
+#: A position carries rounding -- a shape dragged flush lands a fraction out --
+#: but every bar in a series is drawn to one height by construction, so an exact
+#: match is the honest test. At the position tolerance a 24pt rule, a 24pt
+#: eyebrow and a 22pt wordmark clustered into a three-member "series" of shapes
+#: with nothing to do with each other, and their wildly different widths read as
+#: a varying length.
+SERIES_THICKNESS_TOLERANCE_PT: Final[float] = 0.5
+
 #: How each axis is read: the extent shapes share to be one series, the extent
 #: that carries the value, and the leading edge along the axis.
 _SERIES_AXES: Final[tuple[tuple[str, str, str], ...]] = (
@@ -688,11 +696,12 @@ def _data_series_axes(
             shape for shape in shapes if shape.width_pt > 0 and shape.height_pt > 0
         ]
         thicknesses = [getattr(shape, thickness_attr) for shape in sized]
-        for cluster in cluster_values(thicknesses, tolerance):
+        for cluster in cluster_values(thicknesses, SERIES_THICKNESS_TOLERANCE_PT):
             members = [
                 shape
                 for shape in sized
-                if abs(getattr(shape, thickness_attr) - cluster.centre) <= tolerance
+                if abs(getattr(shape, thickness_attr) - cluster.centre)
+                <= SERIES_THICKNESS_TOLERANCE_PT
             ]
             if len(members) < DATA_SERIES_SUPPORT:
                 continue
@@ -1064,122 +1073,9 @@ def _positional_drift(
 # LO-006
 # --------------------------------------------------------------------------------------
 
-#: Metric-compatible substitutions. Liberation Sans is metrically identical to
-#: Arial by design and Liberation Serif to Times New Roman, so measuring one and
-#: reporting the other is a substitution, not a guess. A typeface neither on this
-#: list nor installed under a matching family name is left unmeasured.
-_METRIC_ALIASES: Final[dict[str, tuple[str, ...]]] = {
-    "arial": ("liberationsans",),
-    "helvetica": ("liberationsans",),
-    "arial narrow": ("liberationsansnarrow",),
-    "times new roman": ("liberationserif",),
-    "times": ("liberationserif",),
-    "courier new": ("liberationmono",),
-    "courier": ("liberationmono",),
-}
-
-#: Where installed fonts live. Searched in order; the first family match wins.
-_FONT_DIRECTORIES: Final[tuple[str, ...]] = (
-    "/usr/share/fonts",
-    "/usr/local/share/fonts",
-    "/Library/Fonts",
-    "/System/Library/Fonts",
-    "C:/Windows/Fonts",
-)
-
-#: Fonts are loaded once at this pixel size and measurements scaled to the
-#: requested point size. Loading at the point size directly would quantise a
-#: 7.5pt run to 7px and lose a twentieth of its width.
-_MEASURE_PIXELS: Final[int] = 64
-
 #: ``TextParagraph.line_spacing`` carries either a multiple or a point value and
 #: does not record which. Anything at or below this is read as a multiple.
 _LINE_SPACING_MULTIPLE_CEILING: Final[float] = 5.0
-
-
-def _font_key(name: str) -> str:
-    """A family name reduced to letters and digits, for matching across spellings."""
-    return re.sub(r"[^a-z0-9]", "", name.casefold())
-
-
-def _style_key(*, bold: bool, italic: bool) -> str:
-    if bold and italic:
-        return "bolditalic"
-    if bold:
-        return "bold"
-    if italic:
-        return "italic"
-    return "regular"
-
-
-@functools.lru_cache(maxsize=1)
-def _installed_fonts() -> dict[str, dict[str, str]]:
-    """Family key -> style key -> font file path, for every installed TTF and OTF.
-
-    Built once per process from each font's *own* family and style names rather
-    than its filename, so an "exact family-name match" means the family the deck
-    asked for and not a file that happens to be spelled like it. The traversal is
-    sorted and the first match per family and style wins, so two machines with
-    the same fonts installed produce the same index -- which determinism
-    requires.
-    """
-    index: dict[str, dict[str, str]] = {}
-    for directory in _FONT_DIRECTORIES:
-        root = Path(directory)
-        if not root.is_dir():
-            continue
-        for path in sorted(root.rglob("*")):
-            if path.suffix.lower() not in (".ttf", ".otf"):
-                continue
-            try:
-                family, style = ImageFont.truetype(str(path), 16).getname()
-            except OSError:
-                continue
-            if not family:
-                continue
-            lowered = (style or "Regular").casefold()
-            key = _style_key(
-                bold="bold" in lowered,
-                italic="italic" in lowered or "oblique" in lowered,
-            )
-            index.setdefault(_font_key(family), {}).setdefault(key, str(path))
-    return index
-
-
-def _resolve_font_path(name: str | None, *, bold: bool, italic: bool) -> str | None:
-    """A TTF on this system for ``name``, or None when nothing honest is available.
-
-    Tries the family's own name first, then the metric-compatible alias table.
-    Returns None rather than substituting an arbitrary sans-serif: a measurement
-    taken in the wrong typeface is worse than no measurement, because it looks
-    like a measurement.
-    """
-    if not name:
-        return None
-    index = _installed_fonts()
-    wanted = _style_key(bold=bold, italic=italic)
-    for candidate in (_font_key(name), *_METRIC_ALIASES.get(name.casefold(), ())):
-        styles = index.get(candidate)
-        if not styles:
-            continue
-        for style in (wanted, "regular", *sorted(styles)):
-            if style in styles:
-                return styles[style]
-    return None
-
-
-@functools.lru_cache(maxsize=64)
-def _loaded_font(path: str) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(path, _MEASURE_PIXELS)
-
-
-@functools.lru_cache(maxsize=4096)
-def _measure(path: str, text: str, size_pt: float) -> tuple[float, float]:
-    """``(advance width, ascent + descent)`` in points for ``text`` at ``size_pt``."""
-    font = _loaded_font(path)
-    scale = size_pt / _MEASURE_PIXELS
-    ascent, descent = font.getmetrics()
-    return (font.getlength(text) * scale, (ascent + descent) * scale)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1322,7 +1218,7 @@ class TextOverflow(Rule):
                     shape.ref, "a run has no resolved font size to measure with"
                 )
                 return None
-            path = _resolve_font_path(
+            path = resolve_font_path(
                 font.name, bold=bool(font.bold), italic=bool(font.italic)
             )
             if path is None:
@@ -1338,7 +1234,7 @@ class TextOverflow(Rule):
             for word in _WHITESPACE_SPLIT_RE.split(run.text):
                 if not word:
                     continue
-                width_pt, line_height_pt = _measure(path, word, size_pt)
+                width_pt, line_height_pt = measure_text(path, word, size_pt)
                 tokens.append(
                     _Token(text=word, width_pt=width_pt, line_height_pt=line_height_pt)
                 )
