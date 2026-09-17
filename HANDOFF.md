@@ -26,6 +26,24 @@ Note `pyproject.toml` already passes `-q` to pytest. Adding another `-q` on the
 command line suppresses the summary line, which makes a green run look like a
 run that printed nothing.
 
+### The real deck has now been through
+
+`Project_Falcon_Halyard_Clean_v2.pptx` — 20 slides, the client's own house
+style — was run through `learn` and then `check` on 2026-09-17, which is the
+first time anything here met real material. Three results worth keeping:
+
+* **The invariant holds.** `check(D, learn(D))` exits 0: four findings, three
+  of them `info` decorative bleeds. The one `minor` is a true positive (§4a).
+* **The grid guard from #2 works on real material.** That deck previously
+  derived 27 columns and **53 rows**, and every remaining LO-003 finding sat on
+  the y axis. It now derives 27 columns and **4 rows**, and the spurious
+  vertical findings are gone. That was the open question #2 shipped with, and
+  it is now answered on the deck that raised it.
+* **The tool declines to learn a date format** from this deck, because it
+  genuinely mixes `Sep 2026` and `September 2026` with neither dominant. TY-008
+  is therefore skipped rather than guessing — correct behaviour, and a real
+  inconsistency in the deck worth telling its author about.
+
 ### What #3 changed, in one paragraph
 
 Thirteen defects, each reproduced against a purpose-built deck *before* it was
@@ -111,6 +129,64 @@ Useful flags while testing:
 `2` the run itself failed — which now includes **a rule that crashed**. An audit
 that did not cover the deck no longer exits 0.
 
+### The defect deck
+
+A companion deck was built from the clean one with **one unique seeded defect
+per slide**, twenty in all, spanning every rule category. All twenty were
+verified to fire on their own slide and nowhere else. It is the fastest way to
+see the whole catalogue working, and the fastest way to notice a regression
+that silences a rule.
+
+It is not in the repository — it is client material — and the script that
+builds it was a scratch file, gone with the container. Ask the repository owner
+for `falcon_seeded.pptx` and the `seed_defects.py` that produced it; the table
+below is what it seeds, one rule per slide, so it can be rebuilt from scratch
+if both are lost.
+
+| Slide | Rule | Seeded defect |
+| --- | --- | --- |
+| 1 | HY-004 | author and company left in `docProps` |
+| 2 | HY-001 | a `TBD` draft marker left in the text |
+| 3 | HY-002 | speaker notes left on the slide |
+| 4 | BR-005 | Comic Sans MS against an allowed set of Calibri/Cambria |
+| 5 | TY-001 | a curly apostrophe against a straight-quote convention |
+| 6 | BR-004 | a `#E81123` fill, far off the learned palette |
+| 7 | LO-004 | a text shape dragged on top of another |
+| 8 | CH-003 | the bar chart's value axis starting at 40, not zero |
+| 9 | LO-007 | 52pt body text against a learned 9–38pt band |
+| 10 | LO-003 | a shape nudged 3pt off its learned grid column |
+| 11 | CO-003 | the `Peer Median` row relabelled `Total`, stating 160.8 over rows summing to 779.2 |
+| 12 | LO-001 | a text-bearing shape pushed off the right edge |
+| 13 | CH-001 | the chart title and the slide headline both removed |
+| 14 | TY-006 | `86` among one-decimal figures in the same column |
+| 15 | BR-006 | the page number moved 60pt out of its learned box |
+| 16 | TY-004 | a lower-case title against a title-case convention |
+| 17 | TY-005 | `Cagr` where the canon is `CAGR` |
+| 18 | TY-007 | `USD 1.35bn` against a learned `$` pattern |
+| 19 | BR-007 | page number 7 between 18 and 20 |
+| 20 | CO-001 | `EBITDA`/`FY26E` as 23.8 here and 37.4 on slide 14 |
+
+On that deck the tool reports 26 findings — 4 blocker, 12 major, 7 minor, 3
+info — and exits 1. The three `info` and one of the `minor`s are the clean
+deck's own pre-existing bleeds, not seeded.
+
+The sharpest single result is slide 12, where the *same rule* reports the
+seeded text shape as a `blocker` and the pre-existing graphic as `info`: the
+decorative-bleed logic telling intent from error on real material.
+
+Two things that seeding taught, both worth repeating for anyone who builds a
+similar fixture:
+
+* **Pick the page number by its learned box, not by "the first digit-only
+  shape".** Slide 19's timeline markers are `01`–`05` and come first in
+  document order, so a text-based selector silently edited a timeline marker
+  and left the page number alone — a seeded defect that corrupted something
+  else and then did not fire.
+* **A form the reference deck uses is not a defect.** `HALYARD` is in this
+  deck's `canon_accepted` because the clean deck sets the name in caps in its
+  eyebrows, so seeding `HALYARD` as a TY-005 variant tested nothing. The rule
+  was right; the seed was wrong.
+
 ### What to look at first
 
 The thing to judge is **the invariant**: `check(D, learn(D))` should be empty, or
@@ -173,6 +249,50 @@ from crashing two runs in three to passing three in three.
 
 ---
 
+## 4a. What the real deck showed that the synthetic ones could not
+
+Two findings from the first real-deck run. Neither is urgent; both change what
+a future session should believe about coverage.
+
+### The consistency rules are dormant on this deck
+
+CO-001, CO-002 and CO-003 ran and were correctly silent, because there was
+nothing for them to check:
+
+* **no figure appears under the same (row label, column header) in two
+  tables** — the deck's four tables share no keys at all, so CO-001 and CO-002
+  have nothing to compare;
+* **there is no `Total` row anywhere in the deck**, so CO-003 has no assertion
+  to test.
+
+This matters more than it sounds. These are the rules a banker actually relies
+on — the ones that catch a margin quoted two ways — and they are the rules #3
+spent the most effort fixing. On this deck they are inert, so a clean run says
+nothing about whether they work. The defect deck (§3) exercises all three; the
+real one does not.
+
+**What to do about it:** ask for a deck that does restate figures across tables
+— a financial summary plus a valuation page, say — before believing the
+consistency category is proven on real material.
+
+### Slide 12 is classified as `content`, not `section_divider`
+
+The archetype classifier reads the `H` logo monogram as the slide's title, so
+slide 12 — plainly a section divider, carrying `SECTION 03` and a heading — is
+filed as a content slide and measured against content-slide margins.
+
+Harmless on this deck, because the divider's geometry happens to pass. Not
+harmless in general: an archetype decides which margins, which logo rule and
+which capitalisation convention apply, so a misclassified divider is measured
+against the wrong expectations throughout.
+
+The cause is in `tieout/model/archetype.py`: a one-character shape wins the
+title slot. A single-glyph, non-dictionary shape sitting inside a logo lockup
+is a monogram, not a heading, and the classifier has the lockup's geometry
+available to say so.
+
+---
+
 ## 5. Two structural changes worth knowing about
 
 **Confidence is computed, not declared.** A rule used to declare one confidence
@@ -195,20 +315,23 @@ distrust both.
 
 ## 6. Open work, in the order I would take it
 
-### 1. Run the oracle and the invariant against a real deck
+### 1. Run the *oracle* against the real deck
 
-Everything in this repository is still fitted to synthetic decks. The oracle
-makes the layout *model* falsifiable; only a real deck makes the *tolerances* so.
-Attach `Project_Falcon_Halyard_Clean.pptx` (or any real house-style deck), then:
+Half done. `learn` and `check` have been run against
+`Project_Falcon_Halyard_Clean_v2.pptx` (§1) and the invariant holds. What has
+**not** been run against real material is `tests/test_render_oracle.py` — every
+word-position measurement so far is against the two synthetic fixtures, whose
+layout the generator and the model agree about by construction.
 
-```
-.venv/bin/python -m tieout.cli learn REAL_DECK.pptx --client real
-.venv/bin/python -m tieout.cli check REAL_DECK.pptx --client real
-```
+Point it at the real deck by hand for one run: change the `rendered` fixture to
+load that file instead of `build_clean`/`build_dirty`, on a machine with
+LibreOffice and poppler installed (§2). Expect escapes, and read them before
+assuming they are model defects — the clean deck's own `wrap="none"` footnotes
+are already a known LibreOffice divergence, and a real deck will have more of
+that kind.
 
-and point `tests/test_render_oracle.py` at it by hand for one run. Expect the
-grid guard from #2 to drop the row axis — if it does not, `GRID_SATURATION_LIMIT`
-is the number to move, not the mechanism.
+This is the measurement that turns the tolerances in `extent.py` from "fitted
+to synthetic decks" into something with an error distribution behind it.
 
 ### 2. Audit the hygiene and brand rule *logic*
 
@@ -231,7 +354,20 @@ census across `hygiene.py` (9 bare returns, 4 unchecked) and `layout.py` (9 bare
 returns, 7 unchecked) has not been done. For a pre-send check, "I could not
 verify this" and "this is fine" must never look the same.
 
-### 4. Model `lnSpcReduction`
+### 4. Fix the archetype classifier's monogram blindness
+
+See §4a. `tieout/model/archetype.py` takes a one-character shape as a slide
+title, which misfiles a section divider as content and measures it against the
+wrong margins. Small, contained, and the kind of defect that produces confident
+nonsense rather than a visible gap.
+
+### 5. Get a deck whose tables restate figures
+
+See §4a. The consistency rules are inert on the deck available today. Until a
+deck with cross-table figures and a total row has been through, treat CO-001,
+CO-002 and CO-003 as tested only against seeded material.
+
+### 6. Model `lnSpcReduction`
 
 The autofit line-spacing reduction is the one text-layout property still
 unmodelled. Ignoring it makes the bound *loose* on a shrunk-to-fit shape, never
@@ -239,7 +375,7 @@ short — so it costs precision rather than soundness, which is why it waited.
 `paragraph_available_width` and `_paragraph_line_height_bound` in `extent.py` are
 where it goes.
 
-### 5. A second real deck
+### 7. A second real deck
 
 Every tuned constant in this codebase was fitted to one real deck from one house
 style. Treat them as `n=1` until a second has been through.
@@ -271,6 +407,11 @@ style. Treat them as `n=1` until a second has been through.
 * **`canon_accepted` inherits the reference deck's inconsistencies.** TY-005
   learns accepted spellings from the reference; if that deck spells a term two
   ways, both become canon.
+* **An archetype can be decided by a logo monogram.** See §4a. Until that is
+  fixed, check the archetype assignment in the emitted profile against what the
+  slides actually are; a divider filed as content is measured against the wrong
+  margins and the wrong capitalisation convention.
+* **The consistency category is unproven on real material.** See §4a.
 * **The learn/check asymmetry is mitigated, not solved.** `review_reference`
   reports the gap; it does not close it.
 
