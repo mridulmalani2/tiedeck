@@ -330,7 +330,21 @@ class TruncatedBarBaseline(Rule):
             chart = shape.chart
             assert chart is not None
             minimum = chart.value_axis_minimum
-            if not chart.is_baseline_sensitive or minimum is None or minimum == 0:
+            if not chart.is_baseline_sensitive or minimum == 0:
+                continue
+            if minimum is None:
+                # An automatic axis is scaled by the chart engine from the data
+                # at render time, and a bar chart whose values all sit well
+                # above zero can be given a non-zero floor without anyone
+                # setting one. Nothing in the file says where it will start,
+                # so nothing here can. Recorded rather than passed over: a chart
+                # that could not be checked must not read as one that was.
+                self.note_unchecked(
+                    shape.ref,
+                    f"this {chart.chart_type} chart's value axis is automatic, so "
+                    "whether it starts at zero depends on how the chart engine "
+                    "scales the data, which this rule does not model",
+                )
                 continue
             findings.append(
                 self.finding(
@@ -444,8 +458,21 @@ class InconsistentLabelPrecision(Rule):
             assert chart is not None
             by_kind: dict[str, dict[str, list[str]]] = {}
             for series in chart.series:
+                if not series.has_data_labels:
+                    continue
                 code = (series.label_number_format or "").strip()
-                if not series.has_data_labels or not code or code.lower() == "general":
+                if not code or code.lower() == "general":
+                    # A label with no format of its own, or with "General", shows
+                    # each value at whatever precision the source cell holds --
+                    # 12 as "12", 12.5 as "12.5", side by side in one series.
+                    # Its precision is a property of the data, not of the
+                    # chart, and the data is not in the file.
+                    self.note_unchecked(
+                        shape.ref,
+                        f"{series.name or 'a series'} labels its values in the "
+                        "source data's own format, so its precision cannot be "
+                        "compared with the other series",
+                    )
                     continue
                 kind = "percentage" if "%" in code else "number"
                 by_kind.setdefault(kind, {}).setdefault(
