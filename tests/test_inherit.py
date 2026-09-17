@@ -741,3 +741,35 @@ def test_an_image_placed_in_a_group_keeps_its_identity(tmp_path):
     assert logos[0].ref.group_path, "the group path must be recorded"
     assert logos[0].left_pt == pytest.approx(852.0, abs=0.5)
     assert logos[0].image_pixel_width == 288
+
+
+# --------------------------------------------------------------------------------------
+# The transforms match what Office actually renders
+# --------------------------------------------------------------------------------------
+
+
+def test_theme_variants_match_office_s_documented_outputs():
+    """Every Office theme ships Accent 1 as 4472C4 and its five variants as fixed
+    lumMod/lumOff pairs, and the colours those render to are documented. A
+    palette rule compares against these, so a transform applied in the wrong
+    colour space -- luminance in RGB rather than HSL, tint in sRGB rather than
+    linear -- would read every "Lighter 40%" fill as off-palette."""
+    from tieout.model import color as colour
+
+    base = colour.parse_hex("4472C4")
+    variants = [
+        ("Lighter 80%", (("lumMod", 0.20), ("lumOff", 0.80)), "D9E2F3"),
+        ("Lighter 60%", (("lumMod", 0.40), ("lumOff", 0.60)), "B4C7E7"),
+        ("Lighter 40%", (("lumMod", 0.60), ("lumOff", 0.40)), "8FAADC"),
+        ("Darker 25%", (("lumMod", 0.75),), "2F5597"),
+        ("Darker 50%", (("lumMod", 0.50),), "1F3864"),
+    ]
+    for name, steps, expected in variants:
+        result = base
+        for tag, amount in steps:
+            result = colour.apply_transform(result, tag, amount)
+        distance = colour.delta_e_76(result, colour.parse_hex(expected))
+        assert distance < 1.5, (
+            f"{name}: got {result.r:02X}{result.g:02X}{result.b:02X}, Office renders "
+            f"{expected} (Delta-E {distance:.2f})"
+        )

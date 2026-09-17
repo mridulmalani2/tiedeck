@@ -28,12 +28,14 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
 
-from tieout.fixtures.generator import build_clean
+from tieout.fixtures.generator import build_clean, build_dirty
+from tieout.model.deck import ShapeModel
 from tieout.model.extent import ink_extent
 from tieout.model.loader import load_deck
 
@@ -106,6 +108,35 @@ def _inside(box: tuple[float, float, float, float], word: Word, pad: float) -> b
     )
 
 
+def _normalise(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).replace("\u2019", "'").replace("\u2014", "-")
+
+
+def _owner(frames: list[ShapeModel], word: Word) -> ShapeModel | None:
+    """The text frame a rendered word belongs to, or None when that is not certain.
+
+    Containment alone is not enough. The dirty deck drags a footnote up into a
+    column's frame, and a financial table sits inside another's; attributing
+    their words to the column made its ink box "wrong" and its 11pt size
+    "unexplained" by 7pt words. A word belongs to a frame whose box holds it
+    *and* whose own text contains it, and when more than one frame qualifies
+    nothing is claimed. Table and chart words never qualify, since no text
+    frame contains them, which is what leaves them unscored.
+    """
+    text = _normalise(word[0]).strip()
+    if not text:
+        return None
+    bare = text.strip(".,;:!?()[]\"'")
+    owners = []
+    for shape in frames:
+        if not _inside(shape.visual_bbox_pt, word, 2.0):
+            continue
+        own = _normalise(" ".join(p.text for p in shape.text_frame_paragraphs))
+        if text in own or (bare and bare in own):
+            owners.append(shape)
+    return owners[0] if len(owners) == 1 else None
+
+
 def _overshoot(box: tuple[float, float, float, float], word: Word) -> float:
     left, top, width, height = box
     return max(
@@ -117,16 +148,26 @@ def _overshoot(box: tuple[float, float, float, float], word: Word) -> float:
     )
 
 
-@pytest.fixture(scope="module")
-def rendered(tmp_path_factory):
-    work = tmp_path_factory.mktemp("oracle")
-    deck_path = build_clean(work / "reference_clean.pptx")
+@pytest.fixture(scope="module", params=("clean", "dirty"))
+def rendered(request, tmp_path_factory):
+    """Both reference decks. The dirty one carries every seeded defect -- shapes
+    off the canvas, overlaps, a logo out of place -- and the bound has to hold
+    for those too: a defect is exactly where the model is asked to be right."""
+    work = tmp_path_factory.mktemp(f"oracle-{request.param}")
+    build = build_clean if request.param == "clean" else build_dirty
+    deck_path = build(work / f"reference_{request.param}.pptx")
     return load_deck(deck_path), _render_words(deck_path, work)
+
+
+def _visible(deck):
+    """LibreOffice leaves hidden slides out of a PDF export, so pages pair with
+    the slides that are shown, in order. The dirty deck seeds a hidden slide."""
+    return [slide for slide in deck.slides if not getattr(slide, "is_hidden", False)]
 
 
 def test_the_renderer_agrees_about_the_canvas(rendered):
     deck, pages = rendered
-    assert len(pages) == deck.slide_count, "one PDF page per slide"
+    assert len(pages) == len(_visible(deck)), "one PDF page per visible slide"
 
 
 def test_every_rendered_word_lands_inside_the_predicted_ink(rendered):
@@ -137,14 +178,14 @@ def test_every_rendered_word_lands_inside_the_predicted_ink(rendered):
     deck, pages = rendered
     escapes: list[str] = []
     scored = 0
-    for slide, words in zip(deck.slides, pages, strict=True):
+    for slide, words in zip(_visible(deck), pages, strict=True):
         frames = [
             shape
             for shape in slide.leaf_shapes()
             if shape.has_text and shape.text_frame_paragraphs
         ]
         for word in words:
-            owner = next((s for s in frames if _inside(s.visual_bbox_pt, word, 2.0)), None)
+            owner = _owner(frames, word)
             if owner is None:
                 continue  # a table cell, a chart label: no text frame to score
             if owner.word_wrap is False:
@@ -180,14 +221,14 @@ def test_every_resolved_font_size_agrees_with_the_render(rendered):
     deck, pages = rendered
     compared = 0
     wrong: list[str] = []
-    for slide, words in zip(deck.slides, pages, strict=True):
+    for slide, words in zip(_visible(deck), pages, strict=True):
         frames = [
             shape
             for shape in slide.leaf_shapes()
             if shape.has_text and shape.text_frame_paragraphs
         ]
         for word in words:
-            owner = next((s for s in frames if _inside(s.visual_bbox_pt, word, 2.0)), None)
+            owner = _owner(frames, word)
             if owner is None:
                 continue
             sizes = {
