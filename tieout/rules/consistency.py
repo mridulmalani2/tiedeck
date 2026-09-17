@@ -79,6 +79,35 @@ _FOOTNOTE_MARKER: Final[re.Pattern[str]] = re.compile(
 )
 
 
+#: A footnote marker trailing a *value* rather than a label: "1,234 (2)",
+#: "58.1 (a)", "263*". A real table annotates its figures, and a cell the parser
+#: cannot read used to disable the arithmetic for its whole column.
+#:
+#: The lookbehind is what keeps "(5)" a parenthesised negative: a marker is only
+#: a marker when something precedes it. The bracketed forms are held to one or
+#: two digits, or a single letter, so "(1,234)" and "(2.5)" are never mistaken
+#: for one.
+_VALUE_FOOTNOTE: Final[re.Pattern[str]] = re.compile(
+    r"(?<=\S)[\s\u00a0]*"
+    r"(?:[*\u2020\u2021\u00a7\u00b6]+|[(\[](?:\d{1,2}|[a-e])[)\]])$",
+    re.IGNORECASE,
+)
+
+
+def strip_value_footnote(text: str) -> str:
+    """Remove a trailing footnote marker from a cell's value."""
+    return _VALUE_FOOTNOTE.sub("", text.strip()).strip()
+
+
+def read_cell_value(text: str) -> NumberReading | None:
+    """Parse a table cell, tolerating a footnote marker attached to the figure."""
+    reading = parse_number(text)
+    if reading is not None:
+        return reading
+    stripped = strip_value_footnote(text)
+    return parse_number(stripped) if stripped != text.strip() else None
+
+
 def normalise_label(text: str) -> str:
     """Fold a row or column label to a comparable key.
 
@@ -160,7 +189,7 @@ def iter_numeric_cells(deck: DeckModel) -> Iterator[Cell]:
                     text = cell.text
                     if not text or is_numeric_placeholder(text):
                         continue
-                    reading = parse_number(text)
+                    reading = read_cell_value(text)
                     if reading is None:
                         continue
                     yield Cell(
@@ -186,6 +215,84 @@ def _headers(table: TableModel) -> dict[int, str]:
 
 def _format(reading: NumberReading) -> str:
     return reading.raw
+
+
+def _grouped_cells(deck: DeckModel) -> dict[tuple[str, str, str], list[Cell]]:
+    """Comparable numeric cells, keyed by row label, column header and suffix."""
+    grouped: dict[tuple[str, str, str], list[Cell]] = {}
+    for cell in iter_numeric_cells(deck):
+        if not cell.comparable:
+            continue
+        suffix = (cell.reading.suffix or "").casefold()
+        grouped.setdefault((*cell.key, suffix), []).append(cell)
+    return grouped
+
+
+def _table_of(cell: Cell) -> tuple[int, int]:
+    return (cell.slide_index, cell.shape.ref.shape_id)
+
+
+def _spans_two_tables(cells: list[Cell]) -> bool:
+    """Whether these cells come from at least two distinct tables.
+
+    Keyed on the table, not the slide. Repetition inside one table is a layout
+    artefact -- a figure restated in a summary row -- but two tables on one
+    slide stating the same figure differently is precisely the contradiction
+    this module exists to find, and keying on the slide index hid every one of
+    them.
+    """
+    return len({_table_of(cell) for cell in cells}) >= 2
+
+
+def _is_scale_of(a: float, b: float) -> bool:
+    """Whether two values differ by a clean factor of 100 or 1000.
+
+    Asked of one *pair*. Asking it of a whole group -- min against max -- meant
+    that one units error anywhere under a label excused every genuine
+    disagreement under it, and CO-001 fell silent on the contradiction it exists
+    to report.
+    """
+    low, high = sorted((abs(a), abs(b)))
+    if low == 0:
+        return False
+    ratio = high / low
+    return any(
+        abs(ratio - factor) / factor <= _SCALE_TOLERANCE for factor in _SCALE_FACTORS
+    )
+
+
+def _disagreements(
+    cells: list[Cell], *, scale: bool
+) -> list[tuple[Cell, Cell]]:
+    """Each distinct value that differs from the baseline, against the baseline.
+
+    The baseline is the earliest statement of the figure; every later value that
+    differs is measured against it. One pair per distinct value, so a figure
+    restated in six tables yields one finding per *value*, not per table -- but
+    a figure stated three different ways yields two, because a reader who is
+    told about one of them has not been told about the other.
+
+    ``scale`` selects which half: CO-002 wants the pairs a clean factor apart,
+    CO-001 wants the rest.
+    """
+    ordered = sorted(cells, key=lambda c: (c.slide_index, c.row, c.column))
+    baseline = ordered[0]
+    base_value = round(baseline.reading.value, 6)
+    out: list[tuple[Cell, Cell]] = []
+    seen: set[float] = set()
+    for cell in ordered[1:]:
+        value = round(cell.reading.value, 6)
+        if value == base_value or value in seen:
+            continue
+        if _table_of(cell) == _table_of(baseline):
+            # Two readings of one figure inside a single table is that table's
+            # own layout, not two statements of the same fact.
+            continue
+        if _is_scale_of(value, base_value) is not scale:
+            continue
+        seen.add(value)
+        out.append((baseline, cell))
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -221,58 +328,30 @@ class ContradictoryFigure(Rule):
     requires: ClassVar[tuple[str, ...]] = ()
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
-        grouped: dict[tuple[str, str, str], list[Cell]] = {}
-        for cell in iter_numeric_cells(deck):
-            if not cell.comparable:
-                continue
-            suffix = (cell.reading.suffix or "").casefold()
-            grouped.setdefault((*cell.key, suffix), []).append(cell)
-
         findings: list[Finding] = []
-        for (row_label, column_label, _), cells in sorted(grouped.items()):
-            slides = {cell.slide_index for cell in cells}
-            if len(slides) < 2:
-                # Repetition inside one table is a layout artefact, not a
-                # contradiction between two statements of the same fact.
+        for (row_label, column_label, _), cells in sorted(_grouped_cells(deck).items()):
+            if not _spans_two_tables(cells):
                 continue
-            values = {round(cell.reading.value, 6) for cell in cells}
-            if len(values) < 2:
-                continue
-            if _explained_by_scale(cells):
-                # CO-003 reports this, and more usefully.
-                continue
-
-            ordered = sorted(cells, key=lambda c: (c.slide_index, c.row, c.column))
-            first, *rest = ordered
-            baseline = round(first.reading.value, 6)
-            other = next(c for c in rest if round(c.reading.value, 6) != baseline)
-            findings.append(
-                self.finding(
-                    where=other.shape.ref,
-                    profile=profile,
-                    provenance_path="consistency",
-                    message=(
-                        f"'{row_label}' / '{column_label}' is {_format(other.reading)} "
-                        f"here but {_format(first.reading)} in {first.where}"
-                    ),
-                    measured=_format(other.reading),
-                    expected=f"{_format(first.reading)} (slide {first.slide_index})",
-                    remedy="Reconcile the two figures, or label the scopes so they differ",
-                    bbox_pt=other.shape.bbox_pt,
+            for first, other in _disagreements(cells, scale=False):
+                findings.append(
+                    self.finding(
+                        where=other.shape.ref,
+                        profile=profile,
+                        provenance_path="consistency",
+                        message=(
+                            f"'{row_label}' / '{column_label}' is "
+                            f"{_format(other.reading)} here but "
+                            f"{_format(first.reading)} in {first.where}"
+                        ),
+                        measured=_format(other.reading),
+                        expected=f"{_format(first.reading)} (slide {first.slide_index})",
+                        remedy=(
+                            "Reconcile the two figures, or label the scopes so they differ"
+                        ),
+                        bbox_pt=other.shape.bbox_pt,
+                    )
                 )
-            )
         return cluster_findings(findings)
-
-
-def _explained_by_scale(cells: list[Cell]) -> bool:
-    """Whether the disagreement is a clean factor of 100 or 1000."""
-    values = sorted({abs(c.reading.value) for c in cells if c.reading.value})
-    if len(values) < 2:
-        return False
-    ratio = values[-1] / values[0]
-    return any(
-        abs(ratio - factor) / factor <= _SCALE_TOLERANCE for factor in _SCALE_FACTORS
-    )
 
 
 @register
@@ -300,39 +379,33 @@ class ScaleMismatch(Rule):
     requires: ClassVar[tuple[str, ...]] = ()
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
-        grouped: dict[tuple[str, str, str], list[Cell]] = {}
-        for cell in iter_numeric_cells(deck):
-            if not cell.comparable:
-                continue
-            suffix = (cell.reading.suffix or "").casefold()
-            grouped.setdefault((*cell.key, suffix), []).append(cell)
-
         findings: list[Finding] = []
-        for (row_label, column_label, _), cells in sorted(grouped.items()):
-            if len({c.slide_index for c in cells}) < 2:
+        for (row_label, column_label, _), cells in sorted(_grouped_cells(deck).items()):
+            if not _spans_two_tables(cells):
                 continue
-            if not _explained_by_scale(cells):
-                continue
-            ordered = sorted(cells, key=lambda c: abs(c.reading.value))
-            smaller, larger = ordered[0], ordered[-1]
-            ratio = abs(larger.reading.value) / abs(smaller.reading.value)
-            findings.append(
-                self.finding(
-                    where=larger.shape.ref,
-                    profile=profile,
-                    provenance_path="consistency",
-                    message=(
-                        f"'{row_label}' / '{column_label}' is "
-                        f"{_format(larger.reading)} here and "
-                        f"{_format(smaller.reading)} in {smaller.where}, a factor "
-                        f"of {ratio:,.0f} apart; one of the two is in the wrong unit"
-                    ),
-                    measured=_format(larger.reading),
-                    expected=f"{_format(smaller.reading)} (slide {smaller.slide_index})",
-                    remedy="State both figures in the same scale",
-                    bbox_pt=larger.shape.bbox_pt,
+            for baseline, other in _disagreements(cells, scale=True):
+                pair = sorted((baseline, other), key=lambda c: abs(c.reading.value))
+                smaller, larger = pair[0], pair[1]
+                ratio = abs(larger.reading.value) / abs(smaller.reading.value)
+                findings.append(
+                    self.finding(
+                        where=larger.shape.ref,
+                        profile=profile,
+                        provenance_path="consistency",
+                        message=(
+                            f"'{row_label}' / '{column_label}' is "
+                            f"{_format(larger.reading)} here and "
+                            f"{_format(smaller.reading)} in {smaller.where}, a factor "
+                            f"of {ratio:,.0f} apart; one of the two is in the wrong unit"
+                        ),
+                        measured=_format(larger.reading),
+                        expected=(
+                            f"{_format(smaller.reading)} (slide {smaller.slide_index})"
+                        ),
+                        remedy="State both figures in the same scale",
+                        bbox_pt=larger.shape.bbox_pt,
+                    )
                 )
-            )
         return cluster_findings(findings)
 
 
@@ -394,6 +467,9 @@ class TotalDoesNotSum(Rule):
                 verdict = self._check_column(table, total_row, column)
                 if verdict is None:
                     continue
+                if isinstance(verdict, str):
+                    self.note_unchecked(shape.ref, verdict)
+                    continue
                 stated, computed, tolerance, addends = verdict
                 label_cell = table.cell(total_row, 0)
                 header = table.cell(0, column)
@@ -419,8 +495,13 @@ class TotalDoesNotSum(Rule):
 
     def _check_column(
         self, table: TableModel, total_row: int, column: int
-    ) -> tuple[float, float, float, int] | None:
-        """Return the discrepancy for one column, or None if it is fine or unusable.
+    ) -> tuple[float, float, float, int] | str | None:
+        """What this column's total is: a discrepancy, a reason, or nothing.
+
+        Returns a ``(stated, computed, tolerance, addends)`` tuple for a total
+        that does not add up, a string when the column could not be read at all
+        -- which the caller records as unchecked rather than swallowing -- and
+        None when the total is correct or there is nothing to check.
 
         A total row is accepted if it matches *any* plausible reading of the
         table, because banking tables use several conventions at once: a
@@ -442,9 +523,9 @@ class TotalDoesNotSum(Rule):
             # weighted average, and the deck is not showing its working.
             return None
 
-        items = self._column_items(table, column, stated.suffix or "")
+        items, unreadable = self._column_items(table, column, stated.suffix or "")
         if items is None:
-            return None
+            return unreadable
 
         line_items = [(row, r) for row, r, is_total in items if not is_total]
         subtotals = [
@@ -476,8 +557,7 @@ class TotalDoesNotSum(Rule):
             if len(candidate) < 2:
                 continue
             computed = sum(r.value for _, r in candidate)
-            precision = max(r.decimals for _, r in candidate)
-            tolerance = len(candidate) * 0.5 * (10.0**-precision)
+            tolerance = _rounding_bound([r for _, r in candidate], stated)
             if abs(computed - stated.value) <= tolerance:
                 return None  # some reading of the table makes this correct
             if len(candidate) >= _MIN_ADDENDS and (
@@ -492,11 +572,18 @@ class TotalDoesNotSum(Rule):
 
     def _column_items(
         self, table: TableModel, column: int, suffix: str
-    ) -> list[tuple[int, NumberReading, bool]] | None:
+    ) -> tuple[list[tuple[int, NumberReading, bool]] | None, str]:
         """Every usable cell in a column as ``(row, reading, is_total)``.
 
-        Returns None when the column mixes quantities or holds prose, because
-        such a column is not a sum whatever a total row claims.
+        Returns ``(None, reason)`` when the column mixes quantities or holds
+        prose, because such a column is not a sum whatever a total row claims.
+
+        The reason is returned rather than discarded. A column the rule cannot
+        read and a column that adds up correctly used to be indistinguishable
+        in the output -- both silent -- so a single annotated cell disabled the
+        arithmetic for its whole column and nothing said so. For a pre-send
+        check "I could not verify this" and "this is fine" must never look the
+        same.
         """
         out: list[tuple[int, NumberReading, bool]] = []
         for row in range(1, table.row_count):
@@ -509,13 +596,36 @@ class TotalDoesNotSum(Rule):
             )
             if not cell.text or is_numeric_placeholder(cell.text):
                 continue
-            reading = parse_number(cell.text)
+            reading = read_cell_value(cell.text)
             if reading is None:
-                return None
+                return None, (
+                    f"row {row} of this column reads {cell.text.strip()!r}, which is "
+                    f"not a figure, so the column cannot be added up"
+                )
             if (reading.suffix or "") != suffix:
-                return None
+                return None, (
+                    f"row {row} of this column is in {reading.suffix!r} where the "
+                    f"total is in {suffix!r}, so the column mixes quantities"
+                )
             out.append((row, reading, is_total))
-        return out
+        return out, ""
+
+
+def _rounding_bound(addends: list[NumberReading], stated: NumberReading) -> float:
+    """How far a correctly-rounded total may sit from the sum of its addends.
+
+    Each displayed figure stands for a true value within half a unit of its own
+    last decimal place, so the bound is the *sum* of those half-units, plus one
+    more for the total, which is rounded too.
+
+    Taking the largest precision in the column and applying it to every addend
+    was the bug: it is the tightest of the per-figure bounds, so on a column
+    mixing one- and two-decimal figures it understated the tolerance by an order
+    of magnitude and reported correctly-rounded banking tables as not summing.
+    """
+    return sum(0.5 * 10.0**-reading.decimals for reading in addends) + 0.5 * (
+        10.0**-stated.decimals
+    )
 
 
 def _is_total_label(label: str) -> bool:

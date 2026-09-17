@@ -456,3 +456,195 @@ def test_a_deck_with_no_tables_is_handled(tmp_path, reference_profile):
     presentation.save(str(path))
     result = run_rules(load_deck(path), reference_profile, include=["CO-*"])
     assert result.findings == []
+
+
+# --------------------------------------------------------------------------------------
+# A figure stated more than twice, and figures stated on one slide
+#
+# Every test below reproduces a way the consistency rules used to fall silent on
+# a real contradiction, or speak up about a correct table. They are the reason
+# the module now classifies scale pair by pair, keys on the table rather than
+# the slide, and derives its rounding tolerance per figure.
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_slides(path, slides):
+    """Build a deck where each slide may carry several tables.
+
+    ``slides`` is a list of slides, each a list of tables, each a list of rows.
+    The single-table helper above cannot express two tables on one slide, which
+    is precisely the case that went unchecked.
+    """
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    counter = 0
+    for tables in slides:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        for position, rows in enumerate(tables):
+            counter += 1
+            frame = slide.shapes.add_table(
+                len(rows),
+                len(rows[0]),
+                Pt(36),
+                Pt(60 + position * 220),
+                Pt(400),
+                Pt(20 * len(rows)),
+            )
+            frame.name = f"Table {counter}"
+            for row_index, row in enumerate(rows):
+                for column_index, value in enumerate(row):
+                    frame.table.cell(row_index, column_index).text = str(value)
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _ebitda(value):
+    return [["Fiscal year", "EBITDA"], ["2025A", value]]
+
+
+def test_every_way_a_figure_is_stated_is_reported(tmp_path, reference_profile):
+    """A figure stated three ways is two contradictions, not one.
+
+    Only the first disagreement against the baseline was reported, so a reader
+    told that 275 contradicts 263 was never told that 290 does too -- and would
+    reconcile the pair they were shown and ship the deck.
+    """
+    deck = _deck_with_slides(
+        tmp_path / "three.pptx",
+        [[_ebitda("263")], [_ebitda("275")], [_ebitda("290")]],
+    )
+    result = _run(deck, reference_profile, "CO-001")
+
+    assert len(result.findings) == 2, [f.message for f in result.findings]
+    assert {f.slide_index for f in result.findings} == {2, 3}
+    assert any("290" in f.message for f in result.findings)
+
+
+def test_two_tables_on_one_slide_are_compared(tmp_path, reference_profile):
+    """The guard excluded repetition inside one table by keying on the slide,
+    which also excluded two different tables that happen to share one."""
+    deck = _deck_with_slides(
+        tmp_path / "same_slide.pptx", [[_ebitda("263"), _ebitda("275")]]
+    )
+    result = _run(deck, reference_profile, "CO-001")
+
+    assert len(result.findings) == 1, [f.message for f in result.findings]
+    assert "275" in result.findings[0].message
+
+
+def test_one_units_error_does_not_excuse_a_real_contradiction(
+    tmp_path, reference_profile
+):
+    """The scale test ran against the group's own minimum and maximum, so a
+    figure restated in thousands anywhere under a label made every genuine
+    disagreement under that label disappear. Each is now classified against the
+    baseline on its own."""
+    deck = _deck_with_slides(
+        tmp_path / "masked.pptx",
+        [[_ebitda("263")], [_ebitda("275")], [_ebitda("263000")]],
+    )
+
+    contradictions = _run(deck, reference_profile, "CO-001").findings
+    assert len(contradictions) == 1, [f.message for f in contradictions]
+    assert "275" in contradictions[0].message
+
+    scales = _run(deck, reference_profile, "CO-002").findings
+    assert len(scales) == 1, [f.message for f in scales]
+    assert "263000" in scales[0].message
+
+
+def test_a_correctly_rounded_column_of_mixed_precision_is_not_reported(
+    tmp_path, reference_profile
+):
+    """10.04 + 20.4 + 30.4 is 60.84, and 60.8 is its correct one-decimal total.
+
+    The tolerance took the column's *largest* precision and applied it to every
+    addend, which is the tightest of the per-figure bounds rather than their
+    sum, and reported correctly-rounded banking tables as not adding up.
+    """
+    deck = _deck_with_slides(
+        tmp_path / "rounded.pptx",
+        [
+            [
+                [
+                    ["Segment", "FY25"],
+                    ["North", "10.04"],
+                    ["South", "20.4"],
+                    ["East", "30.4"],
+                    ["Total", "60.8"],
+                ]
+            ]
+        ],
+    )
+    assert _run(deck, reference_profile, "CO-003").findings == []
+
+
+def test_a_total_is_still_checked_when_a_figure_carries_a_footnote(
+    tmp_path, reference_profile
+):
+    """One annotated cell used to disable the arithmetic for its whole column.
+
+    10 + 20 + 30 + 5 is 65, not 99, and a marker on one of the addends is no
+    reason to stop checking.
+    """
+    deck = _deck_with_slides(
+        tmp_path / "footnote.pptx",
+        [
+            [
+                [
+                    ["Segment", "FY25"],
+                    ["North", "10"],
+                    ["South", "20"],
+                    ["East", "30"],
+                    ["West", "5 (a)"],
+                    ["Total", "99"],
+                ]
+            ]
+        ],
+    )
+    result = _run(deck, reference_profile, "CO-003")
+
+    assert len(result.findings) == 1, [f.message for f in result.findings]
+    assert "65" in result.findings[0].message
+
+
+def test_a_bracketed_negative_is_not_mistaken_for_a_footnote(tmp_path):
+    """The footnote stripper must not eat a parenthesised negative, which is how
+    every banking table writes one."""
+    from tieout.rules.consistency import read_cell_value, strip_value_footnote
+
+    def value_of(text: str) -> float:
+        reading = read_cell_value(text)
+        assert reading is not None, f"{text!r} should read as a figure"
+        return reading.value
+
+    assert strip_value_footnote("(5)") == "(5)"
+    assert value_of("(1,234)") == -1234.0
+    assert value_of("(12)") == -12.0
+    assert value_of("1,234 (2)") == 1234.0
+    assert value_of("263*") == 263.0
+
+
+def test_a_column_that_cannot_be_read_says_so(tmp_path, reference_profile):
+    """A column the rule cannot add up and a column that adds up correctly were
+    both silent. For a pre-send check those must never look the same."""
+    deck = _deck_with_slides(
+        tmp_path / "prose.pptx",
+        [
+            [
+                [
+                    ["Segment", "FY25"],
+                    ["North", "10"],
+                    ["South", "see note"],
+                    ["East", "30"],
+                    ["Total", "99"],
+                ]
+            ]
+        ],
+    )
+    result = _run(deck, reference_profile, "CO-003")
+
+    assert result.findings == []
+    assert result.unchecked, "the column could not be read and nothing said so"
+    assert "see note" in result.unchecked[0].reason
