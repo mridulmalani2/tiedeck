@@ -41,6 +41,15 @@ LOGO_SUPPORT_SHARE: Final[float] = 0.40
 #: in size -- to be read as the same mark in another colourway.
 LOGO_VARIANT_TOLERANCE_PT: Final[float] = 2.0
 
+#: How far a backing plate may fall short of enclosing the text set on it. A
+#: badge is positioned by eye against its glyph, not snapped to the text box.
+LOCKUP_PLATE_TOLERANCE_PT: Final[float] = 2.0
+
+#: How much larger in area than that text a backing plate may be. This bounds the
+#: claim to a badge drawn around its own glyph: a panel big enough to be the
+#: slide's background is content, whatever text happens to sit on it.
+LOCKUP_PLATE_AREA_RATIO: Final[float] = 4.0
+
 #: A string repeated verbatim on at least this share of slides is boilerplate.
 BOILERPLATE_SUPPORT_SHARE: Final[float] = 0.60
 
@@ -109,11 +118,17 @@ class SlideFurniture:
     logo_shape_ids: frozenset[int] = frozenset()
     page_number_shape_ids: frozenset[int] = frozenset()
     boilerplate_shape_ids: frozenset[int] = frozenset()
+    #: Drawn shapes carrying no text of their own that back a piece of the above
+    #: -- the badge under a monogram, the tab behind a page number.
+    lockup_shape_ids: frozenset[int] = frozenset()
 
     @property
     def all_ids(self) -> frozenset[int]:
         return (
-            self.logo_shape_ids | self.page_number_shape_ids | self.boilerplate_shape_ids
+            self.logo_shape_ids
+            | self.page_number_shape_ids
+            | self.boilerplate_shape_ids
+            | self.lockup_shape_ids
         )
 
     def contains(self, shape_id: int) -> bool:
@@ -188,10 +203,12 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
                 numbers.add(shape.ref.shape_id)
             if shape.has_text and normalise_text(shape.text) in boilerplate_texts:
                 plate.add(shape.ref.shape_id)
+        text_chrome = frozenset(logos) | frozenset(numbers) | frozenset(plate)
         by_slide[slide.index] = SlideFurniture(
             logo_shape_ids=frozenset(logos),
             page_number_shape_ids=frozenset(numbers),
             boilerplate_shape_ids=frozenset(plate),
+            lockup_shape_ids=_lockup_plates(slide, text_chrome),
         )
 
     return Furniture(
@@ -200,6 +217,54 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
         logo_support=logo_support,
         page_numbers=page_numbers,
         boilerplate=boilerplate,
+    )
+
+
+def _lockup_plates(slide: SlideModel, text_chrome: frozenset[int]) -> frozenset[int]:
+    """Drawn shapes sitting behind chrome text: the rest of a lockup.
+
+    A house mark shipped as vector artwork is a badge with the monogram set on
+    it, not an image part. Repetition across slides finds the monogram and the
+    wordmark, because those are text; the badge behind them carries no text and
+    no image, so nothing identified it and every layout rule measured the house
+    mark as if it were content. :func:`logo_variants` already settled that logo
+    identity is geometric rather than by pixels -- this is the same argument one
+    step further, for a mark that has no pixels to begin with.
+
+    Identity is containment bounded by area. A plate drawn for a glyph encloses
+    that glyph and is of its order of size; a panel that happens to lie under a
+    footer encloses it too but dwarfs it, so it stays content.
+    """
+    anchors = [
+        shape
+        for shape in slide.leaf_shapes()
+        if shape.ref.shape_id in text_chrome and shape.width_pt > 0 and shape.height_pt > 0
+    ]
+    if not anchors:
+        return frozenset()
+
+    plates: set[int] = set()
+    for shape in slide.leaf_shapes():
+        if shape.has_text or shape.image_sha1 or shape.ref.shape_id in text_chrome:
+            continue
+        if shape.width_pt <= 0 or shape.height_pt <= 0:
+            continue
+        area = shape.width_pt * shape.height_pt
+        for held in anchors:
+            if area > LOCKUP_PLATE_AREA_RATIO * held.width_pt * held.height_pt:
+                continue
+            if _encloses(shape, held, LOCKUP_PLATE_TOLERANCE_PT):
+                plates.add(shape.ref.shape_id)
+                break
+    return frozenset(plates)
+
+
+def _encloses(outer: ShapeModel, inner: ShapeModel, tolerance: float) -> bool:
+    return (
+        outer.left_pt <= inner.left_pt + tolerance
+        and outer.top_pt <= inner.top_pt + tolerance
+        and outer.right_pt >= inner.right_pt - tolerance
+        and outer.bottom_pt >= inner.bottom_pt - tolerance
     )
 
 
