@@ -256,9 +256,21 @@ class Rule(ABC):
         return slide.archetype if slide else "unknown"
 
 
+#: Highest confidence first, like :data:`SEVERITY_ORDER`.
+CONFIDENCE_ORDER: Final[dict[str, int]] = {"high": 0, "medium": 1, "low": 2}
+
+
+def weakest(*confidences: Confidence) -> Confidence:
+    """The least confident of several, for a finding built on several sources.
+
+    A finding is as sure as the shakiest thing it rests on: the rule's own
+    method, the profile's derivation, and the layout model's measurement.
+    """
+    return max(confidences, key=lambda c: CONFIDENCE_ORDER.get(c, 9))
+
+
 def _weaker(a: Confidence, b: Confidence) -> Confidence:
-    order: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
-    return a if order[a] >= order[b] else b
+    return weakest(a, b)
 
 
 # --------------------------------------------------------------------------------------
@@ -398,21 +410,54 @@ class AuditResult:
             out.setdefault(finding.slide_index, []).append(finding)
         return out
 
+    @property
+    def failed_rules(self) -> list[RuleSkipped]:
+        """Rules that raised rather than declining to run.
+
+        A rule that crashed has told you nothing about the deck, so an audit
+        containing one is incomplete rather than clean. Separated from the
+        rules that declined -- disabled, or missing a profile field -- because
+        those are decisions and this is a fault.
+        """
+        return [entry for entry in self.rules_skipped if entry.failed]
+
+    @property
+    def complete(self) -> bool:
+        """Whether every selected rule actually ran."""
+        return not self.failed_rules
+
     def worst_severity(self) -> str | None:
         if not self.findings:
             return None
         return min(self.findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 9)).severity
 
-    def exceeds(self, threshold: str, *, include_non_gating: bool = False) -> bool:
+    def exceeds(
+        self,
+        threshold: str,
+        *,
+        include_non_gating: bool = False,
+        min_confidence: str = "medium",
+    ) -> bool:
         """Whether any finding is at or above ``threshold``. Drives the exit code.
 
         Findings in :data:`NON_GATING_CATEGORIES` are excluded unless the caller
         opts in, so adding the optional semantic layer to a run cannot change
         what an existing gate does.
+
+        A finding below ``min_confidence`` is reported but does not gate. Severity
+        says how bad a finding is if true; confidence says how likely it is to
+        be true; a gate that reads only the first fails a deck on a heuristic
+        as readily as on arithmetic, and the person who is failed learns to
+        distrust both. The default admits high and medium -- the provable and
+        the well-founded -- and keeps low-confidence findings in the report,
+        where a reader can weigh them, and out of the exit code, where nobody
+        can.
         """
         limit = SEVERITY_ORDER.get(threshold, 0)
+        floor = CONFIDENCE_ORDER.get(min_confidence, 9)
         return any(
             SEVERITY_ORDER.get(f.severity, 9) <= limit
+            and CONFIDENCE_ORDER.get(f.confidence, 9) <= floor
             and (include_non_gating or f.category not in NON_GATING_CATEGORIES)
             for f in self.findings
         )
@@ -487,8 +532,11 @@ def run_rules(
         result.unchecked.extend(rule.unchecked)
 
         for finding in findings:
+            shape_name = (
+                finding.where.name if isinstance(finding.where, ShapeRef) else None
+            )
             if suppressions is not None and suppressions.matches(
-                finding.rule_id, finding.slide_index
+                finding.rule_id, finding.slide_index, shape_name
             ):
                 result.suppressed.append(finding)
                 continue

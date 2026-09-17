@@ -32,6 +32,17 @@ _SEVERITY_STYLES: Final[dict[str, str]] = {
 #: narrow enough that the measured/expected column stays on screen.
 _MESSAGE_WIDTH: Final[int] = 62
 
+#: Below this many columns the five-column slide table cannot be read: rich
+#: shrinks every column to fit, and the measured/expected cell folds into
+#: fragments of two or three characters. Findings are stacked instead.
+_TABLE_MIN_WIDTH: Final[int] = 110
+
+#: How many findings the fix-first block lists before saying "and N more".
+_FIX_FIRST_LIMIT: Final[int] = 12
+
+#: A report shorter than this is its own triage; the block would repeat it.
+_FIX_FIRST_MIN_FINDINGS: Final[int] = 6
+
 
 def render(
     result: AuditResult,
@@ -61,12 +72,96 @@ def render(
     if not grouped:
         output.print()
         output.print("[bold green]No findings.[/bold green]")
+    else:
+        _fix_first(result, output)
+
+    stacked = output.width < _TABLE_MIN_WIDTH
     for slide_index in sorted(grouped):
         output.print()
-        output.print(_slide_table(slide_index, grouped[slide_index], show_provenance))
+        if stacked:
+            _slide_block(slide_index, grouped[slide_index], show_provenance, output)
+        else:
+            output.print(_slide_table(slide_index, grouped[slide_index], show_provenance))
 
     output.print()
     _footer(result, output)
+
+
+def _fix_first(result: AuditResult, console: Console) -> None:
+    """The findings that decide whether the deck can go out, before anything else.
+
+    A 26-slide deck produced 44 findings and 290 lines, grouped by slide because
+    that is the order someone fixes in. It is not the order someone *decides*
+    in. At two in the morning on the fourth turn the question is "what stops
+    this going out", and the answer was spread across a page of scrolling. The
+    blockers and majors are listed here first, in severity order, each with
+    what to do about it where the rule knows.
+    """
+    urgent = [
+        finding
+        for finding in sorted(result.findings, key=lambda f: f.sort_key)
+        if SEVERITY_ORDER.get(finding.severity, 9) <= SEVERITY_ORDER["major"]
+    ]
+    if not urgent or len(result.findings) < _FIX_FIRST_MIN_FINDINGS:
+        return
+    console.print()
+    console.print(
+        f"[bold]fix first[/bold] [dim]({len(urgent)} of {len(result.findings)} "
+        f"findings are blockers or majors)[/dim]"
+    )
+    for finding in urgent[:_FIX_FIRST_LIMIT]:
+        style = _SEVERITY_STYLES.get(finding.severity, "")
+        line = Text("  ")
+        line.append(SEVERITY_GLYPHS.get(finding.severity, "?"), style=style)
+        line.append(f" {finding.rule_id}  slide {finding.slide_index}", style="dim")
+        if finding.shape_name:
+            line.append(f"  {finding.shape_name}", style="bold")
+        line.append(f"  {finding.message}")
+        if finding.confidence != "high":
+            line.append(f"  ({finding.confidence} confidence)", style="dim italic")
+        console.print(line)
+        if finding.remedy:
+            console.print(Text(f"      → {finding.remedy}", style="dim"))
+    if len(urgent) > _FIX_FIRST_LIMIT:
+        console.print(
+            Text(
+                f"  … and {len(urgent) - _FIX_FIRST_LIMIT} more, in the slides below",
+                style="dim",
+            )
+        )
+
+
+def _slide_block(
+    slide_index: int,
+    findings: list[Finding],
+    show_provenance: bool,
+    console: Console,
+) -> None:
+    """One finding per stanza, for a terminal too narrow for the table.
+
+    The same fields as the table, on their own lines, so nothing folds. The
+    provenance is prefixed rather than merely dimmed: where the output is
+    captured without styling -- a log, a CI artefact -- a dimmed second line
+    reads as part of the message, and "nothing in the reference deck indicates"
+    appeared to be the rule's own claim rather than its evidence.
+    """
+    console.print(Text(f"slide {slide_index}", style="bold"))
+    for finding in sorted(findings, key=lambda f: f.sort_key):
+        style = _SEVERITY_STYLES.get(finding.severity, "")
+        head = Text("  ")
+        head.append(SEVERITY_GLYPHS.get(finding.severity, "?"), style=style)
+        head.append(f" {finding.rule_id}", style="dim")
+        head.append(f"  {finding.shape_name or '—'}", style="bold")
+        if finding.confidence != "high":
+            head.append(f"  ({finding.confidence} confidence)", style="dim italic")
+        console.print(head)
+        console.print(
+            Text(f"    {finding.message}", style=style if finding.severity == "blocker" else "")
+        )
+        if finding.delta:
+            console.print(Text(f"    {finding.delta}", style="dim"))
+        if show_provenance and finding.expected_provenance:
+            console.print(Text(f"    because {finding.expected_provenance}", style="dim italic"))
 
 
 def _header_text(result: AuditResult) -> Text:
@@ -106,8 +201,10 @@ def _slide_table(
     for finding in sorted(findings, key=lambda f: f.sort_key):
         style = _SEVERITY_STYLES.get(finding.severity, "")
         message = Text(finding.message, style=style if finding.severity == "blocker" else "")
+        if finding.confidence != "high":
+            message.append(f" ({finding.confidence} confidence)", style="dim italic")
         if show_provenance and finding.expected_provenance:
-            message.append(f"\n{finding.expected_provenance}", style="dim italic")
+            message.append(f"\nbecause {finding.expected_provenance}", style="dim italic")
         table.add_row(
             Text(SEVERITY_GLYPHS.get(finding.severity, "?"), style=style),
             finding.rule_id,

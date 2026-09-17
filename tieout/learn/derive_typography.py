@@ -44,6 +44,7 @@ from tieout.text import (
     normalise_currency,
     parse_number,
     quote_census,
+    resolve_date_convention,
 )
 
 #: Archetypes whose titles vote on the capitalisation convention.
@@ -417,10 +418,30 @@ def _derive_dates(
     result: TypographyDerivation,
     total_slides: int,
 ) -> None:
-    """The date format, inferred by trying a fixed list of strptime patterns."""
+    """The date format, inferred by trying a fixed list of strptime patterns.
+
+    The deck is read twice on purpose. ``%d/%m/%Y`` and ``%m/%d/%Y`` cannot be
+    told apart when the day is twelve or lower, so resolving each date on its
+    own split one consistent convention across two formats -- and a US deck,
+    whose dates are month-first, taught this deriver both of them. The first
+    pass asks the whole deck which ordering it uses, from the dates that
+    disambiguate themselves; the second reads every date under that answer.
+    """
+    passages: list[str] = [
+        context.run.text
+        for context in iter_runs(deck, furniture, include_furniture=True)
+    ]
+    for slide in learnable_slides(deck):
+        for shape in slide.tables:
+            if shape.table is None:
+                continue
+            passages.extend(cell.text for cell in shape.table.cells)
+
+    convention = resolve_date_convention(passages)
+
     observations: list[Observation] = []
     for context in iter_runs(deck, furniture, include_furniture=True):
-        for reading in find_dates(context.run.text):
+        for reading in find_dates(context.run.text, prefer=convention):
             observations.append(
                 Observation("date_format", DECK, reading.format, context.slide.index)
             )
@@ -429,7 +450,7 @@ def _derive_dates(
             if shape.table is None:
                 continue
             for cell in shape.table.cells:
-                for reading in find_dates(cell.text):
+                for reading in find_dates(cell.text, prefer=convention):
                     observations.append(
                         Observation("date_format", DECK, reading.format, slide.index)
                     )

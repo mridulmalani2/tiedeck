@@ -30,6 +30,11 @@ from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
 from tieout.model import archetype as archetype_module
 from tieout.model.deck import (
+    ALIGN_CENTRE,
+    ALIGN_DISTRIBUTE,
+    ALIGN_JUSTIFY,
+    ALIGN_LEFT,
+    ALIGN_RIGHT,
     ChartModel,
     ChartSeries,
     DeckModel,
@@ -59,13 +64,13 @@ _DEFAULT_INSET_LR_PT: Final[float] = 7.2
 _DEFAULT_INSET_TB_PT: Final[float] = 3.6
 
 _ALIGNMENT_MAP: Final[dict[str, str]] = {
-    "l": "left",
-    "r": "right",
-    "ctr": "centre",
-    "just": "justify",
-    "justLow": "justify",
-    "dist": "distribute",
-    "thaiDist": "distribute",
+    "l": ALIGN_LEFT,
+    "r": ALIGN_RIGHT,
+    "ctr": ALIGN_CENTRE,
+    "just": ALIGN_JUSTIFY,
+    "justLow": ALIGN_JUSTIFY,
+    "dist": ALIGN_DISTRIBUTE,
+    "thaiDist": ALIGN_DISTRIBUTE,
 }
 
 _AUTOFIT_MAP: Final[dict[str, str]] = {
@@ -342,7 +347,14 @@ def _load_shape(
     sp_pr = element.find("p:spPr", NS)
     style_el = element.find("p:style", NS)
     body_pr = element.find(".//a:bodyPr", NS)
-    autofit, font_scale = _autofit(body_pr)
+    # A placeholder's text-frame properties inherit exactly as its font does:
+    # the slide's own bodyPr, then the layout placeholder's, then the master's.
+    # Fonts, fills and lines already walked that chain; the bodyPr attributes
+    # were read from the slide alone, so a title whose master anchors it in the
+    # middle of its frame was modelled at the top, and a section divider's
+    # heading was measured 15pt above where it renders.
+    body_chain = _body_pr_chain(context, body_pr, ph_type, ph_idx)
+    autofit, font_scale = _autofit(body_chain, body_pr)
 
     paragraphs = _load_paragraphs(
         element,
@@ -375,7 +387,7 @@ def _load_shape(
             is_text_box=_is_text_box(body_pr, element),
         )
 
-    insets = _insets(body_pr)
+    insets = _insets(body_chain)
     return ShapeModel(
         ref=ref,
         kind=kind,
@@ -400,14 +412,16 @@ def _load_shape(
         placeholder_idx=ph_idx,
         text_frame_paragraphs=paragraphs,
         has_text_frame=element.find("p:txBody", NS) is not None,
-        word_wrap=_word_wrap(body_pr),
+        word_wrap=_word_wrap(body_chain),
         autofit=autofit,
         inset_left_pt=insets[0],
         inset_right_pt=insets[1],
         inset_top_pt=insets[2],
         inset_bottom_pt=insets[3],
-        vertical_anchor=body_pr.get("anchor") if body_pr is not None else None,
-        text_direction=body_pr.get("vert") if body_pr is not None else None,
+        vertical_anchor=_body_attr(body_chain, "anchor"),
+        text_direction=_body_attr(body_chain, "vert"),
+        text_columns=_column_count(body_chain),
+        column_spacing_pt=emu_to_pt(_opt_int_str(_body_attr(body_chain, "spcCol"))) or 0.0,
         image_sha1=image_sha1,
         image_part_name=image_part,
         image_pixel_width=px_w,
@@ -798,6 +812,7 @@ def _paragraphs_from_body(
                 line_spacing=_line_spacing(ppr),
                 indent_pt=emu_to_pt(_opt_int(ppr, "indent")) if ppr is not None else None,
                 margin_left_pt=emu_to_pt(_opt_int(ppr, "marL")) if ppr is not None else None,
+                margin_right_pt=emu_to_pt(_opt_int(ppr, "marR")) if ppr is not None else None,
             )
         )
     return tuple(out)
@@ -877,42 +892,100 @@ def _bullet(ppr: etree._Element | None) -> tuple[str | None, str | None, str | N
     return (None, None, None)
 
 
-def _autofit(body_pr: etree._Element | None) -> tuple[str | None, float | None]:
-    """The autofit mode and, for shrink-on-overflow, the applied font scale."""
-    if body_pr is None:
-        return (None, None)
-    for tag, label in _AUTOFIT_MAP.items():
-        node = body_pr.find(f"a:{tag}", NS)
-        if node is None:
-            continue
-        scale: float | None = None
-        if tag == "normAutofit" and node.get("fontScale"):
+def _body_pr_chain(
+    context: SlideContext,
+    body_pr: etree._Element | None,
+    ph_type: str | None,
+    ph_idx: int | None,
+) -> list[etree._Element]:
+    """The ``a:bodyPr`` elements that govern this shape, most specific first.
+
+    A non-placeholder shape has only its own. A placeholder's is followed by the
+    layout placeholder's and the master placeholder's, which is where PowerPoint
+    keeps the anchor, the insets and the wrap for every title and body on the
+    deck -- a slide's own bodyPr is usually empty.
+    """
+    chain: list[etree._Element] = []
+    if body_pr is not None:
+        chain.append(body_pr)
+    if ph_type is not None or ph_idx is not None:
+        for placeholder in (
+            context.layout_placeholder(ph_type, ph_idx),
+            context.master_placeholder(ph_type),
+        ):
+            if placeholder is None:
+                continue
+            inherited = placeholder.find(".//a:bodyPr", NS)
+            if inherited is not None:
+                chain.append(inherited)
+    return chain
+
+
+def _column_count(chain: list[etree._Element]) -> int:
+    raw = _body_attr(chain, "numCol")
+    try:
+        return max(1, int(raw)) if raw is not None else 1
+    except ValueError:
+        return 1
+
+
+def _opt_int_str(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _body_attr(chain: list[etree._Element], name: str) -> str | None:
+    """The first value of a bodyPr attribute along the chain, or None."""
+    for body_pr in chain:
+        value = body_pr.get(name)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _autofit(
+    chain: list[etree._Element], own: etree._Element | None
+) -> tuple[str | None, float | None]:
+    """The autofit mode, inherited, and the applied font scale, from the slide only.
+
+    The mode is a template decision and inherits like any other bodyPr setting.
+    ``fontScale`` is not: PowerPoint writes it on the slide's own bodyPr at the
+    moment it shrinks that shape's text, so a scale on a layout says nothing
+    about this slide and is not taken.
+    """
+    mode: str | None = None
+    for body_pr in chain:
+        for tag, label in _AUTOFIT_MAP.items():
+            if body_pr.find(f"a:{tag}", NS) is not None:
+                mode = label
+                break
+        if mode is not None:
+            break
+    scale: float | None = None
+    if own is not None:
+        node = own.find("a:normAutofit", NS)
+        if node is not None and node.get("fontScale"):
             with contextlib.suppress(ValueError):
                 scale = int(str(node.get("fontScale"))) / 100000.0
-        return (label, scale)
-    return (None, None)
+    return (mode, scale)
 
 
-def _word_wrap(body_pr: etree._Element | None) -> bool | None:
-    if body_pr is None:
-        return None
-    raw = body_pr.get("wrap")
+def _word_wrap(chain: list[etree._Element]) -> bool | None:
+    raw = _body_attr(chain, "wrap")
     if raw is None:
         return None
     return bool(raw == "square")
 
 
-def _insets(body_pr: etree._Element | None) -> tuple[float, float, float, float]:
-    """Text-frame insets in points, defaulting to PowerPoint's own values."""
-    if body_pr is None:
-        return (
-            _DEFAULT_INSET_LR_PT,
-            _DEFAULT_INSET_LR_PT,
-            _DEFAULT_INSET_TB_PT,
-            _DEFAULT_INSET_TB_PT,
-        )
+def _insets(chain: list[etree._Element]) -> tuple[float, float, float, float]:
+    """Text-frame insets in points, inherited, defaulting to PowerPoint's own values."""
+
     def read(name: str, default: float) -> float:
-        raw = body_pr.get(name)
+        raw = _body_attr(chain, name)
         if raw is None:
             return default
         try:

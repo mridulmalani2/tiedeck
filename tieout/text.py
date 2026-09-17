@@ -13,7 +13,7 @@ from __future__ import annotations
 import gzip
 import re
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +30,13 @@ STRAIGHT_DOUBLE: Final[str] = '"'
 
 #: A straight apostrophe that is genuinely a foot or inch mark, or a prime in a
 #: ticker, is not a typographic defect.
-_MEASURE_CONTEXT: Final[re.Pattern[str]] = re.compile(r"\d\s*['\"]")
+#:
+#: A prime sits hard against its figure -- 5'11", a 12" pipe. Allowing a space
+#: between them also matched the opening quote in `2023 "guidance"`, and because
+#: the substitution removed the whole match it ate the figure and the quote
+#: together, leaving the closing quote to be counted alone. The lookbehind keeps
+#: the figure whatever else changes.
+_MEASURE_CONTEXT: Final[re.Pattern[str]] = re.compile(r"(?<=\d)['\"]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,27 +377,86 @@ _DATE_CANDIDATE: Final[re.Pattern[str]] = re.compile(
 class DateReading:
     raw: str
     format: str
+    #: Every other format the same text also parses under. Non-empty exactly
+    #: when the date cannot tell you which convention wrote it.
+    alternatives: tuple[str, ...] = ()
+
+    @property
+    def ambiguous(self) -> bool:
+        return bool(self.alternatives)
 
 
-def find_dates(text: str) -> list[DateReading]:
+def date_formats(candidate: str) -> tuple[str, ...]:
+    """Every format in :data:`DATE_FORMATS` that ``candidate`` parses under."""
+    out: list[str] = []
+    for pattern in DATE_FORMATS:
+        try:
+            datetime.strptime(candidate, pattern)
+        except ValueError:
+            continue
+        out.append(pattern)
+    return tuple(out)
+
+
+def find_dates(text: str, prefer: str | None = None) -> list[DateReading]:
     """Extract date-looking substrings and the format each one parses under.
 
-    ``%d/%m/%Y`` and ``%m/%d/%Y`` are genuinely ambiguous for a day below 13.
-    The first matching format in :data:`DATE_FORMATS` wins, which makes the
-    result deterministic; the ambiguity is called out in the README rather than
-    resolved by guessing at the author's locale.
+    ``%d/%m/%Y`` and ``%m/%d/%Y`` are indistinguishable when the day is twelve
+    or lower, so resolving each date on its own made one consistent convention
+    read as two: ``04/13/2026`` can only be month-first, while ``03/04/2026``
+    from the same deck resolved to day-first because that pattern is listed
+    first. A US deck therefore taught the deriver two formats and was then
+    reported against whichever won.
+
+    ``prefer`` settles it. Given a format the candidate parses under, that
+    format is what is reported, so the decision is made once for a body of text
+    rather than separately for every date in it. The caller supplies it from
+    :func:`resolve_date_convention` when learning, and from the learned
+    convention when checking.
     """
     out: list[DateReading] = []
     for match in _DATE_CANDIDATE.finditer(text):
         candidate = match.group(1).strip()
-        for pattern in DATE_FORMATS:
-            try:
-                datetime.strptime(candidate, pattern)
-            except ValueError:
-                continue
-            out.append(DateReading(raw=candidate, format=pattern))
-            break
+        formats = date_formats(candidate)
+        if not formats:
+            continue
+        chosen = prefer if prefer in formats else formats[0]
+        out.append(
+            DateReading(
+                raw=candidate,
+                format=chosen,
+                alternatives=tuple(f for f in formats if f != chosen),
+            )
+        )
     return out
+
+
+def resolve_date_convention(texts: Iterable[str]) -> str | None:
+    """Which ordering a body of text uses, from the dates that disambiguate.
+
+    A date whose day exceeds twelve can only be read one way, and it speaks for
+    every ambiguous date beside it. Where the evidence points one way this
+    returns that format; where there is none, or where the text genuinely
+    carries both orderings, it returns None and the caller falls back to
+    resolving each date on its own -- which is the honest answer for a deck
+    that really does mix them.
+    """
+    unambiguous: set[str] = set()
+    for text in texts:
+        for match in _DATE_CANDIDATE.finditer(text):
+            formats = date_formats(match.group(1).strip())
+            if len(formats) == 1:
+                unambiguous.add(formats[0])
+    candidates = unambiguous & set(DATE_FORMATS)
+    orderings = {f for f in candidates if _is_numeric_ordering(f)}
+    if len(orderings) != 1:
+        return None
+    return next(iter(orderings))
+
+
+#: The all-numeric slash and dot formats, which are the ones that collide.
+def _is_numeric_ordering(fmt: str) -> bool:
+    return "%B" not in fmt and "%b" not in fmt and ("/" in fmt or "." in fmt)
 
 
 # --------------------------------------------------------------------------------------

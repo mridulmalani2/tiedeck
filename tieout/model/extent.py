@@ -43,9 +43,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
-from tieout.model.deck import ShapeModel, SlideModel, TextParagraph, TextRun
+from tieout.model.deck import (
+    ALIGN_CENTRE,
+    ALIGN_RIGHT,
+    SPREAD_ALIGNMENTS,
+    ShapeModel,
+    SlideModel,
+    TextParagraph,
+    TextRun,
+)
 from tieout.model.fonts import measure_text, resolve_font_path
 
 #: Upper bound on one character's advance, in ems. The widest glyph in a bold
@@ -86,6 +94,10 @@ class InkExtent:
     #: the frame itself is the only honest answer there.
     narrowed_x: bool
     narrowed_y: bool
+    #: True when every run was measured in a real typeface. False when any run
+    #: took the bound instead, in which case the rectangle is sound but loose,
+    #: and a finding computed from it is weaker than one from a measurement.
+    measured: bool = False
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -109,16 +121,27 @@ def _run_font_path(run: TextRun) -> str | None:
     return resolve_font_path(font.name, bold=bool(font.bold), italic=bool(font.italic))
 
 
-def _run_width(run: TextRun) -> float:
-    """The run's advance, measured where the face is available and bounded where not."""
+def _text_width(run: TextRun, text: str) -> float:
+    """``text``'s advance in ``run``'s face, measured where it is available.
+
+    Takes the text rather than reading ``run.text`` so that one word of a run
+    can be measured on its own, which is what wrapping needs.
+    """
+    if not text:
+        return 0.0
     size_pt = _run_size(run)
     path = _run_font_path(run)
     if path is not None:
         try:
-            return measure_text(path, run.text, size_pt)[0]
+            return measure_text(path, text, size_pt)[0]
         except OSError:  # pragma: no cover - a font file that stops being readable
             pass
-    return len(run.text) * size_pt * MAX_ADVANCE_EM
+    return len(text) * size_pt * MAX_ADVANCE_EM
+
+
+def _run_width(run: TextRun) -> float:
+    """The run's advance, measured where the face is available and bounded where not."""
+    return _text_width(run, run.text)
 
 
 def _run_line_height(run: TextRun) -> float:
@@ -131,6 +154,112 @@ def _run_line_height(run: TextRun) -> float:
         except OSError:  # pragma: no cover - a font file that stops being readable
             pass
     return size_pt * MAX_LINE_EM
+
+
+def paragraph_available_width(available: float, paragraph: TextParagraph) -> float:
+    """The width one paragraph actually gets inside a frame's available width.
+
+    A bulleted or indented paragraph does not get the whole frame. ``marL``
+    moves every line of it in, and ``indent`` moves the first line relative to
+    that -- negative for the hanging indent a bullet uses, positive for a
+    first-line indent.
+
+    The narrowest any line gets is what bounds the line count, so a positive
+    first-line indent is subtracted and a negative one is not: treating the
+    hanging line as narrower than it is only ever over-counts lines, which is
+    the safe direction, while ignoring a first-line indent under-counts them.
+
+    Named and shared rather than inlined, because the frame's width and the
+    width a paragraph is laid out in are different quantities and this module
+    read the first where it meant the second. The loader had ``marL`` all along.
+    """
+    width = available - (paragraph.margin_left_pt or 0.0) - (paragraph.margin_right_pt or 0.0)
+    width -= max(0.0, paragraph.indent_pt or 0.0)
+    return max(0.0, width)
+
+
+def column_width(shape: ShapeModel, available: float) -> float:
+    """The width one column of the body gets, out of the frame's available width.
+
+    A body in two columns wraps every paragraph at half the frame less the gap,
+    and needs about twice the lines. Ignoring that under-counts lines and
+    shrinks the box past its ink, the same way ignoring ``marL`` did.
+    """
+    columns = max(1, shape.text_columns)
+    if columns == 1:
+        return available
+    return max(0.0, (available - (columns - 1) * shape.column_spacing_pt) / columns)
+
+
+def _paragraph_words(paragraph: TextParagraph) -> tuple[list[float], float]:
+    """An upper bound on each word's advance, and on one space.
+
+    A word is measured in the face of every run it spans, because a run
+    boundary can fall inside one -- a bolded stem, an italicised suffix -- and
+    splitting the word there would measure two narrow pieces instead of one
+    wide one.
+    """
+    widths: list[float] = []
+    current = 0.0
+    started = False
+    space = 0.0
+    for run in paragraph.runs:
+        size_pt = _run_size(run)
+        space = max(space, size_pt * MAX_ADVANCE_EM)
+        piece = ""
+        for character in run.text:
+            if character.isspace():
+                current += _text_width(run, piece)
+                piece = ""
+                if started:
+                    widths.append(current)
+                current = 0.0
+                started = False
+                continue
+            piece += character
+            started = True
+        current += _text_width(run, piece)
+    if started:
+        widths.append(current)
+    return widths, space
+
+
+def _wrapped_lines(paragraph: TextParagraph, available: float) -> int:
+    """How many lines this paragraph needs, wrapping at word boundaries.
+
+    Dividing the paragraph's total advance by the available width and rounding
+    up is *not* an upper bound, because wrapping does not pack that tightly: four
+    words each a little over half the line width need four lines, while the
+    division says three. The module's whole guarantee is that it never narrows a
+    box past its ink, and that arithmetic broke it -- by 40% on a box measured
+    against this, which is enough to hide an overlap or a margin breach.
+
+    A word wider than the line is character-wrapped by PowerPoint, so it is
+    counted for every line it spans rather than for one.
+    """
+    available = paragraph_available_width(available, paragraph)
+    if available <= 0:
+        return 1
+    words, space = _paragraph_words(paragraph)
+    if not words:
+        return 1
+    lines = 0
+    current = 0.0
+    for width in words:
+        if width > available:
+            # Ends whatever line was open, then runs over as many as it needs.
+            lines += (1 if current else 0) + math.ceil(width / available)
+            current = 0.0
+            continue
+        if not current:
+            lines += 1
+            current = width
+        elif current + space + width <= available:
+            current += space + width
+        else:
+            lines += 1
+            current = width
+    return max(1, lines)
 
 
 def _paragraph_width_bound(paragraph: TextParagraph) -> float:
@@ -201,14 +330,23 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
     total_height = 0.0
     for paragraph in paragraphs:
         bound = _paragraph_width_bound(paragraph)
+        # An indented paragraph is laid out in less than the frame's width and
+        # its ink starts further in. Both matter: the first decides how many
+        # lines it takes, the second where its widest line ends.
+        indent = available_width - paragraph_available_width(available_width, paragraph)
         if wraps:
-            lines = max(1, math.ceil(bound / available_width)) if available_width else 1
-            widest = max(widest, min(bound, available_width))
+            # Lines are counted at the column's width and stacked as if in one
+            # column: the real body spreads them across columns and is shorter,
+            # so this is an upper bound, which is the only kind allowed here.
+            lines = _wrapped_lines(paragraph, column_width(shape, available_width))
+            widest = max(widest, min(bound + indent, available_width))
+            if shape.text_columns > 1:
+                widest = available_width  # the ink spans every column
         else:
             # No wrapping: the text runs on as one line, which may be wider than
             # the frame. That is LO-005's finding, not a narrowing.
             lines = 1
-            widest = max(widest, bound)
+            widest = max(widest, bound + indent)
         total_height += lines * _paragraph_line_height_bound(paragraph)
         total_height += (paragraph.space_before_pt or 0.0) + (paragraph.space_after_pt or 0.0)
 
@@ -222,7 +360,40 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
     return InkExtent(
         left=left, top=top, width=width, height=height,
         narrowed_x=narrowed_x, narrowed_y=narrowed_y,
+        measured=_all_measured(paragraphs),
     )
+
+
+def _all_measured(paragraphs: list[TextParagraph]) -> bool:
+    """Whether every run with text in it resolved a typeface to measure in."""
+    return all(
+        _run_font_path(run) is not None
+        for paragraph in paragraphs
+        for run in paragraph.runs
+        if run.text
+    )
+
+
+def ink_confidence(shape: ShapeModel) -> Literal["high", "medium"]:
+    """How far a geometric finding about ``shape`` can be trusted.
+
+    A rule declares one confidence for every finding it makes. That is wrong
+    for the geometric rules, whose findings inherit the layout model's error,
+    and the model's error is not one number: text measured in its own typeface
+    is a measurement, text bounded at 1.15 em per character is a rectangle the
+    ink is somewhere inside. An overlap between two bounded boxes may be an
+    overlap of two bounds and no ink at all. The same rule, the same declared
+    confidence, materially different reliability -- and until now no way to
+    say so.
+
+    A shape whose frame is its ink -- a filled or outlined shape, a picture, a
+    table -- is measured by definition. A text-only shape is as trustworthy as
+    its weakest run.
+    """
+    if not _is_text_only(shape):
+        return "high"
+    paragraphs = [p for p in shape.text_frame_paragraphs if p.text]
+    return "high" if _all_measured(paragraphs) else "medium"
 
 
 def _place_horizontally(
@@ -239,13 +410,13 @@ def _place_horizontally(
 
     alignments = {p.alignment for p in paragraphs}
     # Mixed alignment, or justified text, can put ink anywhere across the frame.
-    if len(alignments) > 1 or alignments & {"justify", "justify_low", "distribute"}:
+    if len(alignments) > 1 or alignments & SPREAD_ALIGNMENTS:
         return (box_left, available)
 
     alignment = next(iter(alignments), None)
-    if alignment in ("center", "ctr"):
+    if alignment == ALIGN_CENTRE:
         return (box_left + (available - widest) / 2.0, widest)
-    if alignment in ("right", "r"):
+    if alignment == ALIGN_RIGHT:
         return (box_left + available - widest, widest)
     # Left, or inherited and therefore left in every house style TieOut has met.
     return (box_left, widest)

@@ -385,12 +385,33 @@ class SuppressionFile(_Model):
     client: str = ""
     suppressions: list[Suppression] = Field(default_factory=list)
 
-    def matches(self, rule_id: str, slide_index: int | None) -> bool:
+    def matches(
+        self,
+        rule_id: str,
+        slide_index: int | None,
+        shape_name: str | None = None,
+    ) -> bool:
+        """Whether an accepted finding covers this one.
+
+        ``shape_name`` narrows a suppression to the shape it was accepted for.
+        Without it a suppression covered every finding its rule raised anywhere
+        on the slide, so accepting one judged-correct LO-003 blinded that rule
+        for that slide permanently -- and a genuine defect introduced on the
+        next turn of the deck was filed as already accepted and never shown.
+
+        A suppression that records no shape still matches the whole slide,
+        because that is what ``--accept RULE@slideN`` asks for. One that records
+        a shape matches only that shape, and stops matching if the shape is
+        renamed -- which errs towards reporting, the safe direction.
+        """
         for entry in self.suppressions:
             if entry.rule_id != rule_id:
                 continue
-            if entry.slide_index is None or entry.slide_index == slide_index:
-                return True
+            if entry.slide_index is not None and entry.slide_index != slide_index:
+                continue
+            if entry.shape_name and entry.shape_name != shape_name:
+                continue
+            return True
         return False
 
     def repeat_offenders(self, threshold: int = 3) -> list[Suppression]:

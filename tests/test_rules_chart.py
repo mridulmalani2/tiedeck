@@ -237,11 +237,20 @@ def test_ch003_is_silent_on_a_bar_chart_that_starts_at_zero(tmp_path, reference_
     assert not _run(deck, reference_profile, "CH-003")
 
 
-def test_ch003_is_silent_on_an_axis_left_to_scale_itself(tmp_path, reference_profile):
-    """An automatic axis has no minimum in the file at all, and PowerPoint's own
-    default for a bar chart is zero. Silence here is genuinely silence."""
+def test_ch003_records_an_axis_left_to_scale_itself_as_unchecked(
+    tmp_path, reference_profile
+):
+    """An automatic axis has no minimum in the file at all. It is *not* safe to
+    call that zero: the chart engine scales it from the data at render time, and
+    a column chart whose values cluster well above zero is given a non-zero
+    floor without anyone setting one -- the classic truncated bar, produced
+    automatically. The rule cannot tell, so it must not fall silent as if it
+    had checked and found nothing."""
     deck = _slide_with_chart(tmp_path / "auto.pptx", caption="Revenue (EUR m)")
-    assert not _run(deck, reference_profile, "CH-003")
+    result = run_rules(deck, reference_profile, include=["CH-003"])
+    assert not result.findings
+    assert result.unchecked, "an automatic axis was passed over in silence"
+    assert "automatic" in result.unchecked[0].reason
 
 
 def test_ch003_leaves_a_line_chart_alone(tmp_path, reference_profile):
@@ -350,6 +359,24 @@ def test_ch005_is_silent_when_every_series_agrees(tmp_path, reference_profile):
         label_formats=["0.0", "0.0"],
     )
     assert not _run(deck, reference_profile, "CH-005")
+
+
+def test_ch005_records_a_series_labelled_in_its_source_format_rather_than_guessing(
+    tmp_path, reference_profile
+):
+    """A "General" label shows each value at whatever precision the source cell
+    holds, so its precision is a property of the data rather than the chart.
+    Comparing it would be a guess; passing it over in silence would let a
+    genuinely inconsistent chart read as a checked one."""
+    deck = _slide_with_chart(
+        tmp_path / "general.pptx",
+        caption="Revenue and EBITDA (EUR m)",
+        label_formats=["0.0", "General"],
+    )
+    result = run_rules(deck, reference_profile, include=["CH-005"])
+    assert not result.findings
+    assert result.unchecked, "a General-formatted series was passed over in silence"
+    assert "EBITDA" in result.unchecked[0].reason
 
 
 def test_ch005_does_not_compare_a_percentage_against_a_currency(

@@ -13,12 +13,13 @@ a pre-send gate.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from rich.console import Console
 
 from tieout.model.deck import ShapeRef
-from tieout.profile.schema import Severity
+from tieout.profile.schema import Confidence, Severity
 from tieout.report import console as console_report
 from tieout.report import html as html_report
 from tieout.report import json_out
@@ -150,6 +151,75 @@ def test_the_console_summary_counts_each_severity(capsys):
     assert "1 blocker" in printed
     assert "1 major" in printed
     assert "1 minor" in printed
+
+
+def _many() -> AuditResult:
+    """Enough findings that a reader needs telling where to start."""
+    result = _synthetic()
+    for index in range(4, 12):
+        result.findings.append(
+            Finding(
+                rule_id="TY-002",
+                category="typography",
+                severity="minor",
+                confidence="high",
+                where=ShapeRef(3, index, f"Box {index}"),
+                message="double space",
+            )
+        )
+    result.findings.append(
+        Finding(
+            rule_id="CO-003",
+            category="consistency",
+            severity="major",
+            confidence="medium",
+            where=ShapeRef(4, 99, "Financial table"),
+            message="'Total' states 9,900 but the rows above it sum to 9,828.5",
+            measured="9,900",
+            expected="9,828.5 (+/-2.5 rounding)",
+            remedy="Correct the total, or the rows it sums",
+        )
+    )
+    return result
+
+
+def test_the_report_says_what_to_fix_first(capsys):
+    """Grouping by slide is the order someone fixes in, not the order they decide
+    in. What stops the deck going out comes before everything else."""
+    console_report.render(_many(), console=_console())
+    printed = capsys.readouterr().out
+    assert "fix first" in printed
+    # The block ends where the first slide table begins: a title line reading
+    # "slide N" on its own. "slide 1" also appears *inside* the block, on the
+    # blocker's own line, so a plain search would cut the block short.
+    first_table = re.search(r"^slide \d+\s*$", printed, re.MULTILINE)
+    assert first_table is not None
+    block = printed[printed.index("fix first") : first_table.start()]
+    assert "HY-004" in block, "the blocker leads"
+    assert "CO-003" in block and "BR-002" in block, "majors follow"
+    assert "TY-002" not in block, "minors wait for the slide tables"
+    assert block.index("HY-004") < block.index("BR-002"), "severity order"
+    assert "Correct the total" in block, "the remedy is right there"
+
+
+def test_a_short_report_is_its_own_triage(capsys):
+    console_report.render(_synthetic(), console=_console())
+    assert "fix first" not in capsys.readouterr().out
+
+
+def test_a_narrow_terminal_gets_stacked_findings_that_do_not_fold(capsys):
+    """At 80 columns the five-column table shrank every cell and the measured
+    and expected values folded into fragments of two or three characters."""
+    narrow = Console(width=80, force_terminal=False, soft_wrap=False)
+    console_report.render(_synthetic(), console=narrow)
+    printed = capsys.readouterr().out
+    assert "left 834pt" in printed and "left 852pt" in printed, "values whole, not folded"
+    assert "because observed on 18 of 26 slides" in printed, "evidence labelled as such"
+
+
+def test_provenance_is_labelled_so_it_cannot_read_as_the_claim(capsys):
+    console_report.render(_synthetic(), console=_console())
+    assert "because " in capsys.readouterr().out
 
 
 def test_suppressed_findings_are_acknowledged_not_hidden(capsys):
@@ -417,3 +487,44 @@ def test_clustering_does_not_merge_across_slides_or_rules():
 def test_a_lone_finding_is_left_exactly_as_it_was():
     only = _synthetic().findings[0]
     assert cluster_findings([only]) == [only]
+
+
+
+# --------------------------------------------------------------------------------------
+# Confidence reaches the gate
+# --------------------------------------------------------------------------------------
+
+
+def _finding(severity: Severity, confidence: Confidence) -> Finding:
+    return Finding(
+        rule_id="LO-004",
+        category="layout",
+        severity=severity,
+        confidence=confidence,
+        where=ShapeRef(1, 1, "Box"),
+        message="overlap",
+    )
+
+
+def test_a_low_confidence_finding_is_reported_but_does_not_gate():
+    """Severity says how bad if true; confidence says how likely to be true.
+    A gate that reads only the first fails a deck on a heuristic as readily
+    as on arithmetic."""
+    result = _synthetic()
+    result.findings = [_finding("blocker", "low")]
+    assert not result.exceeds("blocker"), "low confidence never gates by default"
+    assert result.exceeds("blocker", min_confidence="low"), "unless asked to"
+
+
+def test_the_default_gate_admits_medium_confidence():
+    result = _synthetic()
+    result.findings = [_finding("major", "medium")]
+    assert result.exceeds("major")
+    assert not result.exceeds("major", min_confidence="high")
+
+
+def test_the_console_marks_a_finding_that_is_less_than_sure(capsys):
+    result = _synthetic()
+    result.findings = [_finding("major", "medium")]
+    console_report.render(result, console=_console())
+    assert "(medium confidence)" in capsys.readouterr().out

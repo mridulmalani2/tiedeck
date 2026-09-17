@@ -547,3 +547,93 @@ def test_the_profile_directory_honours_its_environment_variable(
     assert _invoke("learn", str(deck), "--client", "shared").exit_code == 0
     assert (elsewhere / "shared.yaml").exists()
     assert not (tmp_path / "profiles").exists()
+
+
+# --------------------------------------------------------------------------------------
+# An audit that did not cover the deck must not read as a clean one
+# --------------------------------------------------------------------------------------
+
+
+def test_a_crashed_rule_fails_the_run(workspace, monkeypatch):
+    """The console said "1 rule failed to run" in red and the exit code said
+    zero. A pre-send gate reads the exit code, so a deck could ship because the
+    checker broke rather than because it was clean."""
+    from tieout.rules import layout
+
+    def explode(self, deck, profile):
+        raise RuntimeError("malformed chart part")
+
+    monkeypatch.setattr(layout.NearMissAlignment, "run", explode)
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_clean.pptx", "--client", "demo", "--rules", "LO-003"
+    )
+
+    assert result.exit_code == EXIT_ERROR
+    assert "Incomplete audit" in result.output
+    assert "malformed chart part" in result.output
+
+
+# --------------------------------------------------------------------------------------
+# An acceptance covers what it was given, not the whole slide
+# --------------------------------------------------------------------------------------
+
+
+def test_an_acceptance_can_be_scoped_to_one_shape(workspace):
+    """Accepting a judged-correct finding used to blind its rule for the whole
+    slide, so a genuine defect introduced on the next turn of the deck was filed
+    as already accepted and never shown."""
+    _learn(workspace)
+    _invoke(
+        "check",
+        "decks/reference_dirty.pptx",
+        "--client",
+        "demo",
+        "--rules",
+        "BR-002",
+        "--accept",
+        "BR-002@slide5:Some Other Shape",
+        "--quiet",
+    )
+    written = (workspace / "profiles" / "demo.suppress.yaml").read_text(encoding="utf-8")
+    assert "Some Other Shape" in written
+
+    # The finding is on a different shape, so the acceptance must not hide it.
+    after = _invoke(
+        "check", "decks/reference_dirty.pptx", "--client", "demo", "--rules", "BR-002"
+    )
+    assert "BR-002" in after.output, (
+        "an acceptance scoped to one shape must not suppress another shape's finding"
+    )
+
+
+def test_a_shape_scoped_acceptance_needs_a_slide(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check",
+        "decks/reference_clean.pptx",
+        "--client",
+        "demo",
+        "--accept",
+        "BR-002@:Ring 3",
+    )
+    assert result.exit_code == EXIT_ERROR
+
+
+
+def test_an_unknown_gate_confidence_is_a_usage_error(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_clean.pptx", "--client", "demo",
+        "--gate-confidence", "certain",
+    )
+    assert result.exit_code == EXIT_ERROR
+
+
+def test_the_gate_confidence_is_accepted(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_clean.pptx", "--client", "demo",
+        "--gate-confidence", "low", "--quiet",
+    )
+    assert result.exit_code in (0, EXIT_FINDINGS)

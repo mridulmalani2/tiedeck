@@ -868,10 +868,27 @@ class DateFormat(Rule):
     ``typography.date_format``. One finding per slide per offending format, so a
     table of eight dates all in one wrong format is one finding.
 
-    Known false positive: ``%d/%m/%Y`` and ``%m/%d/%Y`` are indistinguishable
-    when the day is twelve or lower, and the first format listed in
-    :data:`tieout.text.DATE_FORMATS` wins. A deck whose convention is the other
-    one of that pair gets a finding on every such date.
+    ``%d/%m/%Y`` and ``%m/%d/%Y`` are indistinguishable when the day is twelve
+    or lower. Where a date could be read as the learned convention, it is: a
+    deck written month-first was otherwise reported on every date whose day fell
+    below the thirteenth, because those parse day-first too and that pattern is
+    listed first. Only a date that *cannot* be the house convention is a
+    finding, which is the only kind a reader could act on anyway.
+
+    Known false positive: something that is not a date but is shaped like one.
+    A version number, a ratio written with slashes or a docket reference of the
+    form ``1.2.2024`` matches the candidate pattern and parses under one of the
+    numeric formats, and is then reported for being in the wrong one. The cost
+    of the opposite choice -- demanding surrounding context before believing a
+    date -- is missing the dates that appear alone in a footer, which is where a
+    stale date does the most damage.
+
+    The resolution above also trades one kind of error for another: a date
+    genuinely written the other way round in an otherwise consistent deck now
+    reads as the house convention and is not reported. That is a deliberate
+    miss. It cannot be distinguished from a correctly-written date by anything
+    in the file, and reporting it would mean reporting every such date in every
+    month-first deck.
     """
 
     id: ClassVar[str] = "TY-008"
@@ -891,7 +908,7 @@ class DateFormat(Rule):
             # Format -> first shape, one example as written, and a count.
             offenders: dict[str, tuple[ShapeModel, str, int]] = {}
             for passage in _passages(slide):
-                for reading in find_dates(passage.text):
+                for reading in find_dates(passage.text, prefer=convention):
                     if reading.format == convention:
                         continue
                     shape, example, count = offenders.get(

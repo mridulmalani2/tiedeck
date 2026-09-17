@@ -15,19 +15,33 @@ removing it and watching the answer change.
 
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Sequence
 
 import pytest
+from pptx import Presentation
+from pptx.util import Emu, Pt
 
-from tieout.model.deck import ShapeModel, ShapeRef, SlideModel, TextParagraph, TextRun
+from tieout.model.deck import (
+    ALIGN_CENTRE,
+    ShapeModel,
+    ShapeRef,
+    SlideModel,
+    TextParagraph,
+    TextRun,
+)
 from tieout.model.extent import (
     MAX_ADVANCE_EM,
     MAX_LINE_EM,
+    column_width,
     ink_bbox_pt,
     ink_extent,
     is_decorative_bleed,
+    paragraph_available_width,
 )
 from tieout.model.inherit import ResolvedFill, ResolvedFont, ResolvedLine
+from tieout.model.loader import load_deck
 
 CANVAS = (960.0, 540.0)
 
@@ -172,7 +186,7 @@ def test_a_run_with_no_resolved_size_does_not_narrow_on_a_guess() -> None:
 
 @pytest.mark.parametrize(
     "alignment, expected_left",
-    [("left", 100.0), ("center", None), ("right", None)],
+    [("left", 100.0), (ALIGN_CENTRE, None), ("right", None)],
 )
 def test_alignment_places_the_ink(alignment, expected_left) -> None:
     shape = _shape(width=400.0, paragraphs=[_paragraph("Hi", alignment=alignment)])
@@ -403,3 +417,292 @@ def test_an_unavailable_face_falls_back_to_the_bound() -> None:
     extent = ink_extent(_shape(width=400.0, paragraphs=[paragraph]))
     assert extent is not None
     assert extent.width == pytest.approx(2 * 10.0 * MAX_ADVANCE_EM)
+
+
+# --------------------------------------------------------------------------------------
+# The bound has to be a bound
+#
+# This module's whole promise is that it never narrows a box past its ink, so a
+# geometric rule reading the narrowed box cannot miss a defect the frame would
+# have caught. That promise was stated in the docstring and in the README and was
+# not true: line count came from dividing the paragraph's total advance by the
+# available width and rounding up, and wrapping does not pack that tightly.
+#
+# Four words each a little over half the line width need four lines; the division
+# says three. The box came out 40% shorter than its own bound allowed.
+#
+# These tests generate the cases rather than naming them, because naming them is
+# what the suite was already doing and the arithmetic slipped through anyway.
+# --------------------------------------------------------------------------------------
+
+#: A face that is certainly not installed, so every run takes the bounded path.
+#: The measured path is a real measurement and needs no bound to hold it up.
+_UNINSTALLED = "NoSuchFaceEverInstalled"
+_SIZE_PT = 10.0
+
+
+def _lines_needed(text: str, available_pt: float) -> int:
+    """Greedy word wrap under the same per-character bound the module uses."""
+    per_char = _SIZE_PT * MAX_ADVANCE_EM
+    if available_pt <= 0:
+        return 1  # what the module answers for a frame narrower than its margins
+    lines = 0
+    current = 0.0
+    for word in text.split():
+        width = len(word) * per_char
+        if width > available_pt:
+            lines += (1 if current else 0) + math.ceil(width / available_pt)
+            current = 0.0
+        elif not current:
+            lines += 1
+            current = width
+        elif current + per_char + width <= available_pt:
+            current += per_char + width
+        else:
+            lines += 1
+            current = width
+    return max(1, lines)
+
+
+def _wrapping_deck(path, cases):
+    """One slide per case. A case is ``(text, available_chars)``, optionally with
+    a ``marL``, an ``indent``, a ``marR`` in points, and a column count."""
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for case in cases:
+        text, available_chars = case[0], case[1]
+        margin_left, indent, margin_right, columns = (*case, 0.0, 0.0, 0.0, 1)[2:6]
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        width = available_chars * _SIZE_PT * MAX_ADVANCE_EM + 14.4
+        box = slide.shapes.add_textbox(Pt(20), Pt(20), Pt(width), Pt(500))
+        frame = box.text_frame
+        frame.word_wrap = True
+        frame.text = text
+        properties = frame.paragraphs[0]._p.get_or_add_pPr()
+        if margin_left:
+            properties.set("marL", str(int(margin_left * 12700)))
+        if indent:
+            properties.set("indent", str(int(indent * 12700)))
+        if margin_right:
+            properties.set("marR", str(int(margin_right * 12700)))
+        if columns > 1:
+            frame._txBody.bodyPr.set("numCol", str(columns))
+            frame._txBody.bodyPr.set("spcCol", str(int(12.0 * 12700)))
+        for run in frame.paragraphs[0].runs:
+            run.font.size = Pt(_SIZE_PT)
+            run.font.name = _UNINSTALLED
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _cases():
+    """The counterexample that started this, then a generated spread.
+
+    The spread carries bullet indents too. ``marL`` and ``indent`` narrow the
+    width a paragraph is laid out in, and reading the frame's width where the
+    paragraph's was meant re-opened exactly the hole the wrap count closed --
+    a one-inch indent put the box a third short.
+    """
+    cases: list[tuple[str, int, float, float, float, int]] = [
+        ("aaaaa bbbbb ccccc ddddd eeeee", 10, 0.0, 0.0, 0.0, 1),
+        ("aaaaa bbbbb ccccc ddddd eeeee fffff", 20, 72.0, 0.0, 0.0, 1),
+    ]
+    rng = random.Random(7)
+    per_char = _SIZE_PT * MAX_ADVANCE_EM
+    while len(cases) < 42:
+        words = rng.randint(2, 8)
+        length = rng.randint(2, 14)
+        available_chars = rng.randint(6, 40)
+        margin_left = rng.choice([0.0, 18.0, 36.0, 72.0])
+        indent = rng.choice([0.0, -18.0, 18.0])
+        margin_right = rng.choice([0.0, 0.0, 18.0, 36.0])
+        columns = rng.choice([1, 1, 1, 2, 3])
+        # A frame narrower than its margins and gutters lays out nothing; it is
+        # not a wrap case, and the module answers "one line" for it by fiat.
+        column = (available_chars * per_char - (columns - 1) * 12.0) / columns
+        if column - margin_left - max(0.0, indent) - margin_right < 3 * per_char:
+            continue
+        cases.append(
+            (
+                " ".join(chr(97 + index % 26) * length for index in range(words)),
+                available_chars,
+                margin_left,
+                indent,
+                margin_right,
+                columns,
+            )
+        )
+    return cases
+
+
+def test_the_ink_box_is_never_shorter_than_the_text_needs(tmp_path):
+    cases = _cases()
+    deck = _wrapping_deck(tmp_path / "wrapping.pptx", cases)
+
+    violations = []
+    for slide, case in zip(deck.slides, cases, strict=True):
+        text = case[0]
+        shape = next(iter(slide.leaf_shapes()))
+        extent = ink_extent(shape)
+        if extent is None:
+            continue
+        frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        available = paragraph_available_width(
+            column_width(shape, frame), shape.text_frame_paragraphs[0]
+        )
+        needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
+        if extent.height + 1e-6 < needed:
+            violations.append(
+                f"{text[:30]!r} in {available:.0f}pt: box {extent.height:.1f}pt, "
+                f"text needs {needed:.1f}pt"
+            )
+
+    assert not violations, "the bound is not a bound:\n  " + "\n  ".join(violations)
+
+
+def test_the_case_that_broke_it(tmp_path):
+    """Five words at half the line width each. ceil() said three lines; they
+    need five, and the box came out 45pt where the text needs 75."""
+    text = "aaaaa bbbbb ccccc ddddd eeeee"
+    deck = _wrapping_deck(tmp_path / "counterexample.pptx", [(text, 10, 0.0, 0.0)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    extent = ink_extent(shape)
+
+    assert extent is not None
+    available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    assert _lines_needed(text, available) == 5
+    assert extent.height >= 5 * _SIZE_PT * MAX_LINE_EM - 1e-6
+
+
+def test_a_word_wider_than_its_line_is_counted_for_every_line_it_spans(tmp_path):
+    """PowerPoint character-wraps a word that cannot fit. Counting it as one
+    line would narrow the box past the ink again."""
+    text = "a" * 40
+    deck = _wrapping_deck(tmp_path / "longword.pptx", [(text, 10, 0.0, 0.0)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    extent = ink_extent(shape)
+
+    if extent is not None:
+        available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
+        assert extent.height + 1e-6 >= needed
+
+
+# --------------------------------------------------------------------------------------
+# The alignment vocabulary is closed
+#
+# The loader spelled "centre" and this module checked for ALIGN_CENTRE, so no
+# paragraph ever matched and every centred one was placed as though left aligned.
+# A section divider's title was measured at the left margin while it renders in
+# the middle of the slide. Found by rendering the deck and asking where the words
+# actually landed; nothing in the suite could have, because the fixture's titles
+# are left aligned too.
+# --------------------------------------------------------------------------------------
+
+
+def test_every_alignment_the_loader_emits_is_one_this_module_places():
+    from tieout.model.deck import ALIGN_RIGHT, ALIGNMENTS, SPREAD_ALIGNMENTS
+    from tieout.model.loader import _ALIGNMENT_MAP
+
+    emitted = set(_ALIGNMENT_MAP.values())
+    assert emitted <= ALIGNMENTS, f"the loader emits {emitted - ALIGNMENTS} nobody names"
+    # Every value is either one of the two the placer moves ink for, one it
+    # declines to narrow, or the left default it falls through to.
+    placed = {ALIGN_CENTRE, ALIGN_RIGHT} | SPREAD_ALIGNMENTS | {"left"}
+    assert emitted <= placed, f"{emitted - placed} would silently fall through to left"
+
+
+def test_a_centred_paragraph_is_placed_in_the_middle_of_its_frame():
+    shape = _shape(
+        left=36.0,
+        top=300.0,
+        width=888.0,
+        height=30.0,
+        paragraphs=[_paragraph("Section I", 24.0, alignment=ALIGN_CENTRE)],
+    )
+    extent = ink_extent(shape)
+    assert extent is not None and extent.narrowed_x
+    frame_centre = 36.0 + 888.0 / 2.0
+    ink_centre = extent.left + extent.width / 2.0
+    assert abs(ink_centre - frame_centre) < 1e-6, (
+        f"ink centred at {ink_centre:.1f}, frame at {frame_centre:.1f}"
+    )
+    assert extent.left > 36.0 + 200.0, "a centred title does not start at the left margin"
+
+
+
+# --------------------------------------------------------------------------------------
+# The model says how sure it is
+# --------------------------------------------------------------------------------------
+
+
+def _shape_in_face(face: str, fill: ResolvedFill | None = None) -> ShapeModel:
+    font = ResolvedFont(
+        name=face, size_pt=10.0, bold=False, italic=False, underline=False, color_hex="000000"
+    )
+    paragraph = TextParagraph(runs=(TextRun(text="Revenue grew", font=font),), level=0)
+    return _shape(width=400.0, paragraphs=[paragraph], fill=fill)
+
+
+def test_a_bounded_run_makes_the_extent_and_the_confidence_medium():
+    """Text bounded at 1.15em per character is a rectangle the ink is somewhere
+    inside, not a measurement, and a finding built on it must say so."""
+    from tieout.model.extent import ink_confidence
+
+    shape = _shape_in_face("NoSuchFaceEverInstalled")
+    extent = ink_extent(shape)
+    assert extent is not None and not extent.measured
+    assert ink_confidence(shape) == "medium"
+
+
+def test_a_measured_run_keeps_high_confidence():
+    """Liberation Sans is installed wherever the suite runs, including CI."""
+    from tieout.model.extent import ink_confidence
+    from tieout.model.fonts import resolve_font_path
+
+    if resolve_font_path("Liberation Sans", bold=False, italic=False) is None:
+        pytest.skip("Liberation Sans is not installed here")
+    shape = _shape_in_face("Liberation Sans")
+    extent = ink_extent(shape)
+    assert extent is not None and extent.measured
+    assert ink_confidence(shape) == "high"
+
+
+def test_a_filled_shape_is_measured_by_definition():
+    """A fill paints the whole frame, so the frame is the ink and there is no
+    bound involved, whatever typeface the text is in."""
+    from tieout.model.extent import ink_confidence
+
+    shape = _shape_in_face(
+        "NoSuchFaceEverInstalled",
+        fill=ResolvedFill(kind="solid", hex="112233", source="test"),
+    )
+    assert ink_confidence(shape) == "high"
+
+
+
+def test_a_two_column_body_needs_roughly_twice_the_lines(tmp_path):
+    """Each paragraph wraps at the column's width, not the frame's, and
+    counting lines at the frame's width shrank the box past its ink."""
+    text = " ".join(chr(97 + i) * 4 for i in range(12))
+    deck = _wrapping_deck(tmp_path / "columns.pptx", [(text, 30, 0.0, 0.0, 0.0, 2)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    assert shape.text_columns == 2
+    extent = ink_extent(shape)
+    assert extent is not None
+    frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    at_frame_width = _lines_needed(text, frame)
+    at_column_width = _lines_needed(text, column_width(shape, frame))
+    assert at_column_width > at_frame_width
+    assert extent.height + 1e-6 >= at_column_width * _SIZE_PT * MAX_LINE_EM
+
+
+def test_a_right_margin_narrows_the_paragraph_too(tmp_path):
+    text = "aaaaa bbbbb ccccc ddddd eeeee fffff"
+    deck = _wrapping_deck(tmp_path / "marr.pptx", [(text, 20, 0.0, 0.0, 72.0, 1)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    paragraph = shape.text_frame_paragraphs[0]
+    assert paragraph.margin_right_pt == 72.0
+    frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    assert paragraph_available_width(frame, paragraph) == frame - 72.0

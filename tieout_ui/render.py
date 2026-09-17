@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -130,29 +131,35 @@ class Renderer:
         return candidates[0] if candidates else None
 
     def _rasterise(self, pdf: Path) -> RenderResult:
-        try:
-            import pypdfium2
-        except ImportError:  # pragma: no cover - declared by the [ui] extra
-            return RenderResult(reason="pypdfium2 is not installed.")
+        """Page images for ``pdf``, made in a process of their own.
 
-        pages: list[bytes] = []
+        PDFium is not thread-safe and cannot be made so from here: see
+        :mod:`tieout_ui.rasterise` for why a lock is not enough. The server
+        never loads it. A child process does, writes PNGs, and exits.
+        """
+        out_dir = self.work_dir / "png"
+        shutil.rmtree(out_dir, ignore_errors=True)
         try:
-            document = pypdfium2.PdfDocument(pdf)
-            try:
-                for page in document:
-                    scale = self.width / max(page.get_width(), 1)
-                    image = page.render(scale=scale).to_pil()
-                    pages.append(_png(image))
-            finally:
-                document.close()
-        except Exception as exc:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "tieout_ui.rasterise",
+                    str(pdf),
+                    str(self.width),
+                    str(out_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
             return RenderResult(reason=f"the converted PDF could not be read: {exc}")
+        if completed.returncode != 0:
+            reason = completed.stderr.strip().splitlines()[-1:] or ["no reason given"]
+            return RenderResult(reason=reason[0])
+        pages = [path.read_bytes() for path in sorted(out_dir.glob("page-*.png"))]
+        if not pages:
+            return RenderResult(reason="the converted PDF could not be read: no pages")
         return RenderResult(pages=pages)
-
-
-def _png(image: object) -> bytes:
-    import io
-
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")  # type: ignore[attr-defined]
-    return buffer.getvalue()

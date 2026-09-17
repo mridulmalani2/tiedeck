@@ -427,6 +427,24 @@ date format, each counted at the scope that makes it meaningful. The deriver and
 the rules that enforce it call the same parsing functions (`text.py`), so a
 derived convention and its enforcement cannot disagree.
 
+**The date ordering is settled once per deck, not once per date.** `%d/%m/%Y`
+and `%m/%d/%Y` are indistinguishable when the day is twelve or lower, so reading
+each date on its own split one convention across both formats. A month-first
+deck — which is most of them, in US material — has roughly two fifths of its
+dates fall on or before the twelfth, and every one of those also parses
+day-first. The effect was a coin flip decided by nothing but which days of the
+month the deck happened to use: where the split defeated the dominance test the
+format came out unlearned and TY-008 silently never ran, and where it did not,
+the format was learned and the remaining dates were reported *on the deck it had
+just learned from*.
+
+`resolve_date_convention` now asks the whole deck first. A date whose day
+exceeds twelve can only be read one way, and it speaks for every ambiguous date
+beside it. Where the deck evidences both orderings unambiguously it genuinely
+mixes them, and nothing is settled — which is the honest answer. When checking,
+a date that *could* be the house convention is read as the house convention, so
+only a date that cannot be is a finding.
+
 **Terminology.** Capitalised phrases occurring three or more times are grouped by
 a normalisation key; a group with more than one surface form becomes a *question*
 rather than a decision, because enforcing the wrong spelling of a client's own
@@ -649,6 +667,21 @@ three acceptances is rarely whoever made them, and a bare count of three says
 nothing about what to fold in. Notes from repeated acceptances accumulate rather
 than overwrite — a second reason is evidence, not a correction of the first —
 and a run without one is told what is missing.
+
+**Scope an acceptance to a shape where you can.** `RULE@slideN` accepts the rule
+for the whole slide, which is what it says and rarely what you mean: the next
+turn of the deck can introduce a genuine defect of the same rule on the same
+slide, and it will be filed as already accepted and never shown. Naming the
+shape narrows it:
+
+```bash
+tieout check deck.pptx --client acme \
+  --accept "LO-003@slide10:Quadrant dot 3" \
+  --accept-note "plotted position, not a misalignment"
+```
+
+A shape-scoped acceptance stops matching if the shape is renamed, which errs
+towards reporting — the safe direction for a check.
 
 ---
 
@@ -1177,11 +1210,28 @@ the message says explicitly because the error LibreOffice itself gives —
 Rendering happens on a background thread, so the upload returns immediately and
 images appear when they are ready.
 
-**Stated plainly: the LibreOffice conversion is not exercised by the test suite
-or by CI**, because it is a subprocess call to an optional large dependency that
-neither environment has. What is tested is every way it can fail, the pdfium
-rasterisation half against a real PDF, and that the page degrades to cards. If
-you are relying on the thumbnails, check them once on your own machine.
+**Both halves run in processes of their own.** LibreOffice always did. The
+pdfium rasterisation used to run inside the server, and pdfium is not safe to
+use from more than one thread — which a server cannot promise, because each
+uploaded deck renders on its own thread. Serialising the renders behind a lock
+was not enough: the objects pypdfium2 hands back carry finalizers that CPython
+runs on whichever thread happens to trigger collection, so a second thread
+reached into pdfium anyway. The process died — of SIGSEGV, SIGABRT or SIGTRAP,
+depending on where the corruption surfaced — only on machines with LibreOffice
+installed, which is every machine that has thumbnails at all, and never in CI,
+which has none. `python -m tieout_ui.rasterise` now owns pdfium for the length
+of one PDF and exits, and the server has nothing native left to be careful
+about.
+
+**Stated plainly: the LibreOffice conversion is not exercised by CI**, because
+it is a subprocess call to an optional large dependency CI does not have. It
+*is* exercised by `tests/test_render_oracle.py` on any machine that has
+LibreOffice and poppler's `pdftotext`, which renders the reference deck and
+checks the layout model against where the words actually landed (see [the
+tests that matter](#the-tests-that-matter)). What CI tests is every way the
+conversion can fail, the rasterisation against a real PDF, and that the page
+degrades to cards. If you are relying on the thumbnails, check them once on
+your own machine.
 
 ### The key
 
@@ -1381,8 +1431,8 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--format table|json|html] [--out PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
-                       [--accept RULE@slideN] [--accept-note TEXT]
-                       [--fail-on blocker] [--quiet]
+                       [--accept RULE@slideN[:Shape name]] [--accept-note TEXT]
+                       [--fail-on blocker] [--gate-confidence medium] [--quiet]
 
 tieout rules [--client NAME]
 tieout profile show --client NAME
@@ -1424,6 +1474,28 @@ tieout-ui [--host 127.0.0.1] [--port 8765] [--open/--no-open]
 `2` the run itself failed. A gate that cannot distinguish the last two will
 eventually wave a bad deck through.
 
+**Only findings the tool is sure enough of fail the gate.** Every finding
+carries a confidence as well as a severity. Severity says how bad it is if
+true; confidence says how likely it is to be true, and it is computed rather
+than declared: the rule's own method, weakened by the profile's derivation of
+the expectation, weakened again by the layout model's measurement where the
+finding is geometric. Text measured in its own typeface is a measurement; text
+bounded at 1.15 em per character is a rectangle the ink is somewhere inside,
+and an overlap between two such rectangles may be no overlap of ink at all —
+so LO-002 and LO-004 report `medium` confidence on bounded text and `high` on
+measured text or filled shapes, and the report says which. `--gate-confidence`
+sets the floor: `medium` by default, which admits the provable and the
+well-founded and keeps `low`-confidence findings in the report, where a reader
+can weigh them, and out of the exit code, where nobody can. `high` gates on the
+provable alone; `low` gates on everything, as the tool did before.
+
+**A rule that crashes exits `2`, not `0`.** A rule that raises has examined
+nothing, so an audit containing one does not cover what it claims to. It is
+reported as a failed run rather than as findings, and the deck is named as not
+fully checked. This used to print in red and exit zero, which is the one
+combination a pre-send gate cannot survive: the deck ships because the checker
+broke rather than because the deck was clean.
+
 **Profiles** live in `./profiles/NAME.yaml`. Set `TIEOUT_PROFILE_DIR` to keep
 them on a shared drive.
 
@@ -1432,6 +1504,18 @@ is the order someone fixes a deck in. `json` for a pipeline, with a stable
 additive schema and `unchecked`/`rules_skipped` at the top level. `html` for
 everyone else: one self-contained file, no CDN, no external fonts, nothing
 fetched at view time, with the provenance of every finding shown inline.
+
+**The console report starts with what to fix first.** Grouping by slide is the
+order someone fixes in, not the order they decide in: on the fourth turn at two
+in the morning the question is "what stops this going out", and on a 26-slide
+deck that answer was spread across 290 lines of scrolling. When a report has
+more than a handful of findings, its blockers and majors are listed first, in
+severity order, each with the remedy where the rule knows one; the slide tables
+follow. On a terminal narrower than 110 columns the five-column table cannot be
+read — every cell shrinks to fit and the measured and expected values fold into
+fragments — so findings are stacked one per stanza instead, with the evidence
+on its own line and labelled `because …`, so that captured output cannot mistake
+the rule's evidence for its claim.
 
 ---
 
@@ -1580,7 +1664,18 @@ not.** `tieout.model.fonts` resolves a run's face, or a metric-compatible
 substitute — Carlito for Calibri, Caladea for Cambria, Liberation Sans for
 Arial — and measures the real advance. Where nothing honest stands in, an upper
 bound of 1.15 em per character is used instead, which can only ever fail to
-narrow a box and so cannot hide a real defect. Since Calibri and Cambria cannot
+narrow a box and so cannot hide a real defect. Line count is greedy word wrap
+under that same bound, not the paragraph's total advance divided by the line
+width: the division is not an upper bound, because wrapping does not pack that
+tightly, and it narrowed one measured box by 40% more than its own bound
+allowed. `tests/test_extent.py` asserts the guarantee over generated cases
+rather than trusting the arithmetic — cases that carry bullet indents, right
+margins and multi-column bodies, each of which narrows the width a paragraph
+is laid out in and each of which, ignored, shrank the box past its ink. What
+is still not modelled is the autofit line-spacing reduction
+(`normAutofit/@lnSpcReduction`): ignoring it makes the bound *loose* on a
+shrunk-to-fit shape, never short, so it costs precision rather than soundness,
+and it waits for a real deck that uses it. Since Calibri and Cambria cannot
 be installed on a build machine for licensing reasons, **the bound is what most
 deployments actually use**, and it is looser than a measurement: on text-heavy
 decks LO-001, LO-002 and LO-004 will narrow less than they could. Installing
@@ -1703,6 +1798,21 @@ fails the build if a binary `.pptx` is ever committed.
   imports, network calls and dynamic imports.
 - **`test_inherit.py`** covers the eight inheritance cases, each isolating one
   level of the chain with hand-built OOXML so a failure names the level.
+- **`test_render_oracle.py`** checks the layout model against a renderer. It
+  converts the reference deck with LibreOffice, takes every word's box from the
+  PDF with `pdftotext -bbox`, and asserts that each word lands inside the ink
+  rectangle `extent.py` predicted for its text frame. Its first run found two
+  defects the other 1,365 tests could not: the loader spelled "centre" where
+  the placer checked "center", so every centred paragraph was placed at the
+  left margin; and a placeholder's vertical anchor was read from the slide
+  alone, never from the layout or master that set it. Both were invisible to a
+  fixture built from the same assumptions as the code. It now reports zero
+  escapes out of roughly 1,100 scored words. The renderer is LibreOffice, not
+  PowerPoint — a second independent implementation of the same specification,
+  not ground truth — and the one known divergence (LibreOffice centres a
+  `wrap="none"` body on import where PowerPoint honours its `algn`) is
+  excluded by name. Skipped, with the reason, wherever `soffice` or `pdftotext`
+  is missing, which includes CI.
 
 ### Layering
 

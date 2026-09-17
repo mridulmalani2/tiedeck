@@ -82,6 +82,33 @@ class TextRun:
         return len(self.text)
 
 
+#: The paragraph alignments the loader emits, spelled once.
+#:
+#: The loader normalised OOXML's ``ctr`` to "centre" and every consumer was left
+#: to guess the spelling. :mod:`tieout.model.extent` guessed "center", so no
+#: paragraph ever matched and every centred one was placed as though it were
+#: left aligned -- a section divider's title was measured at the left margin
+#: while it renders in the middle of the slide, which LO-002, LO-003 and LO-004
+#: all then read. Naming the values here makes the two ends share a spelling,
+#: and ``test_extent`` asserts that the set below is closed.
+ALIGN_LEFT: Final[str] = "left"
+ALIGN_RIGHT: Final[str] = "right"
+ALIGN_CENTRE: Final[str] = "centre"
+ALIGN_JUSTIFY: Final[str] = "justify"
+ALIGN_DISTRIBUTE: Final[str] = "distribute"
+
+#: Every value :data:`tieout.model.loader._ALIGNMENT_MAP` can produce.
+ALIGNMENTS: Final[frozenset[str]] = frozenset(
+    {ALIGN_LEFT, ALIGN_RIGHT, ALIGN_CENTRE, ALIGN_JUSTIFY, ALIGN_DISTRIBUTE}
+)
+
+#: Alignments that can put ink anywhere across the frame, so narrowing to one
+#: edge would be a guess.
+SPREAD_ALIGNMENTS: Final[frozenset[str]] = frozenset(
+    {ALIGN_JUSTIFY, ALIGN_DISTRIBUTE}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class TextParagraph:
     """One paragraph, with resolved runs and its indent level."""
@@ -99,6 +126,7 @@ class TextParagraph:
     line_spacing: float | None = None
     indent_pt: float | None = None
     margin_left_pt: float | None = None
+    margin_right_pt: float | None = None
 
     @property
     def text(self) -> str:
@@ -290,6 +318,10 @@ class ShapeModel:
     inset_bottom_pt: float = 3.6
     vertical_anchor: str | None = None
     text_direction: str | None = None
+    #: ``a:bodyPr/@numCol`` and ``@spcCol``: a body laid out in columns wraps
+    #: each paragraph at the column's width, not the frame's.
+    text_columns: int = 1
+    column_spacing_pt: float = 0.0
 
     image_sha1: str | None = None
     image_part_name: str | None = None

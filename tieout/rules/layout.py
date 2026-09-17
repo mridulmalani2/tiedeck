@@ -35,7 +35,7 @@ from typing import ClassVar, Final
 
 from tieout.cluster import cluster_values
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel, TextParagraph
-from tieout.model.extent import ink_bbox_pt, ink_extent, is_decorative_bleed
+from tieout.model.extent import ink_bbox_pt, ink_confidence, ink_extent, is_decorative_bleed
 from tieout.model.fonts import measure_text, resolve_font_path
 from tieout.model.furniture import Furniture, content_shapes, detect_furniture, font_role
 from tieout.model.units import rect_intersection_area_pt2
@@ -47,7 +47,7 @@ from tieout.profile.schema import (
     RecurringElement,
     Severity,
 )
-from tieout.rules.base import Finding, Rule, cluster_findings, register
+from tieout.rules.base import Finding, Rule, cluster_findings, register, weakest
 
 #: Rounding slack for canvas containment. PowerPoint stores EMU, and a shape
 #: dragged flush against the edge routinely lands a fraction of a point outside.
@@ -358,6 +358,15 @@ class MarginIntrusion(Rule):
                         profile=profile,
                         provenance_path=f"layout.safe_margin_pt.{slide.archetype}",
                         severity="info" if bleed else MarginIntrusion.severity,
+                        # A bounded text box reaching past the margin does not
+                        # prove its ink does: the rectangle is an upper bound.
+                        confidence=weakest(
+                            self.confidence,
+                            profile.confidence_for(
+                                f"layout.safe_margin_pt.{slide.archetype}"
+                            ),
+                            ink_confidence(shape),
+                        ),
                         message=(
                             f"{shape.ref.name} intrudes into the safe margin for "
                             f"{slide.archetype} slides: {described}{qualifier}"
@@ -917,6 +926,15 @@ class TextShapeOverlap(Rule):
                         where=upper.ref,
                         profile=profile,
                         provenance_path="layout.overlap_area_share",
+                        # Two bounded text boxes can overlap where their ink does
+                        # not: each rectangle is an upper bound on its ink. The
+                        # finding is as sure as the less certain of the two.
+                        confidence=weakest(
+                            self.confidence,
+                            profile.confidence_for("layout.overlap_area_share"),
+                            ink_confidence(first),
+                            ink_confidence(second),
+                        ),
                         message=(
                             f"{upper.ref.name} overlaps {lower.ref.name} across "
                             f"{share * 100:.0f}% of the smaller shape "
