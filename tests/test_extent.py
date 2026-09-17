@@ -34,6 +34,7 @@ from tieout.model.deck import (
 from tieout.model.extent import (
     MAX_ADVANCE_EM,
     MAX_LINE_EM,
+    column_width,
     ink_bbox_pt,
     ink_extent,
     is_decorative_bleed,
@@ -443,6 +444,8 @@ _SIZE_PT = 10.0
 def _lines_needed(text: str, available_pt: float) -> int:
     """Greedy word wrap under the same per-character bound the module uses."""
     per_char = _SIZE_PT * MAX_ADVANCE_EM
+    if available_pt <= 0:
+        return 1  # what the module answers for a frame narrower than its margins
     lines = 0
     current = 0.0
     for word in text.split():
@@ -463,13 +466,13 @@ def _lines_needed(text: str, available_pt: float) -> int:
 
 def _wrapping_deck(path, cases):
     """One slide per case. A case is ``(text, available_chars)``, optionally with
-    a ``marL`` and an ``indent`` in points."""
+    a ``marL``, an ``indent``, a ``marR`` in points, and a column count."""
     presentation = Presentation()
     presentation.slide_width = Emu(960 * 12700)
     presentation.slide_height = Emu(540 * 12700)
     for case in cases:
         text, available_chars = case[0], case[1]
-        margin_left, indent = (*case, 0.0, 0.0)[2:4]
+        margin_left, indent, margin_right, columns = (*case, 0.0, 0.0, 0.0, 1)[2:6]
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         width = available_chars * _SIZE_PT * MAX_ADVANCE_EM + 14.4
         box = slide.shapes.add_textbox(Pt(20), Pt(20), Pt(width), Pt(500))
@@ -481,6 +484,11 @@ def _wrapping_deck(path, cases):
             properties.set("marL", str(int(margin_left * 12700)))
         if indent:
             properties.set("indent", str(int(indent * 12700)))
+        if margin_right:
+            properties.set("marR", str(int(margin_right * 12700)))
+        if columns > 1:
+            frame._txBody.bodyPr.set("numCol", str(columns))
+            frame._txBody.bodyPr.set("spcCol", str(int(12.0 * 12700)))
         for run in frame.paragraphs[0].runs:
             run.font.size = Pt(_SIZE_PT)
             run.font.name = _UNINSTALLED
@@ -496,20 +504,33 @@ def _cases():
     paragraph's was meant re-opened exactly the hole the wrap count closed --
     a one-inch indent put the box a third short.
     """
-    cases = [
-        ("aaaaa bbbbb ccccc ddddd eeeee", 10, 0.0, 0.0),
-        ("aaaaa bbbbb ccccc ddddd eeeee fffff", 20, 72.0, 0.0),
+    cases: list[tuple[str, int, float, float, float, int]] = [
+        ("aaaaa bbbbb ccccc ddddd eeeee", 10, 0.0, 0.0, 0.0, 1),
+        ("aaaaa bbbbb ccccc ddddd eeeee fffff", 20, 72.0, 0.0, 0.0, 1),
     ]
     rng = random.Random(7)
-    for _ in range(40):
+    per_char = _SIZE_PT * MAX_ADVANCE_EM
+    while len(cases) < 42:
         words = rng.randint(2, 8)
         length = rng.randint(2, 14)
+        available_chars = rng.randint(6, 40)
+        margin_left = rng.choice([0.0, 18.0, 36.0, 72.0])
+        indent = rng.choice([0.0, -18.0, 18.0])
+        margin_right = rng.choice([0.0, 0.0, 18.0, 36.0])
+        columns = rng.choice([1, 1, 1, 2, 3])
+        # A frame narrower than its margins and gutters lays out nothing; it is
+        # not a wrap case, and the module answers "one line" for it by fiat.
+        column = (available_chars * per_char - (columns - 1) * 12.0) / columns
+        if column - margin_left - max(0.0, indent) - margin_right < 3 * per_char:
+            continue
         cases.append(
             (
                 " ".join(chr(97 + index % 26) * length for index in range(words)),
-                rng.randint(6, 40),
-                rng.choice([0.0, 18.0, 36.0, 72.0]),
-                rng.choice([0.0, -18.0, 18.0]),
+                available_chars,
+                margin_left,
+                indent,
+                margin_right,
+                columns,
             )
         )
     return cases
@@ -528,7 +549,7 @@ def test_the_ink_box_is_never_shorter_than_the_text_needs(tmp_path):
             continue
         frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
         available = paragraph_available_width(
-            frame, shape.text_frame_paragraphs[0]
+            column_width(shape, frame), shape.text_frame_paragraphs[0]
         )
         needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
         if extent.height + 1e-6 < needed:
@@ -658,3 +679,30 @@ def test_a_filled_shape_is_measured_by_definition():
         fill=ResolvedFill(kind="solid", hex="112233", source="test"),
     )
     assert ink_confidence(shape) == "high"
+
+
+
+def test_a_two_column_body_needs_roughly_twice_the_lines(tmp_path):
+    """Each paragraph wraps at the column's width, not the frame's, and
+    counting lines at the frame's width shrank the box past its ink."""
+    text = " ".join(chr(97 + i) * 4 for i in range(12))
+    deck = _wrapping_deck(tmp_path / "columns.pptx", [(text, 30, 0.0, 0.0, 0.0, 2)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    assert shape.text_columns == 2
+    extent = ink_extent(shape)
+    assert extent is not None
+    frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    at_frame_width = _lines_needed(text, frame)
+    at_column_width = _lines_needed(text, column_width(shape, frame))
+    assert at_column_width > at_frame_width
+    assert extent.height + 1e-6 >= at_column_width * _SIZE_PT * MAX_LINE_EM
+
+
+def test_a_right_margin_narrows_the_paragraph_too(tmp_path):
+    text = "aaaaa bbbbb ccccc ddddd eeeee fffff"
+    deck = _wrapping_deck(tmp_path / "marr.pptx", [(text, 20, 0.0, 0.0, 72.0, 1)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    paragraph = shape.text_frame_paragraphs[0]
+    assert paragraph.margin_right_pt == 72.0
+    frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    assert paragraph_available_width(frame, paragraph) == frame - 72.0

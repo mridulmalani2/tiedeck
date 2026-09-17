@@ -420,6 +420,8 @@ def _load_shape(
         inset_bottom_pt=insets[3],
         vertical_anchor=_body_attr(body_chain, "anchor"),
         text_direction=_body_attr(body_chain, "vert"),
+        text_columns=_column_count(body_chain),
+        column_spacing_pt=emu_to_pt(_opt_int_str(_body_attr(body_chain, "spcCol"))) or 0.0,
         image_sha1=image_sha1,
         image_part_name=image_part,
         image_pixel_width=px_w,
@@ -810,6 +812,7 @@ def _paragraphs_from_body(
                 line_spacing=_line_spacing(ppr),
                 indent_pt=emu_to_pt(_opt_int(ppr, "indent")) if ppr is not None else None,
                 margin_left_pt=emu_to_pt(_opt_int(ppr, "marL")) if ppr is not None else None,
+                margin_right_pt=emu_to_pt(_opt_int(ppr, "marR")) if ppr is not None else None,
             )
         )
     return tuple(out)
@@ -916,6 +919,23 @@ def _body_pr_chain(
             if inherited is not None:
                 chain.append(inherited)
     return chain
+
+
+def _column_count(chain: list[etree._Element]) -> int:
+    raw = _body_attr(chain, "numCol")
+    try:
+        return max(1, int(raw)) if raw is not None else 1
+    except ValueError:
+        return 1
+
+
+def _opt_int_str(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _body_attr(chain: list[etree._Element], name: str) -> str | None:

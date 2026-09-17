@@ -164,3 +164,50 @@ def test_every_rendered_word_lands_inside_the_predicted_ink(rendered):
         f"{len(escapes)} of {scored} rendered words escape the predicted ink:\n  "
         + "\n  ".join(escapes[:12])
     )
+
+
+def test_every_resolved_font_size_agrees_with_the_render(rendered):
+    """A word's rendered height is its font size times a ratio the face fixes,
+    a little over one for every Latin face LibreOffice substitutes here. So a
+    resolved size that is wrong -- a run that fell through to the 18pt default,
+    a theme token resolved to the wrong face's size, an autofit scale applied
+    twice -- shows up as a height the size does not explain.
+
+    Frames mixing sizes are skipped, because nothing says which run a word
+    came from. On the reference deck that leaves 1,235 words, whose heights sit
+    at 1.163 times their resolved size to three decimal places.
+    """
+    deck, pages = rendered
+    compared = 0
+    wrong: list[str] = []
+    for slide, words in zip(deck.slides, pages, strict=True):
+        frames = [
+            shape
+            for shape in slide.leaf_shapes()
+            if shape.has_text and shape.text_frame_paragraphs
+        ]
+        for word in words:
+            owner = next((s for s in frames if _inside(s.visual_bbox_pt, word, 2.0)), None)
+            if owner is None:
+                continue
+            sizes = {
+                run.font.size_pt
+                for paragraph in owner.text_frame_paragraphs
+                for run in paragraph.runs
+                if run.font is not None and run.font.size_pt and run.text.strip()
+            }
+            if len(sizes) != 1:
+                continue
+            size = next(iter(sizes))
+            compared += 1
+            ratio = (word[4] - word[2]) / size
+            if not 0.85 <= ratio <= 1.45:
+                wrong.append(
+                    f"slide {slide.index} {owner.ref.name!r} {word[0][:14]!r}: resolved "
+                    f"{size:g}pt, rendered {word[4] - word[2]:.1f}pt tall (x{ratio:.2f})"
+                )
+    assert compared > 500, f"only {compared} words compared"
+    assert not wrong, (
+        f"{len(wrong)} words render at a height their resolved size does not "
+        "explain:\n  " + "\n  ".join(wrong[:12])
+    )

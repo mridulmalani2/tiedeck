@@ -1669,7 +1669,13 @@ under that same bound, not the paragraph's total advance divided by the line
 width: the division is not an upper bound, because wrapping does not pack that
 tightly, and it narrowed one measured box by 40% more than its own bound
 allowed. `tests/test_extent.py` asserts the guarantee over generated cases
-rather than trusting the arithmetic. Since Calibri and Cambria cannot
+rather than trusting the arithmetic — cases that carry bullet indents, right
+margins and multi-column bodies, each of which narrows the width a paragraph
+is laid out in and each of which, ignored, shrank the box past its ink. What
+is still not modelled is the autofit line-spacing reduction
+(`normAutofit/@lnSpcReduction`): ignoring it makes the bound *loose* on a
+shrunk-to-fit shape, never short, so it costs precision rather than soundness,
+and it waits for a real deck that uses it. Since Calibri and Cambria cannot
 be installed on a build machine for licensing reasons, **the bound is what most
 deployments actually use**, and it is looser than a measurement: on text-heavy
 decks LO-001, LO-002 and LO-004 will narrow less than they could. Installing

@@ -173,9 +173,22 @@ def paragraph_available_width(available: float, paragraph: TextParagraph) -> flo
     width a paragraph is laid out in are different quantities and this module
     read the first where it meant the second. The loader had ``marL`` all along.
     """
-    width = available - (paragraph.margin_left_pt or 0.0)
+    width = available - (paragraph.margin_left_pt or 0.0) - (paragraph.margin_right_pt or 0.0)
     width -= max(0.0, paragraph.indent_pt or 0.0)
     return max(0.0, width)
+
+
+def column_width(shape: ShapeModel, available: float) -> float:
+    """The width one column of the body gets, out of the frame's available width.
+
+    A body in two columns wraps every paragraph at half the frame less the gap,
+    and needs about twice the lines. Ignoring that under-counts lines and
+    shrinks the box past its ink, the same way ignoring ``marL`` did.
+    """
+    columns = max(1, shape.text_columns)
+    if columns == 1:
+        return available
+    return max(0.0, (available - (columns - 1) * shape.column_spacing_pt) / columns)
 
 
 def _paragraph_words(paragraph: TextParagraph) -> tuple[list[float], float]:
@@ -322,8 +335,13 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
         # lines it takes, the second where its widest line ends.
         indent = available_width - paragraph_available_width(available_width, paragraph)
         if wraps:
-            lines = _wrapped_lines(paragraph, available_width)
+            # Lines are counted at the column's width and stacked as if in one
+            # column: the real body spreads them across columns and is shorter,
+            # so this is an upper bound, which is the only kind allowed here.
+            lines = _wrapped_lines(paragraph, column_width(shape, available_width))
             widest = max(widest, min(bound + indent, available_width))
+            if shape.text_columns > 1:
+                widest = available_width  # the ink spans every column
         else:
             # No wrapping: the text runs on as one line, which may be wider than
             # the frame. That is LO-005's finding, not a narrowing.

@@ -126,6 +126,7 @@ class TextParagraph:
     line_spacing: float | None = None
     indent_pt: float | None = None
     margin_left_pt: float | None = None
+    margin_right_pt: float | None = None
 
     @property
     def text(self) -> str:
@@ -317,6 +318,10 @@ class ShapeModel:
     inset_bottom_pt: float = 3.6
     vertical_anchor: str | None = None
     text_direction: str | None = None
+    #: ``a:bodyPr/@numCol`` and ``@spcCol``: a body laid out in columns wraps
+    #: each paragraph at the column's width, not the frame's.
+    text_columns: int = 1
+    column_spacing_pt: float = 0.0
 
     image_sha1: str | None = None
     image_part_name: str | None = None
