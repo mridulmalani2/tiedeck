@@ -15,12 +15,20 @@ One deliberate addition to section 8.3's margin recipe is documented at
 from __future__ import annotations
 
 import itertools
+import math
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
-from tieout.cluster import Cluster, cluster_values, derive_tolerance, floor_to, percentile
+from tieout.cluster import (
+    Cluster,
+    cluster_values,
+    coverage_share,
+    derive_tolerance,
+    floor_to,
+    percentile,
+)
 from tieout.learn.classify import (
     Classification,
     Derivation,
@@ -73,6 +81,28 @@ GRID_MIN_SLIDES: Final[int] = 2
 #: Edge clustering tolerance, per section 8.2.
 GRID_TOLERANCE_PT: Final[float] = 2.0
 
+#: The share of an axis the learned lines may cover, measured at near-miss
+#: width, before the axis stops telling an aligned shape from a stray one.
+#:
+#: A real deck produced 53 row lines on a 540pt canvas: more than half the
+#: vertical canvas was inside the near-miss window of *something*, so a shape
+#: dropped at random would have tripped LO-003. 53 rows on 540pt is not a grid,
+#: it is a transcript of every y-coordinate the deck happens to use.
+GRID_SATURATION_LIMIT: Final[float] = 0.25
+
+#: Escalating requirements on the share of learnable slides a line must recur
+#: across, tried in order until the axis comes in under the saturation limit.
+#:
+#: Rows and columns are derived by one set of thresholds, but a deck is not
+#: symmetric about them: it has a handful of real columns that repeat slide
+#: after slide, and a great many distinct vertical positions, because vertical
+#: placement follows the length of the content above it rather than a template.
+#: The alternative -- a stricter constant for rows, chosen by hand -- would be
+#: fitted to whichever deck was on the desk that day. This raises the
+#: requirement only on the axis that needs it, and only until that axis carries
+#: information again.
+GRID_SLIDE_SHARE_STEPS: Final[tuple[float, ...]] = (0.0, 0.25, 0.4, 0.5, 0.65, 0.8)
+
 #: A recurring element must appear on at least this many slides.
 RECURRING_MIN_SUPPORT: Final[int] = 3
 
@@ -88,10 +118,14 @@ def derive_layout(deck: DeckModel, furniture: Furniture) -> LayoutDerivation:
     result = LayoutDerivation(profile=LayoutProfile())
     total_slides = deck.slide_count
 
+    # The near-miss window is settled before the grid, because the width of that
+    # window is what decides whether the grid still carries information: see
+    # GRID_SATURATION_LIMIT.
+    window = NearMissWindow()
     result.profile.safe_margin_pt = derive_margins(deck, furniture, result, total_slides)
-    result.profile.grid = derive_grid(deck, furniture, result, total_slides)
+    result.profile.grid = derive_grid(deck, furniture, result, total_slides, window)
     result.profile.recurring = derive_recurring(deck, furniture, result, total_slides)
-    result.profile.near_miss_alignment_pt = NearMissWindow()
+    result.profile.near_miss_alignment_pt = window
     result.derivation.note(
         "layout.near_miss_alignment_pt",
         "default window: below 0.5pt is indistinguishable from aligned and above "
@@ -213,6 +247,7 @@ def derive_grid(
     furniture: Furniture,
     result: LayoutDerivation,
     total_slides: int,
+    window: NearMissWindow,
 ) -> GridProfile:
     """Cluster shape edges deck-wide; clusters with real support are grid lines.
 
@@ -221,6 +256,11 @@ def derive_grid(
     content. Furniture is excluded: the logo and page number sit at positions
     nothing else aligns to, and admitting them would create grid lines that exist
     only to catch the chrome itself.
+
+    What survives that clustering is then asked whether it is still a grid. See
+    :func:`_unsaturated`: an axis whose lines blanket the canvas is dropped and
+    the reason recorded, because a rule that cannot be derived honestly should
+    skip rather than guess.
     """
     columns: list[float] = []
     rows: list[float] = []
@@ -228,7 +268,8 @@ def derive_grid(
     # whether it is a deck-wide structure or one slide's furniture.
     column_slides: dict[float, set[int]] = {}
     row_slides: dict[float, set[int]] = {}
-    for slide in learnable_slides(deck):
+    slides = list(learnable_slides(deck))
+    for slide in slides:
         for shape in content_shapes(slide, furniture):
             box = shape.visual_bbox_pt
             for value in (box[0], box[0] + box[2]):
@@ -239,9 +280,9 @@ def derive_grid(
                 row_slides.setdefault(value, set()).add(slide.index)
 
     grid = GridProfile(tolerance_pt=GRID_TOLERANCE_PT)
-    for values, by_slide, attribute, label in (
-        (columns, column_slides, "columns_pt", "vertical"),
-        (rows, row_slides, "rows_pt", "horizontal"),
+    for values, by_slide, attribute, label, axis, extent in (
+        (columns, column_slides, "columns_pt", "vertical", "x", deck.width_pt),
+        (rows, row_slides, "rows_pt", "horizontal", "y", deck.height_pt),
     ):
 
         def _slides(cluster: Cluster, by_slide: dict[float, set[int]] = by_slide) -> int:
@@ -250,11 +291,12 @@ def derive_grid(
                 covered |= by_slide.get(member, set())
             return len(covered)
 
-        clusters = [
+        supported = [
             cluster
             for cluster in cluster_values(values, GRID_TOLERANCE_PT)
             if cluster.support >= GRID_MIN_SUPPORT and _slides(cluster) >= GRID_MIN_SLIDES
         ]
+        clusters, share = _unsaturated(supported, _slides, len(slides), window, extent)
         lines = sorted(round(cluster.mode, 2) for cluster in clusters)
         setattr(grid, attribute, lines)
         path = f"layout.grid.{attribute}"
@@ -262,14 +304,34 @@ def derive_grid(
             supports = {
                 round(cluster.mode, 2): cluster.support for cluster in clusters
             }
-            result.derivation.note(
-                path,
+            note = (
                 f"{len(lines)} {label} edge clusters, each on {GRID_MIN_SUPPORT} or "
                 f"more shapes across at least {GRID_MIN_SLIDES} of {total_slides} "
                 "slides (support: "
                 + ", ".join(f"{line:g}pt on {supports[line]}" for line in lines)
-                + ")",
-                "high",
+                + ")"
+            )
+            if share > 0:
+                note += (
+                    f"; a line was additionally required to recur across {share:.0%} "
+                    f"of the {len(slides)} learnable slides, because at the base "
+                    f"threshold the {label} lines covered more than "
+                    f"{GRID_SATURATION_LIMIT:.0%} of the canvas and stopped "
+                    f"distinguishing an aligned shape from a stray one"
+                )
+            result.derivation.note(path, note, "high")
+        elif supported:
+            result.derivation.unlearned(
+                path,
+                f"{len(supported)} {label} edge clusters have the support to be "
+                f"grid lines, but they saturate the canvas: at every requirement "
+                f"tried, up to recurrence across "
+                f"{GRID_SLIDE_SHARE_STEPS[-1]:.0%} of the {len(slides)} learnable "
+                f"slides, the bands within {window.max:g}pt of a surviving line "
+                f"still covered more than {GRID_SATURATION_LIMIT:.0%} of the "
+                f"{extent:g}pt axis. Being near a line would then say nothing "
+                f"about whether a shape was placed on one, so no {label} grid is "
+                f"emitted and LO-003 will not run on the {axis} axis",
             )
         else:
             result.derivation.unlearned(
@@ -279,6 +341,31 @@ def derive_grid(
                 f"grid to align to",
             )
     return grid
+
+
+def _unsaturated(
+    candidates: list[Cluster],
+    slides_of: Callable[[Cluster], int],
+    learnable: int,
+    window: NearMissWindow,
+    extent: float,
+) -> tuple[list[Cluster], float]:
+    """The first slide-share step whose lines leave the axis under saturation.
+
+    Returns the surviving clusters and the share that was required of them, or
+    an empty list when no step gets the axis under
+    :data:`GRID_SATURATION_LIMIT`. The steps escalate rather than being fixed
+    per axis, so the stricter requirement lands on whichever axis is actually
+    over-derived instead of on rows by assumption -- and on a deck whose rows
+    are a genuine grid, nothing is tightened at all.
+    """
+    for share in GRID_SLIDE_SHARE_STEPS:
+        needed = max(GRID_MIN_SLIDES, math.ceil(share * learnable))
+        kept = [cluster for cluster in candidates if slides_of(cluster) >= needed]
+        lines = [cluster.mode for cluster in kept]
+        if coverage_share(lines, window.max, extent) <= GRID_SATURATION_LIMIT:
+            return kept, share
+    return [], GRID_SLIDE_SHARE_STEPS[-1]
 
 
 # --------------------------------------------------------------------------------------

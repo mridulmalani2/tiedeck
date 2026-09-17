@@ -298,3 +298,37 @@ def round_to(value: float, unit: float) -> float:
     if unit <= 0:
         return value
     return round(value / unit) * unit
+
+
+def coverage_share(
+    lines: Sequence[float], half_width: float, extent: float
+) -> float:
+    """The share of ``[0, extent]`` within ``half_width`` of some line.
+
+    This is how a set of learned positions is asked whether it still carries
+    information. A grid line is only worth checking against if being near it
+    distinguishes a shape from one placed at random; once the bands around the
+    lines cover most of the canvas, "this edge just misses a grid line" is true
+    of almost anywhere a shape could be put, and the rule that reads it is
+    reporting coincidence.
+
+    Overlapping bands are merged rather than summed, and bands are clipped to
+    the canvas, so the result is a real share between 0 and 1 rather than a
+    count dressed up as one.
+    """
+    if extent <= 0 or half_width <= 0 or not lines:
+        return 0.0
+    bands = sorted(
+        (max(0.0, line - half_width), min(extent, line + half_width))
+        for line in lines
+    )
+    covered = 0.0
+    start, end = bands[0]
+    for low, high in bands[1:]:
+        if low > end:
+            covered += max(0.0, end - start)
+            start, end = low, high
+        else:
+            end = max(end, high)
+    covered += max(0.0, end - start)
+    return min(1.0, covered / extent)
