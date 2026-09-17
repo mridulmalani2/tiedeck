@@ -144,6 +144,28 @@ def _run_line_height(run: TextRun) -> float:
     return size_pt * MAX_LINE_EM
 
 
+def paragraph_available_width(available: float, paragraph: TextParagraph) -> float:
+    """The width one paragraph actually gets inside a frame's available width.
+
+    A bulleted or indented paragraph does not get the whole frame. ``marL``
+    moves every line of it in, and ``indent`` moves the first line relative to
+    that -- negative for the hanging indent a bullet uses, positive for a
+    first-line indent.
+
+    The narrowest any line gets is what bounds the line count, so a positive
+    first-line indent is subtracted and a negative one is not: treating the
+    hanging line as narrower than it is only ever over-counts lines, which is
+    the safe direction, while ignoring a first-line indent under-counts them.
+
+    Named and shared rather than inlined, because the frame's width and the
+    width a paragraph is laid out in are different quantities and this module
+    read the first where it meant the second. The loader had ``marL`` all along.
+    """
+    width = available - (paragraph.margin_left_pt or 0.0)
+    width -= max(0.0, paragraph.indent_pt or 0.0)
+    return max(0.0, width)
+
+
 def _paragraph_words(paragraph: TextParagraph) -> tuple[list[float], float]:
     """An upper bound on each word's advance, and on one space.
 
@@ -190,6 +212,7 @@ def _wrapped_lines(paragraph: TextParagraph, available: float) -> int:
     A word wider than the line is character-wrapped by PowerPoint, so it is
     counted for every line it spans rather than for one.
     """
+    available = paragraph_available_width(available, paragraph)
     if available <= 0:
         return 1
     words, space = _paragraph_words(paragraph)
@@ -282,14 +305,18 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
     total_height = 0.0
     for paragraph in paragraphs:
         bound = _paragraph_width_bound(paragraph)
+        # An indented paragraph is laid out in less than the frame's width and
+        # its ink starts further in. Both matter: the first decides how many
+        # lines it takes, the second where its widest line ends.
+        indent = available_width - paragraph_available_width(available_width, paragraph)
         if wraps:
             lines = _wrapped_lines(paragraph, available_width)
-            widest = max(widest, min(bound, available_width))
+            widest = max(widest, min(bound + indent, available_width))
         else:
             # No wrapping: the text runs on as one line, which may be wider than
             # the frame. That is LO-005's finding, not a narrowing.
             lines = 1
-            widest = max(widest, bound)
+            widest = max(widest, bound + indent)
         total_height += lines * _paragraph_line_height_bound(paragraph)
         total_height += (paragraph.space_before_pt or 0.0) + (paragraph.space_after_pt or 0.0)
 

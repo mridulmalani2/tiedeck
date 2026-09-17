@@ -30,6 +30,7 @@ from tieout.model.extent import (
     ink_bbox_pt,
     ink_extent,
     is_decorative_bleed,
+    paragraph_available_width,
 )
 from tieout.model.inherit import ResolvedFill, ResolvedFont, ResolvedLine
 from tieout.model.loader import load_deck
@@ -454,16 +455,25 @@ def _lines_needed(text: str, available_pt: float) -> int:
 
 
 def _wrapping_deck(path, cases):
+    """One slide per case. A case is ``(text, available_chars)``, optionally with
+    a ``marL`` and an ``indent`` in points."""
     presentation = Presentation()
     presentation.slide_width = Emu(960 * 12700)
     presentation.slide_height = Emu(540 * 12700)
-    for text, available_chars in cases:
+    for case in cases:
+        text, available_chars = case[0], case[1]
+        margin_left, indent = (*case, 0.0, 0.0)[2:4]
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         width = available_chars * _SIZE_PT * MAX_ADVANCE_EM + 14.4
-        box = slide.shapes.add_textbox(Pt(20), Pt(20), Pt(width), Pt(400))
+        box = slide.shapes.add_textbox(Pt(20), Pt(20), Pt(width), Pt(500))
         frame = box.text_frame
         frame.word_wrap = True
         frame.text = text
+        properties = frame.paragraphs[0]._p.get_or_add_pPr()
+        if margin_left:
+            properties.set("marL", str(int(margin_left * 12700)))
+        if indent:
+            properties.set("indent", str(int(indent * 12700)))
         for run in frame.paragraphs[0].runs:
             run.font.size = Pt(_SIZE_PT)
             run.font.name = _UNINSTALLED
@@ -472,8 +482,17 @@ def _wrapping_deck(path, cases):
 
 
 def _cases():
-    """The counterexample that started this, then a generated spread."""
-    cases = [("aaaaa bbbbb ccccc ddddd eeeee", 10)]
+    """The counterexample that started this, then a generated spread.
+
+    The spread carries bullet indents too. ``marL`` and ``indent`` narrow the
+    width a paragraph is laid out in, and reading the frame's width where the
+    paragraph's was meant re-opened exactly the hole the wrap count closed --
+    a one-inch indent put the box a third short.
+    """
+    cases = [
+        ("aaaaa bbbbb ccccc ddddd eeeee", 10, 0.0, 0.0),
+        ("aaaaa bbbbb ccccc ddddd eeeee fffff", 20, 72.0, 0.0),
+    ]
     rng = random.Random(7)
     for _ in range(40):
         words = rng.randint(2, 8)
@@ -482,6 +501,8 @@ def _cases():
             (
                 " ".join(chr(97 + index % 26) * length for index in range(words)),
                 rng.randint(6, 40),
+                rng.choice([0.0, 18.0, 36.0, 72.0]),
+                rng.choice([0.0, -18.0, 18.0]),
             )
         )
     return cases
@@ -492,12 +513,16 @@ def test_the_ink_box_is_never_shorter_than_the_text_needs(tmp_path):
     deck = _wrapping_deck(tmp_path / "wrapping.pptx", cases)
 
     violations = []
-    for slide, (text, _) in zip(deck.slides, cases, strict=True):
+    for slide, case in zip(deck.slides, cases, strict=True):
+        text = case[0]
         shape = next(iter(slide.leaf_shapes()))
         extent = ink_extent(shape)
         if extent is None:
             continue
-        available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        frame = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        available = paragraph_available_width(
+            frame, shape.text_frame_paragraphs[0]
+        )
         needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
         if extent.height + 1e-6 < needed:
             violations.append(
@@ -512,7 +537,7 @@ def test_the_case_that_broke_it(tmp_path):
     """Five words at half the line width each. ceil() said three lines; they
     need five, and the box came out 45pt where the text needs 75."""
     text = "aaaaa bbbbb ccccc ddddd eeeee"
-    deck = _wrapping_deck(tmp_path / "counterexample.pptx", [(text, 10)])
+    deck = _wrapping_deck(tmp_path / "counterexample.pptx", [(text, 10, 0.0, 0.0)])
     shape = next(iter(deck.slides[0].leaf_shapes()))
     extent = ink_extent(shape)
 
@@ -526,7 +551,7 @@ def test_a_word_wider_than_its_line_is_counted_for_every_line_it_spans(tmp_path)
     """PowerPoint character-wraps a word that cannot fit. Counting it as one
     line would narrow the box past the ink again."""
     text = "a" * 40
-    deck = _wrapping_deck(tmp_path / "longword.pptx", [(text, 10)])
+    deck = _wrapping_deck(tmp_path / "longword.pptx", [(text, 10, 0.0, 0.0)])
     shape = next(iter(deck.slides[0].leaf_shapes()))
     extent = ink_extent(shape)
 
