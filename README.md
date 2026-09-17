@@ -427,6 +427,24 @@ date format, each counted at the scope that makes it meaningful. The deriver and
 the rules that enforce it call the same parsing functions (`text.py`), so a
 derived convention and its enforcement cannot disagree.
 
+**The date ordering is settled once per deck, not once per date.** `%d/%m/%Y`
+and `%m/%d/%Y` are indistinguishable when the day is twelve or lower, so reading
+each date on its own split one convention across both formats. A month-first
+deck — which is most of them, in US material — has roughly two fifths of its
+dates fall on or before the twelfth, and every one of those also parses
+day-first. The effect was a coin flip decided by nothing but which days of the
+month the deck happened to use: where the split defeated the dominance test the
+format came out unlearned and TY-008 silently never ran, and where it did not,
+the format was learned and the remaining dates were reported *on the deck it had
+just learned from*.
+
+`resolve_date_convention` now asks the whole deck first. A date whose day
+exceeds twelve can only be read one way, and it speaks for every ambiguous date
+beside it. Where the deck evidences both orderings unambiguously it genuinely
+mixes them, and nothing is settled — which is the honest answer. When checking,
+a date that *could* be the house convention is read as the house convention, so
+only a date that cannot be is a finding.
+
 **Terminology.** Capitalised phrases occurring three or more times are grouped by
 a normalisation key; a group with more than one surface form becomes a *question*
 rather than a decision, because enforcing the wrong spelling of a client's own

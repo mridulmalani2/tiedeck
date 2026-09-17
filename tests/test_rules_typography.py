@@ -19,7 +19,9 @@ import pytest
 
 from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import default_defects
+from tieout.learn import learn_from_decks
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
+from tieout.model.loader import load_deck
 from tieout.profile.schema import Profile
 from tieout.rules import typography
 from tieout.rules.base import clear_caches, rules_in_category, run_rules
@@ -568,3 +570,117 @@ def test_ty005_reports_an_accepted_form_that_canon_terms_declares_wrong(
     }
     result = run_rules(dirty_deck, reference_profile, include=["TY-005"])
     assert findings_for(result, "TY-005")
+
+
+# --------------------------------------------------------------------------------------
+# One date convention must not read as two
+#
+# %d/%m/%Y and %m/%d/%Y are indistinguishable when the day is twelve or lower,
+# and resolving each date on its own split one consistent convention across both
+# -- so a month-first deck taught the deriver two formats and was then reported
+# against whichever of them won. Which way it broke depended on nothing more
+# than which days of the month the deck's dates happened to fall on.
+# --------------------------------------------------------------------------------------
+
+
+def _dated_deck(path, dates, per_slide=3):
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for index in range(6):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        for position in range(per_slide):
+            written = dates[(index * per_slide + position) % len(dates)]
+            box = slide.shapes.add_textbox(
+                Pt(60), Pt(60 + position * 80), Pt(520), Pt(40)
+            )
+            box.text_frame.text = (
+                f"Slide {index} note {position}: the committee met on {written} to "
+                f"review the revised terms and the updated financing package."
+            )
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+#: One convention, month first. Five of the twelve have a day of twelve or lower
+#: and so also parse day-first; seven can only be month-first.
+_MONTH_FIRST = [
+    "01/15/2026", "02/28/2026", "03/04/2026", "04/13/2026", "05/09/2026",
+    "06/22/2026", "07/03/2026", "08/19/2026", "09/11/2026", "10/27/2026",
+    "11/06/2026", "12/30/2026",
+]
+
+
+def test_the_ordering_is_settled_by_the_dates_that_disambiguate():
+    from tieout.text import find_dates, resolve_date_convention
+
+    assert resolve_date_convention(_MONTH_FIRST) == "%m/%d/%Y"
+    resolved = {
+        find_dates(written, prefer="%m/%d/%Y")[0].format for written in _MONTH_FIRST
+    }
+    assert resolved == {"%m/%d/%Y"}, "one convention must read as one format"
+
+
+def test_a_date_that_could_be_either_is_marked_ambiguous():
+    from tieout.text import find_dates
+
+    both = find_dates("03/04/2026")[0]
+    assert both.ambiguous
+    assert "%m/%d/%Y" in both.alternatives
+
+    only_one = find_dates("04/13/2026")[0]
+    assert not only_one.ambiguous
+    assert only_one.format == "%m/%d/%Y"
+
+
+def test_a_month_first_deck_teaches_one_format_and_is_not_reported(tmp_path):
+    """Whichever way the deck's days fall.
+
+    With most days at twelve or lower the split defeated the dominance test and
+    the format came out unlearned, which silently switched TY-008 off. With most
+    days above it, the format was learned and the rest were reported -- on the
+    deck it had just learned from.
+    """
+    for label, per_slide in (("low", 3), ("high", 2)):
+        deck = _dated_deck(tmp_path / f"{label}.pptx", _MONTH_FIRST, per_slide)
+        profile = learn_from_decks([deck], "acme").profile
+
+        assert profile.typography.date_format == "%m/%d/%Y", label
+        result = run_rules(deck, profile, include=["TY-008"])
+        assert result.findings == [], (
+            f"{label}: " + "; ".join(f.message for f in result.findings)
+        )
+
+
+def test_a_genuinely_different_format_is_still_reported(tmp_path):
+    """The fix must not silence the rule: a date that cannot be read as the
+    house convention is still a finding."""
+    deck = _dated_deck(tmp_path / "mixed.pptx", [*_MONTH_FIRST, "2026-03-04"], 3)
+    profile = learn_from_decks([deck], "acme").profile
+    assert profile.typography.date_format == "%m/%d/%Y"
+
+    result = run_rules(deck, profile, include=["TY-008"])
+    assert result.findings, "an ISO date in a month-first deck is a real deviation"
+    assert any("2026-03-04" in f.message for f in result.findings)
+
+
+def test_a_deck_that_really_mixes_orderings_settles_nothing(tmp_path):
+    """Both orderings evidenced unambiguously is a deck that genuinely mixes
+    them, and guessing one would report half its dates. None is the honest
+    answer."""
+    from tieout.text import resolve_date_convention
+
+    assert resolve_date_convention(["04/13/2026", "13/04/2026"]) is None
+
+
+def test_a_quote_after_a_figure_is_still_a_quote():
+    """The prime-mark exemption removed the whole match, so the figure and the
+    opening quote went together and the closing quote was counted alone."""
+    from tieout.text import quote_census
+
+    assert quote_census('2023 "guidance"') == quote_census('the "guidance"')
+    assert quote_census('the 12" pipe').straight == 0
+    assert quote_census("5'11\" tall").straight == 0
