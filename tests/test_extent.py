@@ -608,3 +608,53 @@ def test_a_centred_paragraph_is_placed_in_the_middle_of_its_frame():
         f"ink centred at {ink_centre:.1f}, frame at {frame_centre:.1f}"
     )
     assert extent.left > 36.0 + 200.0, "a centred title does not start at the left margin"
+
+
+
+# --------------------------------------------------------------------------------------
+# The model says how sure it is
+# --------------------------------------------------------------------------------------
+
+
+def _shape_in_face(face: str, fill: ResolvedFill | None = None) -> ShapeModel:
+    font = ResolvedFont(
+        name=face, size_pt=10.0, bold=False, italic=False, underline=False, color_hex="000000"
+    )
+    paragraph = TextParagraph(runs=(TextRun(text="Revenue grew", font=font),), level=0)
+    return _shape(width=400.0, paragraphs=[paragraph], fill=fill)
+
+
+def test_a_bounded_run_makes_the_extent_and_the_confidence_medium():
+    """Text bounded at 1.15em per character is a rectangle the ink is somewhere
+    inside, not a measurement, and a finding built on it must say so."""
+    from tieout.model.extent import ink_confidence
+
+    shape = _shape_in_face("NoSuchFaceEverInstalled")
+    extent = ink_extent(shape)
+    assert extent is not None and not extent.measured
+    assert ink_confidence(shape) == "medium"
+
+
+def test_a_measured_run_keeps_high_confidence():
+    """Liberation Sans is installed wherever the suite runs, including CI."""
+    from tieout.model.extent import ink_confidence
+    from tieout.model.fonts import resolve_font_path
+
+    if resolve_font_path("Liberation Sans", bold=False, italic=False) is None:
+        pytest.skip("Liberation Sans is not installed here")
+    shape = _shape_in_face("Liberation Sans")
+    extent = ink_extent(shape)
+    assert extent is not None and extent.measured
+    assert ink_confidence(shape) == "high"
+
+
+def test_a_filled_shape_is_measured_by_definition():
+    """A fill paints the whole frame, so the frame is the ink and there is no
+    bound involved, whatever typeface the text is in."""
+    from tieout.model.extent import ink_confidence
+
+    shape = _shape_in_face(
+        "NoSuchFaceEverInstalled",
+        fill=ResolvedFill(kind="solid", hex="112233", source="test"),
+    )
+    assert ink_confidence(shape) == "high"

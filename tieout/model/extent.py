@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from tieout.model.deck import (
     ALIGN_CENTRE,
@@ -94,6 +94,10 @@ class InkExtent:
     #: the frame itself is the only honest answer there.
     narrowed_x: bool
     narrowed_y: bool
+    #: True when every run was measured in a real typeface. False when any run
+    #: took the bound instead, in which case the rectangle is sound but loose,
+    #: and a finding computed from it is weaker than one from a measurement.
+    measured: bool = False
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -338,7 +342,40 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
     return InkExtent(
         left=left, top=top, width=width, height=height,
         narrowed_x=narrowed_x, narrowed_y=narrowed_y,
+        measured=_all_measured(paragraphs),
     )
+
+
+def _all_measured(paragraphs: list[TextParagraph]) -> bool:
+    """Whether every run with text in it resolved a typeface to measure in."""
+    return all(
+        _run_font_path(run) is not None
+        for paragraph in paragraphs
+        for run in paragraph.runs
+        if run.text
+    )
+
+
+def ink_confidence(shape: ShapeModel) -> Literal["high", "medium"]:
+    """How far a geometric finding about ``shape`` can be trusted.
+
+    A rule declares one confidence for every finding it makes. That is wrong
+    for the geometric rules, whose findings inherit the layout model's error,
+    and the model's error is not one number: text measured in its own typeface
+    is a measurement, text bounded at 1.15 em per character is a rectangle the
+    ink is somewhere inside. An overlap between two bounded boxes may be an
+    overlap of two bounds and no ink at all. The same rule, the same declared
+    confidence, materially different reliability -- and until now no way to
+    say so.
+
+    A shape whose frame is its ink -- a filled or outlined shape, a picture, a
+    table -- is measured by definition. A text-only shape is as trustworthy as
+    its weakest run.
+    """
+    if not _is_text_only(shape):
+        return "high"
+    paragraphs = [p for p in shape.text_frame_paragraphs if p.text]
+    return "high" if _all_measured(paragraphs) else "medium"
 
 
 def _place_horizontally(

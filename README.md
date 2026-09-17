@@ -1432,7 +1432,7 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
                        [--accept RULE@slideN[:Shape name]] [--accept-note TEXT]
-                       [--fail-on blocker] [--quiet]
+                       [--fail-on blocker] [--gate-confidence medium] [--quiet]
 
 tieout rules [--client NAME]
 tieout profile show --client NAME
@@ -1473,6 +1473,21 @@ tieout-ui [--host 127.0.0.1] [--port 8765] [--open/--no-open]
 **Exit codes.** `0` nothing at or above `--fail-on`; `1` findings at or above it;
 `2` the run itself failed. A gate that cannot distinguish the last two will
 eventually wave a bad deck through.
+
+**Only findings the tool is sure enough of fail the gate.** Every finding
+carries a confidence as well as a severity. Severity says how bad it is if
+true; confidence says how likely it is to be true, and it is computed rather
+than declared: the rule's own method, weakened by the profile's derivation of
+the expectation, weakened again by the layout model's measurement where the
+finding is geometric. Text measured in its own typeface is a measurement; text
+bounded at 1.15 em per character is a rectangle the ink is somewhere inside,
+and an overlap between two such rectangles may be no overlap of ink at all —
+so LO-002 and LO-004 report `medium` confidence on bounded text and `high` on
+measured text or filled shapes, and the report says which. `--gate-confidence`
+sets the floor: `medium` by default, which admits the provable and the
+well-founded and keeps `low`-confidence findings in the report, where a reader
+can weigh them, and out of the exit code, where nobody can. `high` gates on the
+provable alone; `low` gates on everything, as the tool did before.
 
 **A rule that crashes exits `2`, not `0`.** A rule that raises has examined
 nothing, so an audit containing one does not cover what it claims to. It is

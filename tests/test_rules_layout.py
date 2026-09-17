@@ -575,3 +575,56 @@ def test_lo009_compares_within_one_list_only(tmp_path, reference_profile):
 
 def test_lo009_is_silent_on_the_clean_deck(clean_deck, reference_profile):
     assert_silent_on_clean(_run(clean_deck, reference_profile, "LO-009"), "LO-009")
+
+
+
+# --------------------------------------------------------------------------------------
+# A geometric finding is as sure as the measurement under it
+# --------------------------------------------------------------------------------------
+
+
+def _deck_of_overlapping_boxes(path, *, filled: bool):
+    """Two text boxes that overlap by half, in a face nothing here can measure."""
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, left in enumerate((100.0, 200.0)):
+        shape = slide.shapes.add_textbox(Pt(left), Pt(100), Pt(200), Pt(60))
+        shape.name = f"Box {index + 1}"
+        shape.text_frame.text = f"Box {index + 1} carries a full line of body text"
+        for run in shape.text_frame.paragraphs[0].runs:
+            run.font.name = "NoSuchFaceEverInstalled"
+            run.font.size = Pt(12)
+        if filled:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor(0x11, 0x22, 0x33)
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_an_overlap_between_bounded_text_boxes_is_medium_confidence(
+    tmp_path, reference_profile
+):
+    """Each rectangle is an upper bound on its ink, so two bounds overlapping
+    is not two inks overlapping. The finding says so."""
+    deck = _deck_of_overlapping_boxes(tmp_path / "bounded.pptx", filled=False)
+    findings = _run(deck, reference_profile, "LO-004").findings
+    assert findings, "the boxes overlap by half; LO-004 must report it"
+    assert findings[0].confidence == "medium"
+
+
+def test_an_overlap_between_filled_shapes_stays_high_confidence(
+    tmp_path, reference_profile
+):
+    """A fill paints the frame, so the frame is the ink and the overlap is real."""
+    deck = _deck_of_overlapping_boxes(tmp_path / "filled.pptx", filled=True)
+    findings = _run(deck, reference_profile, "LO-004").findings
+    assert findings
+    assert findings[0].confidence == "high"

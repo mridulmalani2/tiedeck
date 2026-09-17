@@ -618,3 +618,22 @@ def test_a_shape_scoped_acceptance_needs_a_slide(workspace):
         "BR-002@:Ring 3",
     )
     assert result.exit_code == EXIT_ERROR
+
+
+
+def test_an_unknown_gate_confidence_is_a_usage_error(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_clean.pptx", "--client", "demo",
+        "--gate-confidence", "certain",
+    )
+    assert result.exit_code == EXIT_ERROR
+
+
+def test_the_gate_confidence_is_accepted(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_clean.pptx", "--client", "demo",
+        "--gate-confidence", "low", "--quiet",
+    )
+    assert result.exit_code in (0, EXIT_FINDINGS)

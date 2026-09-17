@@ -19,7 +19,7 @@ import pytest
 from rich.console import Console
 
 from tieout.model.deck import ShapeRef
-from tieout.profile.schema import Severity
+from tieout.profile.schema import Confidence, Severity
 from tieout.report import console as console_report
 from tieout.report import html as html_report
 from tieout.report import json_out
@@ -487,3 +487,44 @@ def test_clustering_does_not_merge_across_slides_or_rules():
 def test_a_lone_finding_is_left_exactly_as_it_was():
     only = _synthetic().findings[0]
     assert cluster_findings([only]) == [only]
+
+
+
+# --------------------------------------------------------------------------------------
+# Confidence reaches the gate
+# --------------------------------------------------------------------------------------
+
+
+def _finding(severity: Severity, confidence: Confidence) -> Finding:
+    return Finding(
+        rule_id="LO-004",
+        category="layout",
+        severity=severity,
+        confidence=confidence,
+        where=ShapeRef(1, 1, "Box"),
+        message="overlap",
+    )
+
+
+def test_a_low_confidence_finding_is_reported_but_does_not_gate():
+    """Severity says how bad if true; confidence says how likely to be true.
+    A gate that reads only the first fails a deck on a heuristic as readily
+    as on arithmetic."""
+    result = _synthetic()
+    result.findings = [_finding("blocker", "low")]
+    assert not result.exceeds("blocker"), "low confidence never gates by default"
+    assert result.exceeds("blocker", min_confidence="low"), "unless asked to"
+
+
+def test_the_default_gate_admits_medium_confidence():
+    result = _synthetic()
+    result.findings = [_finding("major", "medium")]
+    assert result.exceeds("major")
+    assert not result.exceeds("major", min_confidence="high")
+
+
+def test_the_console_marks_a_finding_that_is_less_than_sure(capsys):
+    result = _synthetic()
+    result.findings = [_finding("major", "medium")]
+    console_report.render(result, console=_console())
+    assert "(medium confidence)" in capsys.readouterr().out

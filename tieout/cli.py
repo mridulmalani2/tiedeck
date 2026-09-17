@@ -325,6 +325,14 @@ def check(
     fail_on: Annotated[
         str, typer.Option("--fail-on", help="Exit 1 at this severity or worse.")
     ] = "blocker",
+    gate_confidence: Annotated[
+        str,
+        typer.Option(
+            "--gate-confidence",
+            help="Only findings at this confidence or better fail the gate: high, "
+            "medium or low. Everything is still reported.",
+        ),
+    ] = "medium",
     quiet: Annotated[bool, typer.Option("--quiet", help="Print only the summary.")] = False,
 ) -> None:
     """Audit a deck against a learned profile."""
@@ -332,6 +340,8 @@ def check(
         _fail("--client NAME or --profile PATH is required")
     if output_format not in ("table", "json", "html"):
         _fail(f"unknown --format {output_format!r}: use table, json or html")
+    if gate_confidence not in ("high", "medium", "low"):
+        _fail(f"unknown --gate-confidence {gate_confidence!r}: use high, medium or low")
 
     try:
         loaded_profile = load_for_client(client, profile)
@@ -374,7 +384,7 @@ def check(
             _out.print(f"  {entry.rule_id}: {entry.reason}")
         raise typer.Exit(EXIT_ERROR)
 
-    if result.exceeds(fail_on):
+    if result.exceeds(fail_on, min_confidence=gate_confidence):
         raise typer.Exit(EXIT_FINDINGS)
 
 

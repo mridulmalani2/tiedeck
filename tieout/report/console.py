@@ -117,6 +117,8 @@ def _fix_first(result: AuditResult, console: Console) -> None:
         if finding.shape_name:
             line.append(f"  {finding.shape_name}", style="bold")
         line.append(f"  {finding.message}")
+        if finding.confidence != "high":
+            line.append(f"  ({finding.confidence} confidence)", style="dim italic")
         console.print(line)
         if finding.remedy:
             console.print(Text(f"      → {finding.remedy}", style="dim"))
@@ -150,6 +152,8 @@ def _slide_block(
         head.append(SEVERITY_GLYPHS.get(finding.severity, "?"), style=style)
         head.append(f" {finding.rule_id}", style="dim")
         head.append(f"  {finding.shape_name or '—'}", style="bold")
+        if finding.confidence != "high":
+            head.append(f"  ({finding.confidence} confidence)", style="dim italic")
         console.print(head)
         console.print(
             Text(f"    {finding.message}", style=style if finding.severity == "blocker" else "")
@@ -197,6 +201,8 @@ def _slide_table(
     for finding in sorted(findings, key=lambda f: f.sort_key):
         style = _SEVERITY_STYLES.get(finding.severity, "")
         message = Text(finding.message, style=style if finding.severity == "blocker" else "")
+        if finding.confidence != "high":
+            message.append(f" ({finding.confidence} confidence)", style="dim italic")
         if show_provenance and finding.expected_provenance:
             message.append(f"\nbecause {finding.expected_provenance}", style="dim italic")
         table.add_row(
