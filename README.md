@@ -650,6 +650,21 @@ nothing about what to fold in. Notes from repeated acceptances accumulate rather
 than overwrite — a second reason is evidence, not a correction of the first —
 and a run without one is told what is missing.
 
+**Scope an acceptance to a shape where you can.** `RULE@slideN` accepts the rule
+for the whole slide, which is what it says and rarely what you mean: the next
+turn of the deck can introduce a genuine defect of the same rule on the same
+slide, and it will be filed as already accepted and never shown. Naming the
+shape narrows it:
+
+```bash
+tieout check deck.pptx --client acme \
+  --accept "LO-003@slide10:Quadrant dot 3" \
+  --accept-note "plotted position, not a misalignment"
+```
+
+A shape-scoped acceptance stops matching if the shape is renamed, which errs
+towards reporting — the safe direction for a check.
+
 ---
 
 ## Optional: semantic review
@@ -1381,7 +1396,7 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--format table|json|html] [--out PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
-                       [--accept RULE@slideN] [--accept-note TEXT]
+                       [--accept RULE@slideN[:Shape name]] [--accept-note TEXT]
                        [--fail-on blocker] [--quiet]
 
 tieout rules [--client NAME]
@@ -1423,6 +1438,13 @@ tieout-ui [--host 127.0.0.1] [--port 8765] [--open/--no-open]
 **Exit codes.** `0` nothing at or above `--fail-on`; `1` findings at or above it;
 `2` the run itself failed. A gate that cannot distinguish the last two will
 eventually wave a bad deck through.
+
+**A rule that crashes exits `2`, not `0`.** A rule that raises has examined
+nothing, so an audit containing one does not cover what it claims to. It is
+reported as a failed run rather than as findings, and the deck is named as not
+fully checked. This used to print in red and exit zero, which is the one
+combination a pre-send gate cannot survive: the deck ships because the checker
+broke rather than because the deck was clean.
 
 **Profiles** live in `./profiles/NAME.yaml`. Set `TIEOUT_PROFILE_DIR` to keep
 them on a shared drive.

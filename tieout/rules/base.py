@@ -398,6 +398,22 @@ class AuditResult:
             out.setdefault(finding.slide_index, []).append(finding)
         return out
 
+    @property
+    def failed_rules(self) -> list[RuleSkipped]:
+        """Rules that raised rather than declining to run.
+
+        A rule that crashed has told you nothing about the deck, so an audit
+        containing one is incomplete rather than clean. Separated from the
+        rules that declined -- disabled, or missing a profile field -- because
+        those are decisions and this is a fault.
+        """
+        return [entry for entry in self.rules_skipped if entry.failed]
+
+    @property
+    def complete(self) -> bool:
+        """Whether every selected rule actually ran."""
+        return not self.failed_rules
+
     def worst_severity(self) -> str | None:
         if not self.findings:
             return None
@@ -487,8 +503,11 @@ def run_rules(
         result.unchecked.extend(rule.unchecked)
 
         for finding in findings:
+            shape_name = (
+                finding.where.name if isinstance(finding.where, ShapeRef) else None
+            )
             if suppressions is not None and suppressions.matches(
-                finding.rule_id, finding.slide_index
+                finding.rule_id, finding.slide_index, shape_name
             ):
                 result.suppressed.append(finding)
                 continue

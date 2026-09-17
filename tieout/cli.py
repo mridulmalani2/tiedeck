@@ -308,7 +308,11 @@ def check(
     ] = None,
     accept: Annotated[
         list[str] | None,
-        typer.Option("--accept", help="Accept a finding, as RULE@slideN."),
+        typer.Option(
+            "--accept",
+            help="Accept a finding, as RULE@slideN, or RULE@slideN:Shape name "
+            "to accept it only for that shape.",
+        ),
     ] = None,
     accept_note: Annotated[
         str,
@@ -355,6 +359,21 @@ def check(
     _emit(result, deck, output_format, out, quiet=quiet)
     _suggest_relearn(suppressions, client or loaded_profile.client)
 
+    # A rule that crashed examined nothing, so the audit does not cover what it
+    # claims to. Reported as a failed *run* rather than as findings: the console
+    # said so in red already, but the exit code said zero, and a pre-send gate
+    # reads the exit code. A deck could ship because the checker broke.
+    if not result.complete:
+        _out.print()
+        _out.print(
+            f"[bold red]Incomplete audit[/bold red]: "
+            f"{len(result.failed_rules)} rule(s) raised and examined nothing. "
+            f"This deck has not been fully checked."
+        )
+        for entry in result.failed_rules:
+            _out.print(f"  {entry.rule_id}: {entry.reason}")
+        raise typer.Exit(EXIT_ERROR)
+
     if result.exceeds(fail_on):
         raise typer.Exit(EXIT_FINDINGS)
 
@@ -393,6 +412,11 @@ def _emit(
         console_report.render(result, quiet=True)
 
 
+#: What ``--accept`` takes. The shape is optional and narrows the acceptance to
+#: that shape rather than the whole slide.
+_ACCEPT_FORM: Final[str] = "RULE@slideN or RULE@slideN:Shape name"
+
+
 def _accept(client: str, entries: list[str], note: str = "") -> None:
     """Append accepted findings, keeping a count of repeat acceptances.
 
@@ -406,22 +430,34 @@ def _accept(client: str, entries: list[str], note: str = "") -> None:
     """
     suppressions = load_suppressions(client)
     for entry in entries:
-        rule_id, _, slide = entry.partition("@")
+        rule_id, _, rest = entry.partition("@")
         rule_id = rule_id.strip()
         if not rule_id:
-            _fail(f"cannot read --accept {entry!r}: expected RULE@slideN")
+            _fail(f"cannot read --accept {entry!r}: expected {_ACCEPT_FORM}")
+        # A shape may be named after the slide, which narrows the acceptance to
+        # that shape. Without it the acceptance covers the whole slide, which is
+        # what the bare form asks for but rarely what the user means.
+        slide, _, shape_name = rest.partition(":")
+        shape_name = shape_name.strip()
         slide_index: int | None = None
-        if slide:
+        if slide.strip():
             digits = slide.strip().lower().removeprefix("slide")
             if not digits.isdigit():
-                _fail(f"cannot read --accept {entry!r}: expected RULE@slideN")
+                _fail(f"cannot read --accept {entry!r}: expected {_ACCEPT_FORM}")
             slide_index = int(digits)
+        if shape_name and slide_index is None:
+            _fail(
+                f"cannot read --accept {entry!r}: a shape needs a slide, "
+                f"as {_ACCEPT_FORM}"
+            )
 
         existing = next(
             (
                 s
                 for s in suppressions.suppressions
-                if s.rule_id == rule_id and s.slide_index == slide_index
+                if s.rule_id == rule_id
+                and s.slide_index == slide_index
+                and s.shape_name == (shape_name or None)
             ),
             None,
         )
@@ -430,6 +466,7 @@ def _accept(client: str, entries: list[str], note: str = "") -> None:
                 Suppression(
                     rule_id=rule_id,
                     slide_index=slide_index,
+                    shape_name=shape_name or None,
                     note=note,
                     count=1,
                 )
