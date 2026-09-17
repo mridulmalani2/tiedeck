@@ -1490,6 +1490,18 @@ additive schema and `unchecked`/`rules_skipped` at the top level. `html` for
 everyone else: one self-contained file, no CDN, no external fonts, nothing
 fetched at view time, with the provenance of every finding shown inline.
 
+**The console report starts with what to fix first.** Grouping by slide is the
+order someone fixes in, not the order they decide in: on the fourth turn at two
+in the morning the question is "what stops this going out", and on a 26-slide
+deck that answer was spread across 290 lines of scrolling. When a report has
+more than a handful of findings, its blockers and majors are listed first, in
+severity order, each with the remedy where the rule knows one; the slide tables
+follow. On a terminal narrower than 110 columns the five-column table cannot be
+read — every cell shrinks to fit and the measured and expected values fold into
+fragments — so findings are stacked one per stanza instead, with the evidence
+on its own line and labelled `because …`, so that captured output cannot mistake
+the rule's evidence for its claim.
+
 ---
 
 ### Three fields worth knowing about
