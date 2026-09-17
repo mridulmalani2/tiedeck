@@ -15,9 +15,13 @@ removing it and watching the answer change.
 
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Sequence
 
 import pytest
+from pptx import Presentation
+from pptx.util import Emu, Pt
 
 from tieout.model.deck import ShapeModel, ShapeRef, SlideModel, TextParagraph, TextRun
 from tieout.model.extent import (
@@ -28,6 +32,7 @@ from tieout.model.extent import (
     is_decorative_bleed,
 )
 from tieout.model.inherit import ResolvedFill, ResolvedFont, ResolvedLine
+from tieout.model.loader import load_deck
 
 CANVAS = (960.0, 540.0)
 
@@ -403,3 +408,129 @@ def test_an_unavailable_face_falls_back_to_the_bound() -> None:
     extent = ink_extent(_shape(width=400.0, paragraphs=[paragraph]))
     assert extent is not None
     assert extent.width == pytest.approx(2 * 10.0 * MAX_ADVANCE_EM)
+
+
+# --------------------------------------------------------------------------------------
+# The bound has to be a bound
+#
+# This module's whole promise is that it never narrows a box past its ink, so a
+# geometric rule reading the narrowed box cannot miss a defect the frame would
+# have caught. That promise was stated in the docstring and in the README and was
+# not true: line count came from dividing the paragraph's total advance by the
+# available width and rounding up, and wrapping does not pack that tightly.
+#
+# Four words each a little over half the line width need four lines; the division
+# says three. The box came out 40% shorter than its own bound allowed.
+#
+# These tests generate the cases rather than naming them, because naming them is
+# what the suite was already doing and the arithmetic slipped through anyway.
+# --------------------------------------------------------------------------------------
+
+#: A face that is certainly not installed, so every run takes the bounded path.
+#: The measured path is a real measurement and needs no bound to hold it up.
+_UNINSTALLED = "NoSuchFaceEverInstalled"
+_SIZE_PT = 10.0
+
+
+def _lines_needed(text: str, available_pt: float) -> int:
+    """Greedy word wrap under the same per-character bound the module uses."""
+    per_char = _SIZE_PT * MAX_ADVANCE_EM
+    lines = 0
+    current = 0.0
+    for word in text.split():
+        width = len(word) * per_char
+        if width > available_pt:
+            lines += (1 if current else 0) + math.ceil(width / available_pt)
+            current = 0.0
+        elif not current:
+            lines += 1
+            current = width
+        elif current + per_char + width <= available_pt:
+            current += per_char + width
+        else:
+            lines += 1
+            current = width
+    return max(1, lines)
+
+
+def _wrapping_deck(path, cases):
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for text, available_chars in cases:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        width = available_chars * _SIZE_PT * MAX_ADVANCE_EM + 14.4
+        box = slide.shapes.add_textbox(Pt(20), Pt(20), Pt(width), Pt(400))
+        frame = box.text_frame
+        frame.word_wrap = True
+        frame.text = text
+        for run in frame.paragraphs[0].runs:
+            run.font.size = Pt(_SIZE_PT)
+            run.font.name = _UNINSTALLED
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _cases():
+    """The counterexample that started this, then a generated spread."""
+    cases = [("aaaaa bbbbb ccccc ddddd eeeee", 10)]
+    rng = random.Random(7)
+    for _ in range(40):
+        words = rng.randint(2, 8)
+        length = rng.randint(2, 14)
+        cases.append(
+            (
+                " ".join(chr(97 + index % 26) * length for index in range(words)),
+                rng.randint(6, 40),
+            )
+        )
+    return cases
+
+
+def test_the_ink_box_is_never_shorter_than_the_text_needs(tmp_path):
+    cases = _cases()
+    deck = _wrapping_deck(tmp_path / "wrapping.pptx", cases)
+
+    violations = []
+    for slide, (text, _) in zip(deck.slides, cases, strict=True):
+        shape = next(iter(slide.leaf_shapes()))
+        extent = ink_extent(shape)
+        if extent is None:
+            continue
+        available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
+        if extent.height + 1e-6 < needed:
+            violations.append(
+                f"{text[:30]!r} in {available:.0f}pt: box {extent.height:.1f}pt, "
+                f"text needs {needed:.1f}pt"
+            )
+
+    assert not violations, "the bound is not a bound:\n  " + "\n  ".join(violations)
+
+
+def test_the_case_that_broke_it(tmp_path):
+    """Five words at half the line width each. ceil() said three lines; they
+    need five, and the box came out 45pt where the text needs 75."""
+    text = "aaaaa bbbbb ccccc ddddd eeeee"
+    deck = _wrapping_deck(tmp_path / "counterexample.pptx", [(text, 10)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    extent = ink_extent(shape)
+
+    assert extent is not None
+    available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+    assert _lines_needed(text, available) == 5
+    assert extent.height >= 5 * _SIZE_PT * MAX_LINE_EM - 1e-6
+
+
+def test_a_word_wider_than_its_line_is_counted_for_every_line_it_spans(tmp_path):
+    """PowerPoint character-wraps a word that cannot fit. Counting it as one
+    line would narrow the box past the ink again."""
+    text = "a" * 40
+    deck = _wrapping_deck(tmp_path / "longword.pptx", [(text, 10)])
+    shape = next(iter(deck.slides[0].leaf_shapes()))
+    extent = ink_extent(shape)
+
+    if extent is not None:
+        available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
+        needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
+        assert extent.height + 1e-6 >= needed

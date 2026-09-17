@@ -1620,7 +1620,12 @@ not.** `tieout.model.fonts` resolves a run's face, or a metric-compatible
 substitute — Carlito for Calibri, Caladea for Cambria, Liberation Sans for
 Arial — and measures the real advance. Where nothing honest stands in, an upper
 bound of 1.15 em per character is used instead, which can only ever fail to
-narrow a box and so cannot hide a real defect. Since Calibri and Cambria cannot
+narrow a box and so cannot hide a real defect. Line count is greedy word wrap
+under that same bound, not the paragraph's total advance divided by the line
+width: the division is not an upper bound, because wrapping does not pack that
+tightly, and it narrowed one measured box by 40% more than its own bound
+allowed. `tests/test_extent.py` asserts the guarantee over generated cases
+rather than trusting the arithmetic. Since Calibri and Cambria cannot
 be installed on a build machine for licensing reasons, **the bound is what most
 deployments actually use**, and it is looser than a measurement: on text-heavy
 decks LO-001, LO-002 and LO-004 will narrow less than they could. Installing

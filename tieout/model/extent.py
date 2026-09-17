@@ -109,16 +109,27 @@ def _run_font_path(run: TextRun) -> str | None:
     return resolve_font_path(font.name, bold=bool(font.bold), italic=bool(font.italic))
 
 
-def _run_width(run: TextRun) -> float:
-    """The run's advance, measured where the face is available and bounded where not."""
+def _text_width(run: TextRun, text: str) -> float:
+    """``text``'s advance in ``run``'s face, measured where it is available.
+
+    Takes the text rather than reading ``run.text`` so that one word of a run
+    can be measured on its own, which is what wrapping needs.
+    """
+    if not text:
+        return 0.0
     size_pt = _run_size(run)
     path = _run_font_path(run)
     if path is not None:
         try:
-            return measure_text(path, run.text, size_pt)[0]
+            return measure_text(path, text, size_pt)[0]
         except OSError:  # pragma: no cover - a font file that stops being readable
             pass
-    return len(run.text) * size_pt * MAX_ADVANCE_EM
+    return len(text) * size_pt * MAX_ADVANCE_EM
+
+
+def _run_width(run: TextRun) -> float:
+    """The run's advance, measured where the face is available and bounded where not."""
+    return _text_width(run, run.text)
 
 
 def _run_line_height(run: TextRun) -> float:
@@ -131,6 +142,76 @@ def _run_line_height(run: TextRun) -> float:
         except OSError:  # pragma: no cover - a font file that stops being readable
             pass
     return size_pt * MAX_LINE_EM
+
+
+def _paragraph_words(paragraph: TextParagraph) -> tuple[list[float], float]:
+    """An upper bound on each word's advance, and on one space.
+
+    A word is measured in the face of every run it spans, because a run
+    boundary can fall inside one -- a bolded stem, an italicised suffix -- and
+    splitting the word there would measure two narrow pieces instead of one
+    wide one.
+    """
+    widths: list[float] = []
+    current = 0.0
+    started = False
+    space = 0.0
+    for run in paragraph.runs:
+        size_pt = _run_size(run)
+        space = max(space, size_pt * MAX_ADVANCE_EM)
+        piece = ""
+        for character in run.text:
+            if character.isspace():
+                current += _text_width(run, piece)
+                piece = ""
+                if started:
+                    widths.append(current)
+                current = 0.0
+                started = False
+                continue
+            piece += character
+            started = True
+        current += _text_width(run, piece)
+    if started:
+        widths.append(current)
+    return widths, space
+
+
+def _wrapped_lines(paragraph: TextParagraph, available: float) -> int:
+    """How many lines this paragraph needs, wrapping at word boundaries.
+
+    Dividing the paragraph's total advance by the available width and rounding
+    up is *not* an upper bound, because wrapping does not pack that tightly: four
+    words each a little over half the line width need four lines, while the
+    division says three. The module's whole guarantee is that it never narrows a
+    box past its ink, and that arithmetic broke it -- by 40% on a box measured
+    against this, which is enough to hide an overlap or a margin breach.
+
+    A word wider than the line is character-wrapped by PowerPoint, so it is
+    counted for every line it spans rather than for one.
+    """
+    if available <= 0:
+        return 1
+    words, space = _paragraph_words(paragraph)
+    if not words:
+        return 1
+    lines = 0
+    current = 0.0
+    for width in words:
+        if width > available:
+            # Ends whatever line was open, then runs over as many as it needs.
+            lines += (1 if current else 0) + math.ceil(width / available)
+            current = 0.0
+            continue
+        if not current:
+            lines += 1
+            current = width
+        elif current + space + width <= available:
+            current += space + width
+        else:
+            lines += 1
+            current = width
+    return max(1, lines)
 
 
 def _paragraph_width_bound(paragraph: TextParagraph) -> float:
@@ -202,7 +283,7 @@ def ink_extent(shape: ShapeModel) -> InkExtent | None:
     for paragraph in paragraphs:
         bound = _paragraph_width_bound(paragraph)
         if wraps:
-            lines = max(1, math.ceil(bound / available_width)) if available_width else 1
+            lines = _wrapped_lines(paragraph, available_width)
             widest = max(widest, min(bound, available_width))
         else:
             # No wrapping: the text runs on as one line, which may be wider than
