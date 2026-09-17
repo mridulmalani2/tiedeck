@@ -23,7 +23,14 @@ import pytest
 from pptx import Presentation
 from pptx.util import Emu, Pt
 
-from tieout.model.deck import ShapeModel, ShapeRef, SlideModel, TextParagraph, TextRun
+from tieout.model.deck import (
+    ALIGN_CENTRE,
+    ShapeModel,
+    ShapeRef,
+    SlideModel,
+    TextParagraph,
+    TextRun,
+)
 from tieout.model.extent import (
     MAX_ADVANCE_EM,
     MAX_LINE_EM,
@@ -178,7 +185,7 @@ def test_a_run_with_no_resolved_size_does_not_narrow_on_a_guess() -> None:
 
 @pytest.mark.parametrize(
     "alignment, expected_left",
-    [("left", 100.0), ("center", None), ("right", None)],
+    [("left", 100.0), (ALIGN_CENTRE, None), ("right", None)],
 )
 def test_alignment_places_the_ink(alignment, expected_left) -> None:
     shape = _shape(width=400.0, paragraphs=[_paragraph("Hi", alignment=alignment)])
@@ -559,3 +566,45 @@ def test_a_word_wider_than_its_line_is_counted_for_every_line_it_spans(tmp_path)
         available = shape.width_pt - shape.inset_left_pt - shape.inset_right_pt
         needed = _lines_needed(text, available) * _SIZE_PT * MAX_LINE_EM
         assert extent.height + 1e-6 >= needed
+
+
+# --------------------------------------------------------------------------------------
+# The alignment vocabulary is closed
+#
+# The loader spelled "centre" and this module checked for ALIGN_CENTRE, so no
+# paragraph ever matched and every centred one was placed as though left aligned.
+# A section divider's title was measured at the left margin while it renders in
+# the middle of the slide. Found by rendering the deck and asking where the words
+# actually landed; nothing in the suite could have, because the fixture's titles
+# are left aligned too.
+# --------------------------------------------------------------------------------------
+
+
+def test_every_alignment_the_loader_emits_is_one_this_module_places():
+    from tieout.model.deck import ALIGN_RIGHT, ALIGNMENTS, SPREAD_ALIGNMENTS
+    from tieout.model.loader import _ALIGNMENT_MAP
+
+    emitted = set(_ALIGNMENT_MAP.values())
+    assert emitted <= ALIGNMENTS, f"the loader emits {emitted - ALIGNMENTS} nobody names"
+    # Every value is either one of the two the placer moves ink for, one it
+    # declines to narrow, or the left default it falls through to.
+    placed = {ALIGN_CENTRE, ALIGN_RIGHT} | SPREAD_ALIGNMENTS | {"left"}
+    assert emitted <= placed, f"{emitted - placed} would silently fall through to left"
+
+
+def test_a_centred_paragraph_is_placed_in_the_middle_of_its_frame():
+    shape = _shape(
+        left=36.0,
+        top=300.0,
+        width=888.0,
+        height=30.0,
+        paragraphs=[_paragraph("Section I", 24.0, alignment=ALIGN_CENTRE)],
+    )
+    extent = ink_extent(shape)
+    assert extent is not None and extent.narrowed_x
+    frame_centre = 36.0 + 888.0 / 2.0
+    ink_centre = extent.left + extent.width / 2.0
+    assert abs(ink_centre - frame_centre) < 1e-6, (
+        f"ink centred at {ink_centre:.1f}, frame at {frame_centre:.1f}"
+    )
+    assert extent.left > 36.0 + 200.0, "a centred title does not start at the left margin"

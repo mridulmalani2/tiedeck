@@ -45,7 +45,15 @@ import math
 from dataclasses import dataclass
 from typing import Final
 
-from tieout.model.deck import ShapeModel, SlideModel, TextParagraph, TextRun
+from tieout.model.deck import (
+    ALIGN_CENTRE,
+    ALIGN_RIGHT,
+    SPREAD_ALIGNMENTS,
+    ShapeModel,
+    SlideModel,
+    TextParagraph,
+    TextRun,
+)
 from tieout.model.fonts import measure_text, resolve_font_path
 
 #: Upper bound on one character's advance, in ems. The widest glyph in a bold
@@ -347,13 +355,13 @@ def _place_horizontally(
 
     alignments = {p.alignment for p in paragraphs}
     # Mixed alignment, or justified text, can put ink anywhere across the frame.
-    if len(alignments) > 1 or alignments & {"justify", "justify_low", "distribute"}:
+    if len(alignments) > 1 or alignments & SPREAD_ALIGNMENTS:
         return (box_left, available)
 
     alignment = next(iter(alignments), None)
-    if alignment in ("center", "ctr"):
+    if alignment == ALIGN_CENTRE:
         return (box_left + (available - widest) / 2.0, widest)
-    if alignment in ("right", "r"):
+    if alignment == ALIGN_RIGHT:
         return (box_left + available - widest, widest)
     # Left, or inherited and therefore left in every house style TieOut has met.
     return (box_left, widest)
