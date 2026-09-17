@@ -1210,11 +1210,28 @@ the message says explicitly because the error LibreOffice itself gives —
 Rendering happens on a background thread, so the upload returns immediately and
 images appear when they are ready.
 
-**Stated plainly: the LibreOffice conversion is not exercised by the test suite
-or by CI**, because it is a subprocess call to an optional large dependency that
-neither environment has. What is tested is every way it can fail, the pdfium
-rasterisation half against a real PDF, and that the page degrades to cards. If
-you are relying on the thumbnails, check them once on your own machine.
+**Both halves run in processes of their own.** LibreOffice always did. The
+pdfium rasterisation used to run inside the server, and pdfium is not safe to
+use from more than one thread — which a server cannot promise, because each
+uploaded deck renders on its own thread. Serialising the renders behind a lock
+was not enough: the objects pypdfium2 hands back carry finalizers that CPython
+runs on whichever thread happens to trigger collection, so a second thread
+reached into pdfium anyway. The process died — of SIGSEGV, SIGABRT or SIGTRAP,
+depending on where the corruption surfaced — only on machines with LibreOffice
+installed, which is every machine that has thumbnails at all, and never in CI,
+which has none. `python -m tieout_ui.rasterise` now owns pdfium for the length
+of one PDF and exits, and the server has nothing native left to be careful
+about.
+
+**Stated plainly: the LibreOffice conversion is not exercised by CI**, because
+it is a subprocess call to an optional large dependency CI does not have. It
+*is* exercised by `tests/test_render_oracle.py` on any machine that has
+LibreOffice and poppler's `pdftotext`, which renders the reference deck and
+checks the layout model against where the words actually landed (see [the
+tests that matter](#the-tests-that-matter)). What CI tests is every way the
+conversion can fail, the rasterisation against a real PDF, and that the page
+degrades to cards. If you are relying on the thumbnails, check them once on
+your own machine.
 
 ### The key
 
@@ -1748,6 +1765,21 @@ fails the build if a binary `.pptx` is ever committed.
   imports, network calls and dynamic imports.
 - **`test_inherit.py`** covers the eight inheritance cases, each isolating one
   level of the chain with hand-built OOXML so a failure names the level.
+- **`test_render_oracle.py`** checks the layout model against a renderer. It
+  converts the reference deck with LibreOffice, takes every word's box from the
+  PDF with `pdftotext -bbox`, and asserts that each word lands inside the ink
+  rectangle `extent.py` predicted for its text frame. Its first run found two
+  defects the other 1,365 tests could not: the loader spelled "centre" where
+  the placer checked "center", so every centred paragraph was placed at the
+  left margin; and a placeholder's vertical anchor was read from the slide
+  alone, never from the layout or master that set it. Both were invisible to a
+  fixture built from the same assumptions as the code. It now reports zero
+  escapes out of roughly 1,100 scored words. The renderer is LibreOffice, not
+  PowerPoint — a second independent implementation of the same specification,
+  not ground truth — and the one known divergence (LibreOffice centres a
+  `wrap="none"` body on import where PowerPoint honours its `algn`) is
+  excluded by name. Skipped, with the reason, wherever `soffice` or `pdftotext`
+  is missing, which includes CI.
 
 ### Layering
 
