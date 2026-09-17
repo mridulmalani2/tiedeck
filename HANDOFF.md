@@ -1,22 +1,32 @@
 # TieOut handoff
 
 Written 2026-09-17, at the close of the session that merged
-[#1](https://github.com/mridulmalani2/tiedeck/pull/1) (`cfb6a27` on `main`).
-It exists so a fresh chat can pick the work up without re-deriving what was
-already established. Read it top to bottom once; after that, treat the
-**Open work** section as the queue.
+[#1](https://github.com/mridulmalani2/tiedeck/pull/1) (`cfb6a27` on `main`),
+and revised the same day when the grid work in §2 was implemented on this
+branch. It exists so a fresh chat can pick the work up without re-deriving what
+was already established. Read it top to bottom once; after that, treat §7 as
+the queue.
+
+**What changed since the first draft.** §2's grid problem is no longer open: the
+saturation guard and the escalating support requirement are implemented, tested
+and documented, on this branch. §5's `--accept-note` gap is closed. What is
+*not* done is the only thing that would prove either: neither has been run
+against a real deck, because the deck is gone with the container (§6). Both
+sections below say so where it matters.
 
 ---
 
 ## 1. Where things stand
 
 `main` is `cfb6a27`. It carries the whole tool plus one round of correctness
-work driven by a real deck. Start any new branch from `main` — the previous
-working branch is merged and must not be extended.
+work driven by a real deck. This branch (`claude/practical-volta-j1yct7`,
+[#2](https://github.com/mridulmalani2/tiedeck/pull/2)) sits on top of it and is
+still open — extend it, or branch from `main` once it merges. The previous
+working branch from #1 is merged and must not be extended.
 
 ```
 git fetch origin main && git checkout -B <new-branch> origin/main
-.venv/bin/python -m pytest -q        # 1327 tests
+.venv/bin/python -m pytest -q        # 1346 tests
 .venv/bin/ruff check . && .venv/bin/mypy .
 ```
 
@@ -66,69 +76,102 @@ catch.
 
 ---
 
-## 2. The grid — the main open problem
+## 2. The grid — diagnosed, then fixed
 
-This is the user's named concern ("a lot of glitches ... especially related
-to grid positions"), and the evidence says they are right. Here are the
-numbers, gathered against `Project_Falcon_Halyard_Clean.pptx`:
+This was the user's named concern ("a lot of glitches ... especially related to
+grid positions"), and the evidence said they were right. **The fix is now in.**
+The diagnosis is kept below because the numbers are not reproducible from this
+repository alone and would otherwise be lost.
 
-* The learned grid has **27 columns and 53 rows** on a 960 × 540pt canvas.
+### The numbers, against `Project_Falcon_Halyard_Clean.pptx`
+
+* The learned grid had **27 columns and 53 rows** on a 960 × 540pt canvas.
 * Grid tolerance is 2.0pt; the near-miss window is 0.5–4.0pt.
-* **34 of the 52 row gaps are under 8pt** — under twice the near-miss
-  maximum. Actual gaps include 2.16, 2.88, 3.6, 4.32.
-* Canvas coverage: **37% of the vertical canvas is inside on-grid tolerance
-  of some row, and 56% is inside the near-miss window.** Horizontally the
-  same figures are 11% and 19%.
-* **All 6 remaining LO-003 findings are on the y axis.** Not one is
+* **34 of the 52 row gaps were under 8pt** — under twice the near-miss
+  maximum. Actual gaps included 2.16, 2.88, 3.6, 4.32.
+* Canvas coverage: **37% of the vertical canvas was inside on-grid tolerance
+  of some row, and 56% was inside the near-miss window.** Horizontally the
+  same figures were 11% and 19%.
+* **All 6 remaining LO-003 findings were on the y axis.** Not one was
   horizontal.
-
-### The diagnosis
 
 53 rows on 540pt is not a grid. It is a transcript of every y-coordinate the
 deck happens to use. When more than half the vertical canvas is inside the
 near-miss window of *something*, "this edge just misses a grid line" carries
 almost no information — a shape placed at random would trip it.
 
-The mechanical cause is that **rows and columns share one derivation
+The mechanical cause was that **rows and columns shared one derivation
 threshold** (`GRID_MIN_SUPPORT = 5`, `GRID_MIN_SLIDES = 2`,
 `GRID_TOLERANCE_PT = 2.0`, all in `tieout/learn/derive_layout.py`). But decks
-are not symmetric: a deck has a handful of real columns that repeat slide
-after slide, and a great many distinct vertical positions, because vertical
-placement follows content length rather than a template. One threshold cannot
-serve both.
+are not symmetric: a deck has a handful of real columns that repeat slide after
+slide, and a great many distinct vertical positions, because vertical placement
+follows content length rather than a template. One threshold cannot serve both.
 
-I also tested whether a baseline rhythm exists that the derivation is simply
-failing to find. It does not. The modal row gap is 3.6pt (10 occurrences),
-and a 3.6pt pitch explains only **34% of the rows**; 7.2pt explains 15%.
-There is no clean vertical pitch in this deck to derive.
+### What was implemented
 
-### Suggested direction (not yet implemented, not yet agreed)
+Routes 2 and 1 of the four set out in the first draft, composed — the
+combination the draft argued for.
 
-Treat it as a **design question to settle with the user before coding**, since
-several routes are defensible:
+**Route 2, the saturation guard, is the trigger.** `coverage_share()` in
+`tieout/cluster.py` measures the share of an axis lying within near-miss
+distance of some learned line, merging overlapping bands and clipping to the
+canvas. `GRID_SATURATION_LIMIT = 0.25` is where an axis is judged to have
+stopped distinguishing an aligned shape from a stray one.
 
-1. **Separate the derivations.** Give rows their own, much stricter support
-   threshold — or require a row to recur across a larger share of slides
-   than a column does. Cheapest change; keeps the concept.
-2. **Add a saturation guard.** Refuse to emit a grid axis whose learned lines
-   cover more than some share of the canvas (say 25% at near-miss width), and
-   have `learn` say so out loud: *"no vertical grid could be derived; LO-003
-   will not run on the y axis."* A rule that cannot be derived honestly
-   should skip, not guess. This composes with (1) and is the option I would
-   argue for.
-3. **Drop deck-wide rows entirely** and keep only the per-slide local
-   alignment logic (`_local_alignments` in `tieout/rules/layout.py`), which
-   already handles "these eight shapes share an edge the deck grid never saw".
-4. **Derive a pitch instead of positions** — a baseline rhythm, the way a
-   typographic grid actually works. Principled, but this deck has no such
-   rhythm, so it would derive nothing here. Worth knowing before investing.
+**Route 1, a stricter threshold, is the remedy — but derived, not fitted.**
+Rather than hand-pick a stricter constant for rows, `_unsaturated()` raises the
+requirement to recur *across slides* one step at a time
+(`GRID_SLIDE_SHARE_STEPS`, 0% → 80%) until the axis comes back under the limit.
+This matters for the `n=1` problem in §4: the asymmetry is discovered per deck
+rather than assumed, so a deck whose rows are a genuine grid is not tightened at
+all, and a deck whose *columns* are the over-derived axis gets the same
+treatment without anyone editing a constant.
 
-Whatever is chosen, the acceptance test is the invariant in §1: re-run
-`check(D, learn(D))` and confirm the six vertical LO-003 findings go away
-*without* silencing genuine misalignment. A synthetic deck with one shape
-deliberately dragged 3pt off a true column is the guard to write alongside it.
+**An axis that never gets under the limit is not emitted**, and `learn` says so
+in `not_learned`, naming the rule that will not run:
 
----
+```
+layout.grid.rows_pt: 24 horizontal edge clusters have the support to be grid
+lines, but they saturate the canvas: ... no horizontal grid is emitted and
+LO-003 will not run on the y axis
+```
+
+Reported rather than absorbed, for the same reason as `review_reference` in §1.
+
+**Merging inherits the test.** Each deck's grid is under the limit by
+construction, but the union of two need not be, so `_merge_layout` declines to
+widen an axis past the limit and records why. That was the one place the
+property could come back.
+
+Route 4 (derive a pitch instead of positions) was measured and rejected before
+any of this: the modal row gap was 3.6pt, a 3.6pt pitch explained 34% of the
+rows and 7.2pt explained 15%. There is no vertical rhythm in that deck to
+derive. Recorded in the README so nobody spends a day on it. Route 3 (drop
+deck-wide rows entirely) was not needed once the guard could drop them per deck.
+
+### What is *not* proven, and how to prove it
+
+The acceptance test the first draft named — re-run `check(D, learn(D))` on the
+real deck and confirm the six vertical LO-003 findings go without silencing
+genuine misalignment — **has not been run, because the deck is gone** (§6).
+What exists instead is `tests/test_grid_saturation.py`, 15 tests that reproduce
+the failure mode synthetically:
+
+* a deck whose row axis saturates has no row grid emitted, says why, and keeps
+  its columns;
+* the same deck, with shapes placed a few points off a row nobody meant to
+  exist, produces spurious LO-003 findings with the guard lifted and none with
+  it — the invariant from §1, in miniature;
+* **a shape dragged 3pt off a true column is still reported** — the guard the
+  first draft asked for alongside the change;
+* a deck whose rows are a real grid is not tightened, and one whose rows are
+  partly real keeps the rows every slide uses and loses the ones a single pair
+  of slides uses.
+
+**First thing to do when the deck is re-attached**: run `learn` then `check`
+against it and compare with the numbers above. Expect the row axis to be
+dropped and the six LO-003 findings to go. If it is *not* dropped, the 25%
+limit is in the wrong place and that is the number to move — not the mechanism.
 
 ## 3. Two deck defects, unfixed
 
@@ -178,6 +221,16 @@ Each is a real shortcoming of the merged work, not a nitpick.
   six-slide synthetic deck, but every tuned constant in this codebase was
   tuned against a single real deck from a single house style. Treat the
   constants as fitted to `n=1` until a second real deck has been through.
+* **`GRID_SATURATION_LIMIT` is the newest of those constants and the least
+  tested.** 25% of an axis at near-miss width separated the reference deck's
+  two axes cleanly (19% horizontal against 56% vertical), but that separation
+  is the only evidence for the number, and it has not been re-measured against
+  the deck since the guard was written (§2). A house style with a genuinely
+  dense horizontal rhythm could be refused a grid it really has. The failure is
+  visible rather than silent — the axis lands in `not_learned` with its
+  measured coverage — but visible is not the same as correct. The escalating
+  slide-share requirement beside it is the more defensible half: it discovers
+  which axis is over-derived instead of assuming rows always are.
 * **`canon_accepted` inherits the reference deck's inconsistencies.** TY-005
   learns accepted spellings from the reference. If that deck spells a term
   two ways, both become canon and the rule stops catching either.
@@ -187,20 +240,18 @@ Each is a real shortcoming of the merged work, not a nitpick.
 
 ---
 
-## 5. Housekeeping
+## 5. Housekeeping — done
 
-Small, uncontroversial, safe to batch:
-
-* **`--accept` cannot record a note.** `Suppression` has a `note: str` field
-  (`tieout/profile/schema.py:380`), but `_accept` in `tieout/cli.py` only ever
-  writes `rule_id`, `slide_index` and `count` — there is no `--accept-note`
-  option, so the field is dead. This matters because of `_suggest_relearn`:
-  three acceptances is meant to signal that the *rule* is miscalibrated rather
-  than the deck. Without a note, whoever hits that threshold has no record of
-  *why* it was accepted three times, which is the only thing that makes the
-  signal actionable. Either wire the field up or delete it.
+* **`--accept` could not record a note.** `Suppression.note` existed in the
+  schema with no CLI path able to write it, so the field was dead. It is now
+  wired up: `tieout check --accept RULE@slideN --accept-note "why"`. Notes from
+  repeated acceptances accumulate rather than overwrite — a second reason is
+  evidence, not a correction of the first — and `_suggest_relearn` prints the
+  reason alongside the count, or says the reason is missing when there is none.
+  That was the whole point: three acceptances means the *rule* is miscalibrated
+  rather than the deck, and whoever reads that is rarely whoever made them.
 * Suppression paths are already `profiles/<client>.suppress.yaml` in-repo
-  (`suppression_path`, asserted by `tests/test_cli.py:298`). An earlier note
+  (`suppression_path`, asserted by `tests/test_cli.py`). An earlier note
   suggested renaming `falcon.suppressions.yaml`; that was a scratch file from
   the session, not repo content. **Nothing to rename.**
 
@@ -225,10 +276,19 @@ Do not commit the deck to the repo — it is client material.
 
 ## 7. Suggested order of work
 
-1. Settle the grid direction with the user (§2), then implement and prove it
-   against the invariant. This is the largest source of remaining noise and
-   the thing the user actually named.
-2. Get the deck re-attached and close slides 9 and 12 (§3).
-3. Housekeeping (§5) — bundle into whichever branch is open.
-4. A second real deck (§4), which is the only thing that will show whether
-   the fitted constants generalise.
+Everything left needs the same thing first, and it is not code.
+
+1. **Get `Project_Falcon_Halyard_Clean.pptx` re-attached.** Without it, (2),
+   (3) and (4) below cannot be started, and nothing more can honestly be
+   claimed about the grid.
+2. **Validate the grid fix against it** (§2, "What is *not* proven"). Expect
+   the row axis to be dropped and the six vertical LO-003 findings to go. If
+   the axis survives, move `GRID_SATURATION_LIMIT`, not the mechanism.
+3. **Close slides 9 and 12** (§3).
+4. **A second real deck** (§4), which is the only thing that will show whether
+   any of the fitted constants generalise — the 25% saturation limit now among
+   them.
+
+Nothing in this list is blocked on a decision. (2) and (4) are blocked on
+material; (3) is blocked on both material and a visual judgement that needs a
+human to look at a render.

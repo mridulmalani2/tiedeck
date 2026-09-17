@@ -388,6 +388,39 @@ into something testable, and it is why near-miss alignment is only reported
 against a *real* grid line — a shape 3pt off a learned grid line is a defect,
 3pt off a one-off edge is not.
 
+That last claim only holds while the grid stays *selective*, and on a real deck
+one axis of it did not. Rows and columns are derived by the same thresholds, but
+a deck is not symmetric about them: it has a handful of real columns that repeat
+slide after slide, and a great many distinct vertical positions, because
+vertical placement follows the length of the content above it rather than a
+template. The deck that prompted this derived 27 columns and **53 rows** on a
+960 × 540pt canvas. At near-miss width that put 56% of the vertical canvas
+inside the window of *some* row against 19% horizontally, and every remaining
+LO-003 finding on that deck was on the y axis. 53 rows on 540pt is not a grid,
+it is a transcript of every y-coordinate the deck uses, and a shape dropped at
+random would have tripped the rule.
+
+So each axis is measured after it is derived. If the bands within near-miss
+distance of its lines cover more than **25%** of that axis, the requirement to
+recur across slides is raised — a step at a time, only on the axis that needs it
+— until the axis is selective again. An axis that never gets there is not
+emitted at all, and `learn` says so in `not_learned`:
+
+```
+layout.grid.rows_pt: 24 horizontal edge clusters have the support to be grid
+lines, but they saturate the canvas: ... no horizontal grid is emitted and
+LO-003 will not run on the y axis
+```
+
+Reported rather than guessed at, for the same reason as everything else here: a
+rule that cannot be derived honestly should skip, and a user who reads an empty
+LO-003 needs to know whether that means a clean deck or a rule that never ran.
+On a deck whose rows *are* a grid, nothing is tightened and nothing is dropped.
+
+Merging inherits the same test. Each deck's own grid comes in under the limit by
+construction, but the union of two need not, so `learn --add` declines to widen
+an axis past it and says the two decks do not share that axis.
+
 **Typography.** Quote style, title capitalisation, bullet punctuation, thousands
 separators, negative style, per-column decimal consistency, currency notation and
 date format, each counted at the scope that makes it meaningful. The deriver and
@@ -598,7 +631,8 @@ Naming a rule exactly on the command line also runs it —
 ### Accepting a finding
 
 ```bash
-tieout check deck.pptx --client acme --accept BR-002@slide7
+tieout check deck.pptx --client acme --accept BR-002@slide7 \
+  --accept-note "the sponsor logo is contractually this colour"
 ```
 
 Appends to `profiles/acme.suppress.yaml`. Accept the same rule three times and
@@ -607,7 +641,14 @@ TieOut says what it thinks is really happening:
 ```
 BR-002 has been accepted 3 times. It is probably miscalibrated. Fold the evidence in with:
   tieout learn --add THAT_DECK.pptx --client acme
+  accepted because: the sponsor logo is contractually this colour
 ```
+
+`--accept-note` is optional but close to the point of the count. Whoever reaches
+three acceptances is rarely whoever made them, and a bare count of three says
+nothing about what to fold in. Notes from repeated acceptances accumulate rather
+than overwrite — a second reason is evidence, not a correction of the first —
+and a run without one is told what is missing.
 
 ---
 
@@ -1340,7 +1381,8 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--format table|json|html] [--out PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
-                       [--accept RULE@slideN] [--fail-on blocker] [--quiet]
+                       [--accept RULE@slideN] [--accept-note TEXT]
+                       [--fail-on blocker] [--quiet]
 
 tieout rules [--client NAME]
 tieout profile show --client NAME
@@ -1503,8 +1545,28 @@ size and irregular on both axes — and exempts those from the geometry rules.
 The inference can be wrong in both directions. A hand-drawn diagram of three
 same-sized boxes placed freely reads as a scatter and stops being checked; a
 bar chart of two series does not reach the three-member floor and keeps being
-checked. Where it is wrong, `tieout check --accept LO-003@slide10` records the
-judgement with a note.
+checked. Where it is wrong,
+`tieout check --accept LO-003@slide10 --accept-note "quadrant dots"` records the
+judgement with the reason for it.
+
+**The saturation limit is a judgement, and it is fitted to one deck.** 25% of an
+axis, measured at near-miss width, is where a grid was decided to have stopped
+telling an aligned shape from a stray one. It separated the two axes of the deck
+it came from cleanly — 19% horizontally against 56% vertically — but that is one
+deck, and a house style with a genuinely dense horizontal rhythm could be
+refused a grid it really has. The failure is visible rather than silent: the
+axis lands in `not_learned` with the coverage it measured, so a profile that
+should have a grid and does not says so on the way past. The escalating
+slide-share requirement is the deliberately cheaper half of the design — it
+tightens whichever axis is over-derived rather than assuming rows always are —
+but a second real deck is the only thing that will show whether 25% is the right
+place to draw the line.
+
+A route that was measured and rejected, so nobody spends a day on it: deriving a
+*pitch* — a baseline rhythm, the way a typographic grid actually works — rather
+than positions. On the reference deck the modal row gap was 3.6pt and a 3.6pt
+pitch explained only 34% of the rows; 7.2pt explained 15%. There was no vertical
+rhythm in that deck to find.
 
 **A single reference deck is thin evidence for deck-wide conventions.** Rules
 scoped to an archetype with two or three slides, or deck-wide keys with few
