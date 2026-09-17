@@ -866,7 +866,6 @@ From nothing at all:
 ```bash
 git clone https://github.com/mridulmalani2/tiedeck
 cd tiedeck
-git checkout claude/practical-volta-j1yct7      # until the PR is merged
 ./run.sh
 ```
 
@@ -899,7 +898,6 @@ and use it below in place of `python3`.
 ```bash
 git clone https://github.com/mridulmalani2/tiedeck
 cd tiedeck
-git checkout claude/practical-volta-j1yct7      # until the PR is merged
 
 python3 -m venv .venv
 .venv/bin/python -m pip install ".[ui]"          # the UI extra; the core comes with it
