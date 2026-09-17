@@ -310,6 +310,14 @@ def check(
         list[str] | None,
         typer.Option("--accept", help="Accept a finding, as RULE@slideN."),
     ] = None,
+    accept_note: Annotated[
+        str,
+        typer.Option(
+            "--accept-note",
+            help="Why the finding is being accepted. Recorded against each "
+            "--accept in the same run.",
+        ),
+    ] = "",
     fail_on: Annotated[
         str, typer.Option("--fail-on", help="Exit 1 at this severity or worse.")
     ] = "blocker",
@@ -328,8 +336,10 @@ def check(
         _fail(str(exc))
         return
 
+    if accept_note and not accept:
+        _fail("--accept-note has nothing to annotate: pass --accept as well")
     if accept:
-        _accept(client or loaded_profile.client, accept)
+        _accept(client or loaded_profile.client, accept, accept_note)
 
     suppressions = load_suppressions(client or loaded_profile.client)
     clear_caches()
@@ -383,8 +393,17 @@ def _emit(
         console_report.render(result, quiet=True)
 
 
-def _accept(client: str, entries: list[str]) -> None:
-    """Append accepted findings, keeping a count of repeat acceptances."""
+def _accept(client: str, entries: list[str], note: str = "") -> None:
+    """Append accepted findings, keeping a count of repeat acceptances.
+
+    The note is what makes the count in :func:`_suggest_relearn` actionable.
+    Three acceptances is meant to say the *rule* is miscalibrated rather than
+    the deck, but whoever reaches that threshold is usually not whoever set it,
+    and a bare count of three tells them nothing about what was accepted or
+    why. Notes from repeated acceptances accumulate rather than overwrite: the
+    second reason for accepting a finding is evidence, not a correction of the
+    first.
+    """
     suppressions = load_suppressions(client)
     for entry in entries:
         rule_id, _, slide = entry.partition("@")
@@ -408,10 +427,17 @@ def _accept(client: str, entries: list[str]) -> None:
         )
         if existing is None:
             suppressions.suppressions.append(
-                Suppression(rule_id=rule_id, slide_index=slide_index, count=1)
+                Suppression(
+                    rule_id=rule_id,
+                    slide_index=slide_index,
+                    note=note,
+                    count=1,
+                )
             )
         else:
             existing.count += 1
+            if note and note not in _split_notes(existing.note):
+                existing.note = f"{existing.note}; {note}" if existing.note else note
     suppressions.client = client
     write_suppressions(suppressions, suppression_path(client))
 
@@ -431,6 +457,19 @@ def _suggest_relearn(suppressions: object, client: str) -> None:
             f"[/yellow] It is probably miscalibrated. Fold the evidence in with:"
         )
         _out.print(f"  tieout learn --add THAT_DECK.pptx --client {client}")
+        if entry.note:
+            _out.print(f"  accepted because: {entry.note}")
+        else:
+            # The count alone does not say what to fold in. Said once, where the
+            # next person can act on it.
+            _out.print(
+                "  no reason was recorded for those acceptances; pass "
+                "--accept-note next time so this is actionable"
+            )
+
+
+def _split_notes(note: str) -> list[str]:
+    return [part.strip() for part in note.split(";") if part.strip()]
 
 
 def _split(value: str | None) -> list[str] | None:

@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Final
 
+from tieout.cluster import coverage_share
+from tieout.learn.derive_layout import GRID_SATURATION_LIMIT
 from tieout.model.color import delta_e_76, parse_hex, try_parse_hex
 from tieout.profile.schema import (
     BoilerplateEntry,
@@ -526,7 +528,11 @@ def _merge_layout(
 
     path = "layout.grid"
     if not _locked(merged, path, result, "alignment grid"):
-        for attribute in ("columns_pt", "rows_pt"):
+        half_width = merged.layout.near_miss_alignment_pt.max
+        for attribute, extent in (
+            ("columns_pt", merged.slide.width_pt),
+            ("rows_pt", merged.slide.height_pt),
+        ):
             current_lines: list[float] = list(getattr(existing.layout.grid, attribute))
             incoming_lines: list[float] = list(getattr(incoming.layout.grid, attribute))
             tolerance = existing.layout.grid.tolerance_pt
@@ -535,19 +541,37 @@ def _merge_layout(
                 for line in incoming_lines
                 if all(abs(line - held) > tolerance for held in current_lines)
             ]
-            if added:
-                setattr(
-                    merged.layout.grid,
-                    attribute,
-                    sorted(current_lines + added),
-                )
+            if not added:
+                continue
+            widened = sorted(current_lines + added)
+            # Each deck's own grid comes in under the saturation limit by
+            # construction, but a union of two need not: two house styles with
+            # different but individually sparse rows make one axis that is
+            # neither. The union is the only place this can reappear, so it is
+            # the place to check it, on the same terms derive_grid used.
+            saturation = coverage_share(widened, half_width, extent)
+            if saturation > GRID_SATURATION_LIMIT:
                 _record(
-                    result, f"{path}.{attribute}", WIDENED,
+                    result, f"{path}.{attribute}", NEUTRAL,
                     f"{len(current_lines)} line(s)",
-                    f"{len(current_lines) + len(added)} line(s)",
-                    "the added deck aligns to "
-                    + ", ".join(f"{line:g}pt" for line in added[:6]),
+                    f"{len(current_lines)} line(s)",
+                    f"adding the {len(added)} line(s) the second deck aligns to "
+                    f"would put {saturation:.0%} of the axis within "
+                    f"{half_width:g}pt of a grid line, past the "
+                    f"{GRID_SATURATION_LIMIT:.0%} at which being near a line "
+                    f"stops distinguishing an aligned shape from a stray one. "
+                    f"The two decks do not share this axis; re-learn from both "
+                    f"together to derive one that holds across them",
                 )
+                continue
+            setattr(merged.layout.grid, attribute, widened)
+            _record(
+                result, f"{path}.{attribute}", WIDENED,
+                f"{len(current_lines)} line(s)",
+                f"{len(widened)} line(s)",
+                "the added deck aligns to "
+                + ", ".join(f"{line:g}pt" for line in added[:6]),
+            )
 
 
 def _merge_typography(

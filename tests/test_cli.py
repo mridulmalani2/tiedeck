@@ -318,6 +318,88 @@ def test_three_acceptances_suggest_relearning_instead(workspace):
     assert "learn --add" in result.output
 
 
+def test_an_acceptance_can_record_why(workspace):
+    """``Suppression.note`` existed in the schema with no CLI path able to write
+    it, so the field was dead. It is the only thing that makes the count in
+    ``_suggest_relearn`` actionable: three acceptances says the rule is
+    miscalibrated, and whoever reads that is rarely whoever accepted them."""
+    _learn(workspace)
+    _invoke(
+        "check",
+        "decks/reference_dirty.pptx",
+        "--client",
+        "demo",
+        "--rules",
+        "BR-002",
+        "--accept",
+        "BR-002@slide5",
+        "--accept-note",
+        "the sponsor logo is contractually this colour",
+        "--quiet",
+    )
+
+    written = (workspace / "profiles" / "demo.suppress.yaml").read_text(encoding="utf-8")
+    assert "contractually this colour" in written
+
+
+def test_repeat_acceptances_accumulate_their_reasons(workspace):
+    """The second reason for accepting a finding is evidence, not a correction of
+    the first, so notes are appended rather than overwritten -- and a reason
+    already recorded is not recorded twice."""
+    _learn(workspace)
+    for note in ("first reason", "first reason", "second reason"):
+        result = _invoke(
+            "check",
+            "decks/reference_dirty.pptx",
+            "--client",
+            "demo",
+            "--rules",
+            "BR-002",
+            "--accept",
+            "BR-002@slide5",
+            "--accept-note",
+            note,
+            "--quiet",
+        )
+
+    written = (workspace / "profiles" / "demo.suppress.yaml").read_text(encoding="utf-8")
+    assert "first reason; second reason" in written
+    assert "miscalibrated" in result.output
+    assert "first reason; second reason" in result.output
+
+
+def test_an_unexplained_repeat_acceptance_says_what_is_missing(workspace):
+    """A bare count of three tells the next person nothing about what to fold in.
+    Said once, where they can act on it."""
+    _learn(workspace)
+    for _ in range(3):
+        result = _invoke(
+            "check",
+            "decks/reference_dirty.pptx",
+            "--client",
+            "demo",
+            "--rules",
+            "BR-002",
+            "--accept",
+            "BR-002@slide5",
+            "--quiet",
+        )
+    assert "--accept-note" in result.output
+
+
+def test_an_accept_note_with_nothing_to_annotate_is_a_usage_error(workspace):
+    _learn(workspace)
+    result = _invoke(
+        "check",
+        "decks/reference_clean.pptx",
+        "--client",
+        "demo",
+        "--accept-note",
+        "why",
+    )
+    assert result.exit_code == EXIT_ERROR
+
+
 def test_a_malformed_accept_is_a_usage_error(workspace):
     _learn(workspace)
     result = _invoke(
