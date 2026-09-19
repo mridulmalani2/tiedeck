@@ -572,12 +572,12 @@ def _locate(findings: list[Finding], deck: DeckModel) -> None:
     for slide in deck.slides:
         for shape in slide.all_shapes():
             if shape.bbox_pt is not None:
-                boxes[(slide.index, shape.ref.shape_id)] = shape.bbox_pt
+                boxes[(slide.index, shape.ref.uid)] = shape.bbox_pt
 
     for index, finding in enumerate(findings):
         if finding.bbox_pt is not None or not isinstance(finding.where, ShapeRef):
             continue
-        box = boxes.get((finding.where.slide_index, finding.where.shape_id))
+        box = boxes.get((finding.where.slide_index, finding.where.uid))
         if box is not None:
             findings[index] = replace(finding, bbox_pt=box)
 

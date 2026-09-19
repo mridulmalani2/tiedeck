@@ -121,24 +121,24 @@ ROLES: Final[tuple[str, ...]] = (
 class SlideFurniture:
     """Which shapes on one slide are chrome rather than content."""
 
-    logo_shape_ids: frozenset[int] = frozenset()
-    page_number_shape_ids: frozenset[int] = frozenset()
-    boilerplate_shape_ids: frozenset[int] = frozenset()
+    logo_uids: frozenset[int] = frozenset()
+    page_number_uids: frozenset[int] = frozenset()
+    boilerplate_uids: frozenset[int] = frozenset()
     #: Drawn shapes carrying no text of their own that back a piece of the above
     #: -- the badge under a monogram, the tab behind a page number.
-    lockup_shape_ids: frozenset[int] = frozenset()
+    lockup_uids: frozenset[int] = frozenset()
 
     @property
     def all_ids(self) -> frozenset[int]:
         return (
-            self.logo_shape_ids
-            | self.page_number_shape_ids
-            | self.boilerplate_shape_ids
-            | self.lockup_shape_ids
+            self.logo_uids
+            | self.page_number_uids
+            | self.boilerplate_uids
+            | self.lockup_uids
         )
 
-    def contains(self, shape_id: int) -> bool:
-        return shape_id in self.all_ids
+    def contains(self, uid: int) -> bool:
+        return uid in self.all_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +146,7 @@ class PageNumberObservation:
     """One page number found on a slide, with the value it displayed."""
 
     slide_index: int
-    shape_id: int
+    uid: int
     value: int
     text: str
     box_pt: tuple[float, float, float, float]
@@ -167,15 +167,15 @@ class Furniture:
     def for_slide(self, slide_index: int) -> SlideFurniture:
         return self.by_slide.get(slide_index, SlideFurniture())
 
-    def is_furniture(self, slide_index: int, shape_id: int) -> bool:
-        return self.for_slide(slide_index).contains(shape_id)
+    def is_furniture(self, slide_index: int, uid: int) -> bool:
+        return self.for_slide(slide_index).contains(uid)
 
-    def is_logo(self, slide_index: int, shape_id: int) -> bool:
-        return shape_id in self.for_slide(slide_index).logo_shape_ids
+    def is_logo(self, slide_index: int, uid: int) -> bool:
+        return uid in self.for_slide(slide_index).logo_uids
 
     def logo_shapes(self, slide: SlideModel) -> list[ShapeModel]:
-        ids = self.for_slide(slide.index).logo_shape_ids
-        return [s for s in slide.all_shapes() if s.ref.shape_id in ids]
+        ids = self.for_slide(slide.index).logo_uids
+        return [s for s in slide.all_shapes() if s.ref.uid in ids]
 
     def page_number_for(self, slide_index: int) -> PageNumberObservation | None:
         for observation in self.page_numbers:
@@ -195,7 +195,7 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
     boilerplate = _boilerplate(deck, profile)
 
     boilerplate_texts = set(boilerplate)
-    page_number_ids = {(o.slide_index, o.shape_id) for o in page_numbers}
+    page_number_ids = {(o.slide_index, o.uid) for o in page_numbers}
 
     by_slide: dict[int, SlideFurniture] = {}
     for slide in deck.slides:
@@ -204,17 +204,17 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
         plate: set[int] = set()
         for shape in slide.all_shapes():
             if shape.image_sha1 and shape.image_sha1 in logo_sha1s:
-                logos.add(shape.ref.shape_id)
-            if (slide.index, shape.ref.shape_id) in page_number_ids:
-                numbers.add(shape.ref.shape_id)
+                logos.add(shape.ref.uid)
+            if (slide.index, shape.ref.uid) in page_number_ids:
+                numbers.add(shape.ref.uid)
             if shape.has_text and normalise_text(shape.text) in boilerplate_texts:
-                plate.add(shape.ref.shape_id)
+                plate.add(shape.ref.uid)
         text_chrome = frozenset(logos) | frozenset(numbers) | frozenset(plate)
         by_slide[slide.index] = SlideFurniture(
-            logo_shape_ids=frozenset(logos),
-            page_number_shape_ids=frozenset(numbers),
-            boilerplate_shape_ids=frozenset(plate),
-            lockup_shape_ids=_lockup_plates(slide, text_chrome),
+            logo_uids=frozenset(logos),
+            page_number_uids=frozenset(numbers),
+            boilerplate_uids=frozenset(plate),
+            lockup_uids=_lockup_plates(slide, text_chrome),
         )
 
     return Furniture(
@@ -294,15 +294,15 @@ def logo_marks(
     ]
     if not pieces:
         return marks
-    plates = _lockup_plates(slide, frozenset(p.ref.shape_id for p in pieces))
-    pieces += [s for s in slide.leaf_shapes() if s.ref.shape_id in plates]
+    plates = _lockup_plates(slide, frozenset(p.ref.uid for p in pieces))
+    pieces += [s for s in slide.leaf_shapes() if s.ref.uid in plates]
 
     for group in _group_by_proximity(pieces):
         left = min(s.left_pt for s in group)
         top = min(s.top_pt for s in group)
         marks.append(
             LogoMark(
-                ref=min(group, key=lambda s: s.ref.shape_id).ref,
+                ref=min(group, key=lambda s: s.ref.uid).ref,
                 left_pt=left,
                 top_pt=top,
                 width_pt=max(s.right_pt for s in group) - left,
@@ -358,7 +358,7 @@ def lockup_strings(deck: DeckModel, boilerplate: Iterable[str]) -> frozenset[str
     strings: set[str] = set()
     for slide in deck.slides:
         chrome = frozenset(
-            shape.ref.shape_id
+            shape.ref.uid
             for shape in slide.leaf_shapes()
             if shape.has_text and normalise_text(shape.text) in repeated
         )
@@ -368,10 +368,10 @@ def lockup_strings(deck: DeckModel, boilerplate: Iterable[str]) -> frozenset[str
         pieces = [
             shape
             for shape in slide.leaf_shapes()
-            if shape.ref.shape_id in chrome or shape.ref.shape_id in plates
+            if shape.ref.uid in chrome or shape.ref.uid in plates
         ]
         for group in _group_by_proximity(pieces):
-            if not any(shape.ref.shape_id in plates for shape in group):
+            if not any(shape.ref.uid in plates for shape in group):
                 continue
             strings.update(
                 normalise_text(shape.text) for shape in group if shape.has_text
@@ -397,14 +397,14 @@ def _lockup_plates(slide: SlideModel, text_chrome: frozenset[int]) -> frozenset[
     anchors = [
         shape
         for shape in slide.leaf_shapes()
-        if shape.ref.shape_id in text_chrome and shape.width_pt > 0 and shape.height_pt > 0
+        if shape.ref.uid in text_chrome and shape.width_pt > 0 and shape.height_pt > 0
     ]
     if not anchors:
         return frozenset()
 
     plates: set[int] = set()
     for shape in slide.leaf_shapes():
-        if shape.has_text or shape.image_sha1 or shape.ref.shape_id in text_chrome:
+        if shape.has_text or shape.image_sha1 or shape.ref.uid in text_chrome:
             continue
         if shape.width_pt <= 0 or shape.height_pt <= 0:
             continue
@@ -413,7 +413,7 @@ def _lockup_plates(slide: SlideModel, text_chrome: frozenset[int]) -> frozenset[
             if area > LOCKUP_PLATE_AREA_RATIO * held.width_pt * held.height_pt:
                 continue
             if _encloses(shape, held, LOCKUP_PLATE_TOLERANCE_PT):
-                plates.add(shape.ref.shape_id)
+                plates.add(shape.ref.uid)
                 break
     return frozenset(plates)
 
@@ -522,7 +522,7 @@ def _page_numbers(
             candidates.append(
                 PageNumberObservation(
                     slide_index=slide.index,
-                    shape_id=shape.ref.shape_id,
+                    uid=shape.ref.uid,
                     value=value,
                     text=text,
                     box_pt=shape.bbox_pt,
@@ -646,10 +646,10 @@ def font_role(
         return "table"
 
     title = slide.title_shape
-    if title is not None and shape.ref.shape_id == title.ref.shape_id:
+    if title is not None and shape.ref.uid == title.ref.uid:
         return "title"
 
-    if furniture is not None and furniture.is_furniture(slide.index, shape.ref.shape_id):
+    if furniture is not None and furniture.is_furniture(slide.index, shape.ref.uid):
         return "footnote"
 
     named = _role_from_name(shape.ref.name)
@@ -689,7 +689,7 @@ def content_shapes(
     return [
         shape
         for shape in slide.leaf_shapes()
-        if not furniture.is_furniture(slide.index, shape.ref.shape_id)
+        if not furniture.is_furniture(slide.index, shape.ref.uid)
         and shape.width_pt > 0
         and shape.height_pt > 0
     ]

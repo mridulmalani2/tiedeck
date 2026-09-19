@@ -94,7 +94,7 @@ def _caption_candidates(
     for shape in slide.leaf_shapes():
         if shape is chart_shape or not shape.has_text:
             continue
-        if furniture.is_furniture(slide.index, shape.ref.shape_id):
+        if furniture.is_furniture(slide.index, shape.ref.uid):
             continue
         overlap = min(right, shape.right_pt) - max(left, shape.left_pt)
         if overlap / width < CAPTION_OVERLAP_SHARE:
@@ -119,7 +119,7 @@ def _slide_text(
         for shape in slide.leaf_shapes()
         if shape.has_text
         and shape is not exclude
-        and not furniture.is_furniture(slide.index, shape.ref.shape_id)
+        and not furniture.is_furniture(slide.index, shape.ref.uid)
     ]
     return "\n".join(parts)
 

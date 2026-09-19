@@ -558,3 +558,58 @@ def test_the_review_note_names_a_slide_by_its_headline(tmp_path: Path) -> None:
     deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "note.pptx")))
     assert _slide_title(deck.slides[1]) == "Financial Performance and Valuation"
     assert _slide_title(deck.slides[0]) == "Executive Summary"
+
+
+# --------------------------------------------------------------------------------------
+# Two shapes carrying the same OOXML id
+# --------------------------------------------------------------------------------------
+#
+# `cNvPr@id` is unique per slide by specification and not in practice: both client
+# decks carry a slide where a table's graphicFrame and a text box share one. The
+# model took that attribute as identity, and every collection keyed on it then
+# held one entry where there were two shapes -- so a rule reading the map back
+# got the other shape's geometry, and a set membership test answered for the
+# wrong shape.
+
+
+def _share_ooxml_id(donor, taker) -> int:
+    """Give ``taker`` the id ``donor`` already has, as a real deck does."""
+    from pptx.oxml.ns import qn
+
+    donor_id = donor._element.find(".//" + qn("p:cNvPr")).get("id")
+    taker._element.find(".//" + qn("p:cNvPr")).set("id", donor_id)
+    return int(donor_id)
+
+
+def _deck_with_a_shared_id(path: Path) -> Path:
+    """A table and a text box, nowhere near each other, sharing one id."""
+    presentation = _deck()
+    slide = _blank(presentation)
+    _text(slide, 43.2, 30.24, 763.2, 36, "Historical and projected performance", size=28)
+    caption = _text(slide, 43.2, 69.12, 763.2, 21.6, "Revenue has nearly doubled since FY22A")
+    table = slide.shapes.add_table(2, 2, Pt(583.2), Pt(147.6), Pt(333.6), Pt(72)).table
+    table.cell(0, 0).text = "Metric"
+    table.cell(0, 1).text = "FY26E"
+    table.cell(1, 0).text = "Revenue"
+    table.cell(1, 1).text = "184.2"
+    _share_ooxml_id(slide.shapes[-1], caption)
+    presentation.save(str(path))
+    return path
+
+
+def test_two_shapes_sharing_an_ooxml_id_do_not_overlap_each_other(
+    tmp_path: Path, reference_profile
+) -> None:
+    """The caption sits at y 69-91 and the table at y 148-220: 57pt apart.
+
+    Keyed on the shared id, LO-004's ink cache held one box for both, so the
+    table appeared to sit exactly on top of the caption and the rule reported
+    "overlaps Text 1 across 100% of the smaller shape" on a deck where nothing
+    overlaps anything.
+    """
+    from tieout.rules.base import run_rules
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_shared_id(tmp_path / "shared.pptx")))
+    result = run_rules(deck, reference_profile, include=["LO-004"])
+    assert not result.findings, [f.message for f in result.findings]

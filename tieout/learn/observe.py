@@ -45,8 +45,8 @@ def archetype_scope(archetype: str) -> str:
     return f"archetype:{archetype}"
 
 
-def table_column_scope(slide_index: int, shape_id: int, column: int) -> str:
-    return f"table:{slide_index}:{shape_id}:col:{column}"
+def table_column_scope(slide_index: int, uid: int, column: int) -> str:
+    return f"table:{slide_index}:{uid}:col:{column}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +59,7 @@ class Observation:
     slide_index: int
     weight: float = 1.0
     #: Optional identity of the shape observed, so an outlier question can name it.
-    shape_id: int | None = None
+    uid: int | None = None
     shape_name: str | None = None
 
     @property
@@ -81,7 +81,7 @@ class ObservationSet:
         slide_index: int,
         weight: float = 1.0,
         *,
-        shape_id: int | None = None,
+        uid: int | None = None,
         shape_name: str | None = None,
     ) -> None:
         if weight <= 0:
@@ -93,7 +93,7 @@ class ObservationSet:
                 value=value,
                 slide_index=slide_index,
                 weight=weight,
-                shape_id=shape_id,
+                uid=uid,
                 shape_name=shape_name,
             )
         )
@@ -177,7 +177,7 @@ def iter_runs(
     """
     for slide in deck.slides:
         for shape in slide.leaf_shapes():
-            is_chrome = furniture.is_furniture(slide.index, shape.ref.shape_id)
+            is_chrome = furniture.is_furniture(slide.index, shape.ref.uid)
             if is_chrome and not include_furniture:
                 continue
             role = font_role(slide, shape, furniture=furniture)

@@ -724,7 +724,7 @@ class PageNumber(Rule):
                 continue
             findings.append(
                 self.finding(
-                    where=ShapeRef(slide.index, observation.shape_id, "Page number"),
+                    where=ShapeRef(slide.index, observation.uid, "Page number"),
                     message="; ".join(messages),
                     profile=profile,
                     provenance_path="brand.footer.page_number",
@@ -836,7 +836,7 @@ class PageNumberSequence(Rule):
                 continue
             return [
                 self.finding(
-                    where=ShapeRef(current.slide_index, current.shape_id, "Page number"),
+                    where=ShapeRef(current.slide_index, current.uid, "Page number"),
                     message=(
                         f"page number {current.value} does not follow {previous.value} on "
                         f"slide {previous.slide_index}: the sequence stops ascending here"

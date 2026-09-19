@@ -564,14 +564,14 @@ class NearMissAlignment(Rule):
                 shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
             )
             settled = {
-                shape.ref.shape_id: _aligned_axes(grid, shape, local)
-                | evenly_spaced.get(shape.ref.shape_id, frozenset())
+                shape.ref.uid: _aligned_axes(grid, shape, local)
+                | evenly_spaced.get(shape.ref.uid, frozenset())
                 for shape in shapes
             }
             plotted = _data_series_axes(shapes, grid.tolerance_pt)
             for shape in shapes:
-                aligned = settled[shape.ref.shape_id] | plotted.get(
-                    shape.ref.shape_id, frozenset()
+                aligned = settled[shape.ref.uid] | plotted.get(
+                    shape.ref.uid, frozenset()
                 )
                 for edge in _edge_values(shape):
                     if edge.axis in aligned:
@@ -692,8 +692,8 @@ def _evenly_spaced_axes(
             if statistics.stdev(gutters) > stdev_limit:
                 continue
             for shape in group:
-                out.setdefault(shape.ref.shape_id, set()).add(settled)
-    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+                out.setdefault(shape.ref.uid, set()).add(settled)
+    return {uid: frozenset(axes) for uid, axes in out.items()}
 
 
 #: Members a data series needs before its shape is evidence of plotting rather
@@ -781,8 +781,8 @@ def _data_series_axes(
             ):
                 continue
             for shape in candidates:
-                out.setdefault(shape.ref.shape_id, set()).add(axis)
-    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+                out.setdefault(shape.ref.uid, set()).add(axis)
+    return {uid: frozenset(axes) for uid, axes in out.items()}
 
 
 def _not_sharing(
@@ -870,7 +870,7 @@ def _closest_per_axis(observed: Iterable[_NearMiss]) -> list[_NearMiss]:
     """
     best: dict[tuple[int, int, str], _NearMiss] = {}
     for miss in observed:
-        key = (miss.ref.slide_index, miss.ref.shape_id, miss.axis)
+        key = (miss.ref.slide_index, miss.ref.uid, miss.axis)
         current = best.get(key)
         if current is None or (abs(miss.delta), miss.label) < (
             abs(current.delta),
@@ -956,12 +956,12 @@ class TextShapeOverlap(Rule):
                 for shape in content_shapes(slide, furniture)
                 if shape.has_text and not _is_thin(shape) and shape.area_pt2 > 0
             ]
-            inked = {shape.ref.shape_id: ink_bbox_pt(shape) for shape in candidates}
+            inked = {shape.ref.uid: ink_bbox_pt(shape) for shape in candidates}
             overlaps: list[tuple[float, float, ShapeModel, ShapeModel]] = []
             for index, first in enumerate(candidates):
-                first_box = inked[first.ref.shape_id]
+                first_box = inked[first.ref.uid]
                 for second in candidates[index + 1 :]:
-                    second_box = inked[second.ref.shape_id]
+                    second_box = inked[second.ref.uid]
                     area = rect_intersection_area_pt2(first_box, second_box)
                     if area <= 0:
                         continue
@@ -974,7 +974,7 @@ class TextShapeOverlap(Rule):
 
             # Worst first, so the representative that survives clustering is the
             # overlap a reader would actually notice.
-            overlaps.sort(key=lambda item: (-item[0], item[2].ref.shape_id))
+            overlaps.sort(key=lambda item: (-item[0], item[2].ref.uid))
             for share, area, first, second in overlaps:
                 upper, lower = (
                     (first, second) if first.z_order >= second.z_order else (second, first)
@@ -1713,7 +1713,7 @@ def _sibling_groups(
             )
             if len(siblings) < MIN_SIBLINGS:
                 continue
-            key = tuple(shape.ref.shape_id for shape in siblings)
+            key = tuple(shape.ref.uid for shape in siblings)
             if key in seen:
                 continue
             seen.add(key)

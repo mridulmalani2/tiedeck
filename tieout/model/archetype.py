@@ -258,10 +258,10 @@ def _section_mark(slide: SlideModel) -> str:
 def _dominant_body_font_pt(slide: SlideModel) -> float | None:
     """The font size covering the most characters outside the title."""
     title = slide.title_shape
-    title_id = title.ref.shape_id if title else None
+    title_id = title.ref.uid if title else None
     weights: dict[float, int] = {}
     for shape in slide.leaf_shapes():
-        if shape.ref.shape_id == title_id:
+        if shape.ref.uid == title_id:
             continue
         for paragraph in shape.all_paragraphs:
             for run in paragraph.runs:

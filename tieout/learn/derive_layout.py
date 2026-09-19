@@ -457,7 +457,7 @@ def derive_recurring(
     observations: dict[str, list[tuple[ShapeModel, SlideModel]]] = {}
     for slide in learnable_slides(deck):
         for shape in slide.leaf_shapes():
-            if furniture.is_furniture(slide.index, shape.ref.shape_id):
+            if furniture.is_furniture(slide.index, shape.ref.uid):
                 continue
             key = _recurring_key(shape)
             if key is None:

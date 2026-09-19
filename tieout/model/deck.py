@@ -50,12 +50,22 @@ class ShapeRef:
 
     ``slide_index`` is 1-based to match what PowerPoint's status bar shows. A
     finding that says "slide 0" is a finding a banker cannot act on.
+
+    ``shape_id`` names the shape as the file does; ``uid`` identifies it.
     """
 
     slide_index: int
     shape_id: int
     name: str
     group_path: tuple[str, ...] = ()
+    #: Unique within the slide, in document order. ``shape_id`` is the file's own
+    #: ``cNvPr@id``, which is unique per slide by specification and not in
+    #: practice: both client decks carry a slide where a table's graphicFrame and
+    #: a text box share one. That attribute is what a reader and the correction
+    #: writer need, so it stays; anything keyed on *identity* -- a dict of
+    #: measurements, a set of furniture -- uses this instead, or it holds one
+    #: entry where there are two shapes and answers for the wrong one.
+    uid: int = -1
 
     def __str__(self) -> str:
         if self.group_path:
@@ -577,7 +587,7 @@ class SlideModel:
         boxes = [
             s.visual_bbox_pt
             for s in self.leaf_shapes()
-            if s.ref.shape_id not in exclude and s.width_pt > 0 and s.height_pt > 0
+            if s.ref.uid not in exclude and s.width_pt > 0 and s.height_pt > 0
         ]
         if not boxes:
             return None
