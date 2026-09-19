@@ -176,6 +176,7 @@ class ShapeOffCanvas(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
+        bleeds = bool(profile.layout.decorative_bleed_slides)
         for slide in deck.slides:
             width, height = _canvas(slide, deck)
             if width <= 0 or height <= 0:
@@ -187,7 +188,12 @@ class ShapeOffCanvas(Rule):
                 spills = _canvas_spills(shape.visual_bbox_pt, width, height)
                 if not spills:
                     continue
-                severity, qualifier = _overhang_kind(shape, slide, (width, height))
+                kind = _overhang_kind(
+                    shape, slide, (width, height), bleed_is_house_style=bleeds
+                )
+                if kind is None:
+                    continue
+                severity, qualifier = kind
                 edge, _, measured, limit = spills[0]
                 described = ", ".join(f"{name} by {over:.1f}pt" for name, over, _, _ in spills)
                 rotated = f", rotated {shape.rotation:g} degrees" if shape.rotation else ""
@@ -233,16 +239,36 @@ def _canvas_spills(
 
 
 def _overhang_kind(
-    shape: ShapeModel, slide: SlideModel, canvas: tuple[float, float]
-) -> tuple[Severity, str]:
+    shape: ShapeModel,
+    slide: SlideModel,
+    canvas: tuple[float, float],
+    *,
+    bleed_is_house_style: bool,
+) -> tuple[Severity, str] | None:
     """The severity a canvas overhang deserves, and how to describe it.
 
-    Invisible overhangs -- a deliberate bleed, and a frame whose ink stays on
-    the canvas -- are reported at ``info``. A reader should be able to see that
-    TieOut noticed, without a blocker standing between them and a send over
-    something nobody can see on the slide.
+    ``None`` where the overhang is not worth a line in the report. Both cases
+    are ones this function has itself established are invisible to a reader, and
+    both used to be reported at ``info`` so a reader could see that TieOut had
+    noticed. Against a real deck that reads differently: the summary offers
+    "3 things to do" and two of them say "Nothing to do unless this was not
+    intended", which teaches the reader to skim the list.
+
+    * **The ink provably stays on the canvas.** A text box wider than its text
+      is a fact about the frame, not about the slide. The bound is an upper
+      bound, so a frame that clears it clears it on any machine -- this is a
+      proof rather than a judgement, and it holds on any deck.
+    * **A deliberate bleed, in a house style that bleeds.** Whether a cover
+      device crossing the slide edge is intent or error is not in the file, so
+      the reference deck is asked: ``layout.decorative_bleed_slides`` records
+      where it did. With no such evidence the ``info`` line stays.
+
+    What is still reported is an overhang that is neither: one carrying text, or
+    sitting in front of the content, or wholly off the canvas.
     """
     if is_decorative_bleed(shape, slide, canvas):
+        if bleed_is_house_style:
+            return None
         return (
             "info",
             ", which reads as a deliberate bleed: it carries no text and sits "
@@ -250,11 +276,7 @@ def _overhang_kind(
         )
     extent = ink_extent(shape)
     if extent is not None and not _canvas_spills(extent.bbox, *canvas):
-        return (
-            "info",
-            ", though its text stays on the canvas: the frame is oversized "
-            "rather than the content misplaced",
-        )
+        return None
     return (ShapeOffCanvas.severity, "")
 
 
@@ -305,6 +327,7 @@ class MarginIntrusion(Rule):
         margins = profile.layout.safe_margin_pt
         tolerance = profile.layout.position_tolerance_pt
         furniture = self.furniture(deck, profile)
+        bleeds = bool(profile.layout.decorative_bleed_slides)
         findings: list[Finding] = []
 
         for slide in deck.slides:
@@ -347,6 +370,10 @@ class MarginIntrusion(Rule):
                 edge, _, measured, limit = breaches[0]
                 described = ", ".join(f"{name} by {by:.1f}pt" for name, by, _, _ in breaches)
                 bleed = is_decorative_bleed(shape, slide, (width, height))
+                if bleed and bleeds:
+                    # House style, established from the reference deck. LO-001
+                    # says why.
+                    continue
                 qualifier = (
                     ", which reads as a deliberate bleed rather than misplaced content"
                     if bleed

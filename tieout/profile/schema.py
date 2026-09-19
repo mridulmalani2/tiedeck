@@ -270,6 +270,11 @@ class LayoutProfile(_Model):
     #: LO-008 fires when gutters in a detected row vary by more than this.
     gutter_stdev_pt: float = 1.0
     position_tolerance_pt: float = 2.0
+    #: Reference-deck slides carrying a graphic deliberately bled off the canvas.
+    #: Non-empty means crossing the slide edge with a decorative shape is part of
+    #: this house style, so LO-001 and LO-002 stop remarking on it. Empty means no
+    #: evidence either way, and they report it at ``info`` as before.
+    decorative_bleed_slides: list[int] = Field(default_factory=list)
 
 
 class NumberFormat(_Model):

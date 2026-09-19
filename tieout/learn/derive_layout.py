@@ -44,6 +44,7 @@ from tieout.learn.observe import (
 )
 from tieout.model.archetype import CONTENT_ARCHETYPES, SPARSE_ARCHETYPES
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
+from tieout.model.extent import is_decorative_bleed
 from tieout.model.furniture import Furniture, content_shapes
 from tieout.profile.schema import (
     Box,
@@ -133,7 +134,51 @@ def derive_layout(deck: DeckModel, furniture: Furniture) -> LayoutDerivation:
         "medium",
     )
     result.profile.position_tolerance_pt = GRID_TOLERANCE_PT
+    result.profile.decorative_bleed_slides = derive_decorative_bleeds(deck, result)
     return result
+
+
+def derive_decorative_bleeds(deck: DeckModel, result: LayoutDerivation) -> list[int]:
+    """Which reference slides run a decorative graphic off the canvas.
+
+    A cover device crossing the slide edge is a house style or it is a mistake,
+    and nothing in the file says which. LO-001 settled that by reporting every
+    one at ``info`` -- visible, but not a gate. On the deck the profile was
+    learned from that is the wrong answer twice over: it is the deck that
+    *defines* the house style, and the finding's own remedy reads "Nothing to do
+    unless this was not intended".
+
+    The reference deck is the evidence. Where it bleeds, bleeding is house style
+    and the rules stop remarking on it; where it does not, there is no evidence
+    either way and they report at ``info`` exactly as before. What stays reported
+    on any deck is an overhang that is *not* structurally a bleed -- one carrying
+    text, or sitting in front of the content, or wholly off the canvas -- which
+    is what the seeded defect on slide 12 of the client deck is.
+    """
+    slides = sorted(
+        slide.index
+        for slide in deck.slides
+        for shape in slide.leaf_shapes()
+        if is_decorative_bleed(shape, slide, (slide.width_pt or deck.width_pt,
+                                              slide.height_pt or deck.height_pt))
+    )
+    unique = sorted(set(slides))
+    if unique:
+        result.derivation.note(
+            "layout.decorative_bleed_slides",
+            f"{len(unique)} of {deck.slide_count} slides run a decorative graphic "
+            f"off the canvas ({', '.join(str(i) for i in unique)}), so a bleed is "
+            "part of this house style rather than something to remark on",
+            "high",
+        )
+    else:
+        result.derivation.note(
+            "layout.decorative_bleed_slides",
+            "no slide runs a decorative graphic off the canvas, so there is no "
+            "evidence that bleeding is house style and one stays reported at info",
+            "medium",
+        )
+    return unique
 
 
 # --------------------------------------------------------------------------------------

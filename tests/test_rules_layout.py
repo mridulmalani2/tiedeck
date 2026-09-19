@@ -21,7 +21,7 @@ from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import default_defects
 from tieout.model.furniture import detect_furniture
 from tieout.profile.schema import FontRole
-from tieout.rules.base import run_rules
+from tieout.rules.base import clear_caches, run_rules
 
 SEEDED = {d.rule_id: d.slide_index for d in default_defects() if d.variant is None}
 
@@ -109,6 +109,58 @@ def test_lo001_accounts_for_rotation(clean_deck, reference_profile):
         assert slide.index in slide_indices(findings)
     finally:
         shape.rotation, shape.left_pt = original_rotation, original_left
+
+
+def _deck_with_a_bled_graphic(path):
+    """One slide: a decorative graphic off the corner, content in front of it."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    oval = slide.shapes.add_shape(MSO_SHAPE.OVAL, Pt(760), Pt(-100), Pt(374), Pt(374))
+    oval.fill.solid()
+    oval.line.fill.background()
+    for index in range(3):
+        box = slide.shapes.add_textbox(Pt(36), Pt(100 + index * 40), Pt(400), Pt(30))
+        box.name = f"Body {index + 1}"
+        box.text_frame.text = f"Line {index + 1} of the slide's own content"
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_lo001_reports_a_bleed_where_the_reference_deck_had_none(
+    tmp_path, reference_profile
+):
+    """No evidence either way, so the info line stays: this is the old behaviour,
+    and it is what a house style that does not bleed should still get."""
+    deck = _deck_with_a_bled_graphic(tmp_path / "bleed-unseen.pptx")
+    profile = reference_profile.model_copy(deep=True)
+    profile.layout.decorative_bleed_slides = []
+    clear_caches()
+    findings = findings_for(_run(deck, profile, "LO-001"), "LO-001")
+    assert [f.severity for f in findings] == ["info"]
+
+
+def test_lo001_says_nothing_where_the_reference_deck_bled_too(
+    tmp_path, reference_profile
+):
+    """The reference deck bled, so bleeding is house style and not a finding.
+
+    Before this, a profile learned from a deck with a cover device reported that
+    same device on that same deck, with the remedy "Nothing to do unless this was
+    not intended".
+    """
+    deck = _deck_with_a_bled_graphic(tmp_path / "bleed-known.pptx")
+    profile = reference_profile.model_copy(deep=True)
+    profile.layout.decorative_bleed_slides = [1]
+    clear_caches()
+    assert not findings_for(_run(deck, profile, "LO-001"), "LO-001")
 
 
 # --------------------------------------------------------------------------------------

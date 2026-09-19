@@ -220,17 +220,20 @@ def reviewed(real_world_deck: Path):
     return learn_from_decks([deck], "kestrel")
 
 
-def test_the_reference_review_reports_nothing_above_info(reviewed) -> None:
+def test_the_reference_review_reports_nothing_at_all(reviewed) -> None:
     """The whole point, in one assertion.
 
-    A profile learned from these constructions must not report them. ``info`` is
-    allowed: the bleed on slide 3 is reported there deliberately, so that a
-    graphic leaving the canvas stays visible without gating a send.
+    A profile learned from these constructions must not report them -- including
+    at ``info``. The cover's bled circle used to be reported there, on the deck
+    that taught the tool what this house style looks like, with the remedy
+    "Nothing to do unless this was not intended". A pre-send check whose list of
+    things to do contains things not to do is teaching the reader to skim it.
     """
-    gating = [f for f in reviewed.reference_review.findings if f.severity != "info"]
-    assert not gating, "\n".join(
-        f"{f.rule_id} [{f.severity}] slide {f.slide_index}: {f.message}" for f in gating
-    )
+    findings = [
+        f"{f.rule_id} [{f.severity}] slide {f.slide_index}: {f.message}"
+        for f in reviewed.reference_review.findings
+    ]
+    assert not findings, "\n".join(findings)
 
 
 def test_no_rule_crashed_while_reviewing(reviewed) -> None:
