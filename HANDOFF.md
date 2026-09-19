@@ -325,7 +325,8 @@ that as "3 things to do", two of which are things not to do. The ink case is now
 silent on a proof; the bleed case is silent where `layout.decorative_bleed_slides`
 records that the reference deck bled too.
 
-Three further defects surfaced while fixing those:
+Five further defects surfaced while fixing those. The last two were found by
+running the UI rather than the suite, which is the argument for doing it:
 
 * LO-002 restated LO-001 whenever a shape left the canvas — one misplacement,
   two findings, in two different numbers.
@@ -334,11 +335,34 @@ Three further defects surfaced while fixing those:
 * `_derive_logo_boxes` classifies each edge on its own, so a slide setting the
   mark twice can produce a box describing no placement the deck actually uses.
   Reachable before #5 by any deck with two logo images on a slide.
+* The UI names each slide in the review note and had its own idea of a title --
+  the placeholder, else the first text shape in document order. Widening the
+  title band did not reach it, because it never called `title_shape`. The note
+  still read "SLIDE 12 / H" after the model was fixed.
+* `./run.sh` reinstalled only when `pyproject.toml` changed. The install is a
+  copy and the console script's sys.path prefers site-packages, so a pull that
+  changes only Python left the previous copy running and the reader's change
+  appearing to do nothing. Anyone merging #5 and typing `./run.sh` would have
+  hit it, since nothing in #5 touches `pyproject.toml`.
 
 **Where things stand.** The clean deck reports nothing, from 41 rules. The defect
 deck reports 20 findings for its 20 seeded defects and nothing else — it was 26.
 A copy of the clean deck with the lockup dragged 40pt on one slide and scaled
 25% on another is now reported; neither was visible before.
+
+**The oracle runs now.** Installing `libreoffice-impress` and `poppler-utils`
+in the dev container takes the suite from 1398 passed / 6 skipped to 1407 passed
+and nothing skipped: `tests/test_render_oracle.py` runs, and the layout model
+still agrees with LibreOffice after all of the above. Still only against the
+synthetic fixtures -- §6 item 1 remains open -- but it is one command away now:
+
+```
+apt-get update && apt-get install -y --no-install-recommends libreoffice-impress poppler-utils
+```
+
+Watch the second package: installing both in one `apt-get` aborted the whole
+transaction on a 404 for poppler and left a core-only LibreOffice behind, which
+reports "source file could not be loaded" and looks exactly like a bad deck.
 
 **What it cost.** With slide 12 correctly classified as `section_divider`, the
 deck has one divider, which is not enough evidence to learn a safe margin or a
