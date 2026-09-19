@@ -26,10 +26,11 @@ consume it and neither should depend on the other.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
-from tieout.model.deck import DeckModel, ShapeModel, SlideModel
+from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
 
 if TYPE_CHECKING:
     from tieout.profile.schema import Profile
@@ -49,6 +50,11 @@ LOCKUP_PLATE_TOLERANCE_PT: Final[float] = 2.0
 #: claim to a badge drawn around its own glyph: a panel big enough to be the
 #: slide's background is content, whatever text happens to sit on it.
 LOCKUP_PLATE_AREA_RATIO: Final[float] = 4.0
+
+#: How far apart two pieces of one lockup may sit, as a multiple of the taller
+#: one's height. Scale-relative rather than absolute, because the same mark is
+#: set at 19pt in a slide corner and at 36pt on a cover.
+LOCKUP_GAP_HEIGHTS: Final[float] = 1.0
 
 #: A string repeated verbatim on at least this share of slides is boilerplate.
 BOILERPLATE_SUPPORT_SHARE: Final[float] = 0.60
@@ -218,6 +224,159 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
         page_numbers=page_numbers,
         boilerplate=boilerplate,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LogoMark:
+    """One logo on one slide: an image part, or a lockup of drawn shapes.
+
+    The rules and the deriver both measure a logo's placement, and both used to
+    do it against a ``ShapeModel`` -- which works only where the mark is a single
+    image. A mark drawn in vector is several shapes, so what they need is the
+    box those shapes occupy together.
+    """
+
+    ref: ShapeRef
+    left_pt: float
+    top_pt: float
+    width_pt: float
+    height_pt: float
+    #: Native pixel size where the mark is an image. ``None`` for a drawn lockup,
+    #: which has no native size for a rendered one to be distorted against.
+    image_pixel_width: int | None = None
+    image_pixel_height: int | None = None
+
+    @property
+    def bbox_pt(self) -> tuple[float, float, float, float]:
+        return (self.left_pt, self.top_pt, self.width_pt, self.height_pt)
+
+    @property
+    def aspect_ratio(self) -> float | None:
+        return self.width_pt / self.height_pt if self.height_pt else None
+
+
+def logo_marks(
+    slide: SlideModel,
+    *,
+    image_sha1: frozenset[str] = frozenset(),
+    lockup_text: frozenset[str] = frozenset(),
+) -> list[LogoMark]:
+    """Every logo on ``slide``, by whichever identity the profile learned.
+
+    An image mark is one shape and therefore one mark. A lockup is the pieces
+    carrying the learned strings, plus the plates behind them, grouped by
+    proximity -- because a slide can carry the mark twice, as a divider often
+    does, and their union would be a box spanning the slide.
+    """
+    marks = [
+        LogoMark(
+            ref=shape.ref,
+            left_pt=shape.left_pt,
+            top_pt=shape.top_pt,
+            width_pt=shape.width_pt,
+            height_pt=shape.height_pt,
+            image_pixel_width=shape.image_pixel_width,
+            image_pixel_height=shape.image_pixel_height,
+        )
+        for shape in slide.all_shapes()
+        if shape.image_sha1 and shape.image_sha1 in image_sha1
+    ]
+    if not lockup_text:
+        return marks
+
+    pieces = [
+        shape
+        for shape in slide.leaf_shapes()
+        if shape.width_pt > 0
+        and shape.height_pt > 0
+        and shape.has_text
+        and normalise_text(shape.text) in lockup_text
+    ]
+    if not pieces:
+        return marks
+    plates = _lockup_plates(slide, frozenset(p.ref.shape_id for p in pieces))
+    pieces += [s for s in slide.leaf_shapes() if s.ref.shape_id in plates]
+
+    for group in _group_by_proximity(pieces):
+        left = min(s.left_pt for s in group)
+        top = min(s.top_pt for s in group)
+        marks.append(
+            LogoMark(
+                ref=min(group, key=lambda s: s.ref.shape_id).ref,
+                left_pt=left,
+                top_pt=top,
+                width_pt=max(s.right_pt for s in group) - left,
+                height_pt=max(s.bottom_pt for s in group) - top,
+            )
+        )
+    return marks
+
+
+def _group_by_proximity(shapes: list[ShapeModel]) -> list[list[ShapeModel]]:
+    """Single-linkage grouping of lockup pieces that sit together."""
+    remaining = sorted(shapes, key=lambda s: (s.left_pt, s.top_pt))
+    groups: list[list[ShapeModel]] = []
+    while remaining:
+        group = [remaining.pop(0)]
+        changed = True
+        while changed:
+            changed = False
+            for shape in list(remaining):
+                if any(_sits_with(shape, member) for member in group):
+                    group.append(shape)
+                    remaining.remove(shape)
+                    changed = True
+        groups.append(group)
+    return groups
+
+
+def _sits_with(one: ShapeModel, other: ShapeModel) -> bool:
+    reach = LOCKUP_GAP_HEIGHTS * max(one.height_pt, other.height_pt)
+    horizontal = max(one.left_pt - other.right_pt, other.left_pt - one.right_pt)
+    vertical = max(one.top_pt - other.bottom_pt, other.top_pt - one.bottom_pt)
+    return horizontal <= reach and vertical <= reach
+
+
+def lockup_strings(deck: DeckModel, boilerplate: Iterable[str]) -> frozenset[str]:
+    """Which repeated strings belong to a drawn mark rather than to the furniture.
+
+    A mark drawn in vector has no image part to be known by, so it has to be
+    known by the text it sets -- and "text this deck repeats" is far too broad.
+    The footer repeats. A standing callout on every slide repeats. Taking all of
+    them put a deck's own body text in the logo's place.
+
+    What distinguishes the mark is the badge. A drawn plate is set behind a
+    monogram and behind almost nothing else, so the plate seeds the group and the
+    wordmark beside it joins by proximity.
+
+    A mark drawn as text alone, with no badge, is therefore not found here, and
+    its geometry stays unchecked. That is deliberate: nothing separates such a
+    mark from any other line the deck repeats, and guessing costs more than the
+    miss does.
+    """
+    repeated = frozenset(boilerplate)
+    strings: set[str] = set()
+    for slide in deck.slides:
+        chrome = frozenset(
+            shape.ref.shape_id
+            for shape in slide.leaf_shapes()
+            if shape.has_text and normalise_text(shape.text) in repeated
+        )
+        plates = _lockup_plates(slide, chrome)
+        if not plates:
+            continue
+        pieces = [
+            shape
+            for shape in slide.leaf_shapes()
+            if shape.ref.shape_id in chrome or shape.ref.shape_id in plates
+        ]
+        for group in _group_by_proximity(pieces):
+            if not any(shape.ref.shape_id in plates for shape in group):
+                continue
+            strings.update(
+                normalise_text(shape.text) for shape in group if shape.has_text
+            )
+    return frozenset(strings)
 
 
 def _lockup_plates(slide: SlideModel, text_chrome: frozenset[int]) -> frozenset[int]:

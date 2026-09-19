@@ -25,7 +25,7 @@ from typing import ClassVar
 
 from tieout.model.color import Rgb, nearest, try_parse_hex
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
-from tieout.model.furniture import normalise_text
+from tieout.model.furniture import LogoMark, logo_marks, normalise_text
 from tieout.model.units import approx_equal
 from tieout.profile.schema import Box, LogoProfile, Profile, Severity
 from tieout.rules.base import Finding, Rule, register
@@ -125,12 +125,22 @@ def _logo_targets(deck: DeckModel, logo: LogoProfile) -> list[tuple[SlideModel, 
     return out
 
 
-def _logo_shapes(slide: SlideModel, logo: LogoProfile) -> list[ShapeModel]:
-    approved = set(logo.image_sha1)
-    return [s for s in slide.all_shapes() if s.image_sha1 and s.image_sha1 in approved]
+def _logo_shapes(slide: SlideModel, logo: LogoProfile) -> list[LogoMark]:
+    return logo_marks(
+        slide,
+        image_sha1=frozenset(logo.image_sha1),
+        lockup_text=frozenset(logo.lockup_text),
+    )
 
 
-def _nearest_to_box(shapes: list[ShapeModel], box: Box) -> ShapeModel:
+def _in_box(mark: LogoMark, box: Box) -> bool:
+    return (
+        abs(mark.left_pt - box.left) <= box.tolerance_pt
+        and abs(mark.top_pt - box.top) <= box.tolerance_pt
+    )
+
+
+def _nearest_to_box(shapes: list[LogoMark], box: Box) -> LogoMark:
     """The shape closest to an expected position.
 
     A slide with two copies of the logo should be measured against the one the
@@ -254,15 +264,19 @@ class LogoPosition(Rule):
             if not shapes:
                 self.note_unchecked(
                     slide.index,
-                    "no approved logo image on the slide, so its position cannot be measured",
+                    "no approved logo on the slide, so its position cannot be measured",
                 )
                 continue
 
+            # Any mark in the right place satisfies the expectation. A slide can
+            # carry the mark twice -- a divider setting it large beside the
+            # heading as well as small in the corner -- and reporting the second
+            # one as misplaced would be reporting the house style.
+            if any(_in_box(mark, box) for mark in shapes):
+                continue
             shape = _nearest_to_box(shapes, box)
             dx = shape.left_pt - box.left
             dy = shape.top_pt - box.top
-            if abs(dx) <= box.tolerance_pt and abs(dy) <= box.tolerance_pt:
-                continue
             findings.append(
                 self.finding(
                     where=shape.ref,
@@ -314,10 +328,12 @@ class LogoSize(Rule):
             if not shapes:
                 self.note_unchecked(
                     slide.index,
-                    "no approved logo image on the slide, so its size cannot be measured",
+                    "no approved logo on the slide, so its size cannot be measured",
                 )
                 continue
 
+            if any(not self._measure(mark, box, logo) for mark in shapes):
+                continue
             shape = _nearest_to_box(shapes, box)
             messages = self._measure(shape, box, logo)
             if not messages:
@@ -336,7 +352,7 @@ class LogoSize(Rule):
             )
         return findings
 
-    def _measure(self, shape: ShapeModel, box: Box, logo: LogoProfile) -> list[str]:
+    def _measure(self, shape: LogoMark, box: Box, logo: LogoProfile) -> list[str]:
         messages: list[str] = []
         dw = shape.width_pt - box.width
         dh = shape.height_pt - box.height
@@ -356,8 +372,8 @@ class LogoSize(Rule):
         if native is None or rendered is None:
             self.note_unchecked(
                 shape.ref,
-                "the image's native pixel size is unavailable, so aspect distortion "
-                "cannot be measured",
+                "the mark has no native pixel size, so aspect distortion cannot be "
+                "measured",
             )
             return messages
 

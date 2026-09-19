@@ -45,10 +45,13 @@ from tieout.learn.observe import (
     learnable_slides,
 )
 from tieout.model.color import Rgb, delta_e_76, parse_hex, rgb_to_lab, try_parse_hex
-from tieout.model.deck import DeckModel, ShapeModel
+from tieout.model.deck import DeckModel
 from tieout.model.furniture import (
     Furniture,
+    LogoMark,
     is_confidentiality_marking,
+    lockup_strings,
+    logo_marks,
     logo_variants,
     normalise_text,
 )
@@ -563,9 +566,25 @@ def _derive_logo(
         sha: len(slides) for sha, slides in deck.image_sha1_slide_support.items()
     }
     if not support:
-        result.derivation.unlearned(
-            "brand.logo", "the reference deck contains no images"
+        lockup = _lockup_text(deck, furniture)
+        if not lockup:
+            result.derivation.unlearned(
+                "brand.logo",
+                "the reference deck contains no images, and no repeated text sits "
+                "outside the footer band to read as a wordmark",
+            )
+            return
+        logo = LogoProfile(lockup_text=sorted(lockup))
+        result.derivation.note(
+            "brand.logo",
+            "the mark is drawn rather than placed: no image recurs, but "
+            + ", ".join(repr(text) for text in sorted(lockup))
+            + " does, outside the footer band. Its identity is that text plus the "
+            "plates behind it, and its box is what they occupy together",
+            "high",
         )
+        _derive_logo_boxes(deck, logo, result, total_slides)
+        result.profile.logo = logo
         return
 
     threshold = max(1, round(LOGO_SUPPORT_SHARE * total_slides))
@@ -622,23 +641,41 @@ def _derive_logo(
                 "medium",
             )
 
-    _derive_logo_boxes(deck, frozenset({primary, *variants}), logo, result, total_slides)
+    _derive_logo_boxes(deck, logo, result, total_slides)
     result.profile.logo = logo
+
+
+def _lockup_text(deck: DeckModel, furniture: Furniture) -> frozenset[str]:
+    """Repeated strings that read as a wordmark rather than as furniture."""
+    return lockup_strings(deck, furniture.boilerplate)
 
 
 def _derive_logo_boxes(
     deck: DeckModel,
-    sha1s: frozenset[str],
     logo: LogoProfile,
     result: BrandDerivation,
     total_slides: int,
 ) -> None:
     """Expected box per archetype, with archetypes that never carry it exempted."""
-    by_archetype: dict[str, list[ShapeModel]] = {}
+    image_sha1 = frozenset(logo.image_sha1)
+    lockup_text = frozenset(logo.lockup_text)
+    # Geometry is taken only from slides carrying the mark once. Each edge is
+    # classified on its own, so a slide that sets the mark twice offers two
+    # lefts, two tops and two sizes, and the dominant value of each need not
+    # come from the same placement: the client deck's divider, which carries the
+    # corner mark and a larger one beside its heading, produced a box with one
+    # mark's left and the other's top, width and height -- a position neither
+    # occupies, reported against both. A slide carrying the mark twice does not
+    # say where the mark goes, so it says nothing here.
+    by_archetype: dict[str, list[LogoMark]] = {}
+    ambiguous: dict[str, list[int]] = {}
     for slide in learnable_slides(deck):
-        for shape in slide.all_shapes():
-            if shape.image_sha1 in sha1s:
-                by_archetype.setdefault(slide.archetype, []).append(shape)
+        marks = logo_marks(slide, image_sha1=image_sha1, lockup_text=lockup_text)
+        if len(marks) > 1:
+            ambiguous.setdefault(slide.archetype, []).append(slide.index)
+            continue
+        for mark in marks:
+            by_archetype.setdefault(slide.archetype, []).append(mark)
 
     aspects: list[float] = []
     for archetype in archetypes_present(deck):
@@ -649,6 +686,16 @@ def _derive_logo_boxes(
         )
 
         if not shapes:
+            if archetype in ambiguous:
+                carrying = ambiguous[archetype]
+                result.derivation.unlearned(
+                    path,
+                    f"every {archetype} slide carrying the logo carries it more than "
+                    f"once (slide{'s' if len(carrying) != 1 else ''} "
+                    f"{', '.join(str(i) for i in carrying)}), so the reference deck "
+                    "does not say which placement is the expected one",
+                )
+                continue
             logo.per_archetype[archetype] = "exempt"
             result.derivation.note(
                 path,
@@ -746,7 +793,7 @@ def _derive_logo_boxes(
 
 def _logo_outlier_question(
     archetype: str,
-    shapes: list[ShapeModel],
+    shapes: list[LogoMark],
     edges: dict[str, Classification],
     path: str,
 ) -> QuestionDraft:

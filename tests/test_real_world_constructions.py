@@ -436,7 +436,9 @@ def _deck_with_a_centred_headline(path: Path) -> Path:
     _text(opener, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
 
     slide = _blank(presentation)
+    # Twice, as a real divider does: large beside the heading, small in the corner.
     _lockup(slide, 39.6, 36.0, 28.8, 18, 10)
+    _lockup(slide, 808.78, 28.8, 18.72, 12, 6)
     _text(slide, 39.6, 212.4, 576, 25.2, "SECTION 03", size=14, colour=GOLD)
     _text(slide, 39.6, 241.2, 756, 79.2, "Financial Performance and Valuation", size=29)
     _text(slide, 39.6, 322.0, 633.6, 36, "Historical results and the framework.", size=12.5)
@@ -469,3 +471,72 @@ def test_a_divider_marked_section_03_is_not_a_content_slide(tmp_path: Path) -> N
     clear_caches()
     deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "marked.pptx")))
     assert deck.slides[1].archetype == "section_divider"
+
+
+# --------------------------------------------------------------------------------------
+# The logo rules, on a mark that is drawn
+# --------------------------------------------------------------------------------------
+
+
+def test_a_drawn_mark_is_learned_as_the_logo(vector_logo_reviewed) -> None:
+    """BR-001, BR-002 and BR-003 all require ``brand.logo``, and the deriver gave
+    up with "the reference deck contains no images". On the client deck that left
+    the logo's position and size unchecked on all twenty slides, silently, behind
+    a clean report.
+    """
+    logo = vector_logo_reviewed.profile.brand.logo
+    assert logo is not None, "no logo learned from a deck whose mark is vector"
+    assert "halyard partners" in logo.lockup_text
+    assert logo.per_archetype, "a logo was learned but no archetype expects it"
+
+
+def test_a_moved_drawn_logo_is_reported(vector_logo_deck, vector_logo_reviewed, tmp_path):
+    """The defect the three rules exist for, on a mark they could not see."""
+    from pptx import Presentation
+
+    from tieout.rules.base import run_rules
+
+    moved = tmp_path / "moved.pptx"
+    presentation = Presentation(str(vector_logo_deck))
+    for shape in presentation.slides[1].shapes:
+        if shape.left is not None and shape.left > Pt(800) and shape.top < Pt(60):
+            shape.left = shape.left - Pt(40)
+            shape.top = shape.top + Pt(12)
+    presentation.save(str(moved))
+
+    clear_caches()
+    result = run_rules(
+        load_deck(str(moved)), vector_logo_reviewed.profile, include=["BR-002"]
+    )
+    assert [f.slide_index for f in result.findings] == [2]
+
+
+def test_every_learned_logo_box_is_a_placement_the_deck_uses(tmp_path: Path) -> None:
+    """Each edge of the box is classified on its own, so a slide setting the mark
+    twice offers two lefts, two tops and two sizes -- and the dominant value of
+    each need not come from the same placement.
+
+    The client deck's divider produced left 39.6 with top 27.36 and the corner
+    mark's size: a box neither placement occupies, reported at ``major`` against
+    both, on the deck it was learned from.
+    """
+    from tieout.model.furniture import logo_marks
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "twice.pptx")))
+    learned = learn_from_decks([deck], "halyard")
+    logo = learned.profile.brand.logo
+    assert logo is not None
+
+    placements = {
+        (round(m.left_pt, 2), round(m.top_pt, 2), round(m.width_pt, 2), round(m.height_pt, 2))
+        for slide in deck.slides
+        for m in logo_marks(slide, lockup_text=frozenset(logo.lockup_text))
+    }
+    for archetype, box in logo.per_archetype.items():
+        if box == "exempt":
+            continue
+        assert (box.left, box.top, box.width, box.height) in placements, (
+            f"the {archetype} box describes no placement in the deck: "
+            f"{box.describe()} against {sorted(placements)}"
+        )
