@@ -203,6 +203,12 @@ class ShapeOffCanvas(Rule):
                         profile=profile,
                         provenance_path="slide",
                         severity=severity,
+                        # An overhang measured against a bound is a claim about
+                        # where the ink might be, not where it is: a frame past
+                        # the edge holding a short label is off the canvas as a
+                        # bound and on it as a measurement. LO-002 and LO-004
+                        # have said so since #3; this said `high` either way.
+                        confidence=weakest(self.confidence, ink_confidence(shape)),
                         message=(
                             f"{shape.ref.name} extends off the {width:g}x{height:g}pt "
                             f"canvas: {described}{rotated}{qualifier}"

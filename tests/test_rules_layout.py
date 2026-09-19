@@ -702,3 +702,45 @@ def test_an_overlap_between_filled_shapes_stays_high_confidence(
     findings = _run(deck, reference_profile, "LO-004").findings
     assert findings
     assert findings[0].confidence == "high"
+
+
+def _deck_with_a_frame_past_the_edge(path, face: str):
+    """One slide: a short label in a frame that runs off the right edge."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Pt(830), Pt(212), Pt(576), Pt(25))
+    box.name = "Kicker"
+    run = box.text_frame.paragraphs[0].add_run()
+    run.text = "SECTION 03"
+    run.font.size = Pt(14)
+    run.font.name = face
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_lo001_says_how_far_an_unmeasurable_overhang_can_be_trusted(
+    tmp_path, reference_profile
+):
+    """LO-001 declared `high` on every finding, including ones resting on the
+    1.15 em bound rather than on a measurement -- while LO-002 and LO-004 have
+    weakened theirs by `ink_confidence` since #3.
+
+    It matters here. A frame dragged past the right edge holding a short label
+    is off the canvas by 446pt as a bound and entirely on it as a measurement:
+    on the defect deck's slide 12 the words "SECTION 03" render in full, and the
+    blocker is a fact about the frame. Reported either way, but a reader is owed
+    the difference.
+    """
+    clear_caches()
+    deck = _deck_with_a_frame_past_the_edge(
+        tmp_path / "bounded.pptx", "No Such Typeface At All"
+    )
+    findings = findings_for(_run(deck, reference_profile, "LO-001"), "LO-001")
+    assert [f.confidence for f in findings] == ["medium"]
