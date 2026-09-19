@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
-from tieout.model.deck import DeckModel, ShapeModel, SlideModel
+from tieout.model.deck import TITLE_BAND_SHARE, DeckModel, ShapeModel, SlideModel
 
 #: Every archetype TieOut assigns.
 ARCHETYPES: Final[tuple[str, ...]] = (
@@ -111,6 +111,11 @@ _DISCLAIMER_MIN_CHARS: Final[int] = 1200
 _DISCLAIMER_MAX_FONT_PT: Final[float] = 9.5
 _AGENDA_MAX_CHARS: Final[int] = 900
 
+#: Longest standalone string still read as a divider's kicker. The section
+#: pattern is loose enough to match prose -- "Part 3 of the agreement governs the
+#: escrow" -- so the claim is bounded to something short enough to be a label.
+_SECTION_MARK_MAX_CHARS: Final[int] = 40
+
 
 @dataclass(frozen=True, slots=True)
 class ArchetypeResult:
@@ -130,6 +135,8 @@ class _Signals:
     slide_count: int
     title_text: str
     title_font_pt: float | None
+    #: A "SECTION 03" kicker found in the slide's upper half, if any.
+    section_mark: str
     text_chars: int
     shape_count: int
     leaf_count: int
@@ -201,6 +208,7 @@ def _measure(
         slide_count=deck.slide_count,
         title_text=slide.title_text,
         title_font_pt=title_pt,
+        section_mark=_section_mark(slide),
         text_chars=slide.text_length,
         shape_count=len(slide.shapes),
         leaf_count=len(leaves),
@@ -219,6 +227,32 @@ def _measure(
         centred_large_text=_has_centred_large_text(slide),
         previous_archetype=previous_archetype,
     )
+
+
+def _section_mark(slide: SlideModel) -> str:
+    """A divider's kicker, wherever on the slide it is set.
+
+    A section divider announces itself with a label -- SECTION 03, PART II --
+    and the headline beside it is an ordinary heading. Testing only the title
+    therefore misses the announcement on every divider that has both, which is
+    most of them: the client deck sets SECTION 03 above "Financial Performance &
+    Valuation" and was filed as a content slide, so it was measured against
+    content-slide margins, the content logo box and the content capitalisation
+    convention.
+
+    Bounded to a short standalone string in the upper half. The pattern matches
+    the start of a sentence as readily as a label, and prose that opens "Part 3
+    of the agreement" is not a divider.
+    """
+    for shape in slide.text_shapes:
+        if shape.top_pt >= slide.height_pt * TITLE_BAND_SHARE:
+            continue
+        text = shape.text.strip()
+        if not text or len(text) > _SECTION_MARK_MAX_CHARS:
+            continue
+        if _SECTION_RE.match(text):
+            return text
+    return ""
 
 
 def _dominant_body_font_pt(slide: SlideModel) -> float | None:
@@ -402,15 +436,20 @@ def _by_layout_name(s: _Signals) -> ArchetypeResult | None:
 
 
 def _by_section_title_pattern(s: _Signals) -> ArchetypeResult | None:
-    if (
-        s.title_text
-        and _SECTION_RE.match(s.title_text.strip())
-        and s.text_chars <= _SPARSE_TEXT_CHARS * 2
-    ):
+    if s.text_chars > _SPARSE_TEXT_CHARS * 2:
+        return None
+    title = s.title_text.strip()
+    if title and _SECTION_RE.match(title):
         return ArchetypeResult(
             "section_divider",
             "high",
-            (f"title matches section pattern: {s.title_text!r}",),
+            (f"title matches section pattern: {title!r}",),
+        )
+    if s.section_mark:
+        return ArchetypeResult(
+            "section_divider",
+            "high",
+            (f"slide is marked {s.section_mark!r} above its heading",),
         )
     return None
 

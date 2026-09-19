@@ -424,13 +424,25 @@ def test_the_divider_lockup_is_not_reported_against_the_grid(vector_logo_reviewe
 
 
 def _deck_with_a_centred_headline(path: Path) -> Path:
-    """A divider: the lockup at the top, the headline down the page."""
+    """A content slide, then a divider: lockup at the top, headline down the page."""
     presentation = _deck()
+
+    opener = _blank(presentation)
+    _lockup(opener, 808.78, 28.8, 18.72, 12, 6)
+    _text(opener, 39.6, 39.6, 300, 14, "EXECUTIVE SUMMARY", size=11, colour=GOLD)
+    _text(opener, 39.6, 57.6, 880, 40, "Executive Summary", size=29)
+    _text(opener, 39.6, 120, 426, 22, "Recurring revenue mix of 64 per cent.")
+    _text(opener, 39.6, 156, 426, 22, "Twelve hundred active industrial sites.")
+    _text(opener, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+
     slide = _blank(presentation)
     _lockup(slide, 39.6, 36.0, 28.8, 18, 10)
     _text(slide, 39.6, 212.4, 576, 25.2, "SECTION 03", size=14, colour=GOLD)
     _text(slide, 39.6, 241.2, 756, 79.2, "Financial Performance and Valuation", size=29)
     _text(slide, 39.6, 322.0, 633.6, 36, "Historical results and the framework.", size=12.5)
+    _text(slide, 39.6, 360.0, 633.6, 36, "Recurring revenue mix of 64 per cent.", size=12.5)
+    _text(slide, 39.6, 400.0, 633.6, 36, "Twelve hundred active industrial sites.", size=12.5)
+    _text(slide, 39.6, 440.0, 633.6, 36, "A direct sales force across four regions.", size=12.5)
     _text(slide, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
     presentation.save(str(path))
     return path
@@ -445,4 +457,15 @@ def test_a_headline_below_the_top_third_is_still_the_title(tmp_path: Path) -> No
     """
     clear_caches()
     deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "divider.pptx")))
-    assert deck.slides[0].title_text == "Financial Performance and Valuation"
+    assert deck.slides[1].title_text == "Financial Performance and Valuation"
+
+
+def test_a_divider_marked_section_03_is_not_a_content_slide(tmp_path: Path) -> None:
+    """The kicker announces the divider; the headline beside it is an ordinary
+    heading. Testing only the title missed the announcement, so a slide plainly
+    marked SECTION 03 was filed as content and measured against content-slide
+    margins, the content logo box and the content capitalisation convention.
+    """
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "marked.pptx")))
+    assert deck.slides[1].archetype == "section_divider"
