@@ -364,6 +364,45 @@ Watch the second package: installing both in one `apt-get` aborted the whole
 transaction on a 404 for poppler and left a core-only LibreOffice behind, which
 reports "source file could not be loaded" and looks exactly like a bad deck.
 
+## 4c. The second deck, and what n=2 found
+
+A five-slide deck from a different house (EXA Advisory: an *image* logo, EUR,
+sentence case, an exact 960x540 canvas) went through `learn` and `check`. The
+house style came back well -- an 8-colour palette, per-role font bands, the mark
+in two colourways with per-archetype boxes, a page-number box, per-archetype
+margins, a 7x9 grid, `^(EUR)\s?[\d(]` -- with seven honest declines. **The image
+logo path still works**: BR-001/002/003 ran and passed, which is the regression
+that mattered after #5 taught the tool about vector marks.
+
+It reported three findings. Two were true: "SPA negotiation and signing" on
+slide 5 sits 132pt left of its siblings and below its own date, which a render
+confirms, and LO-004 and LO-008 both point at it. The third was false, and its
+cause was worth the whole exercise -- see the `cNvPr@id` collision above, which
+had been present on the Falcon deck all along.
+
+Three things this run corrected about what the previous sections claimed:
+
+* **"All twenty seeded defects are caught" is environment-dependent.** Install
+  Carlito and Caladea and it is nineteen. The twentieth, slide 12's LO-001, is a
+  frame dragged past the right edge holding the words "SECTION 03": bounded at
+  1.15 em the ink might reach 1406pt, measured in its own face it ends at 892.6pt
+  and renders in full. The measurement is right and the seed does not produce a
+  visible defect. Quote the number with the fonts it was measured under.
+* **The bounds are not free of false positives, only of one kind.** §7 says they
+  "never produce a false positive", which holds for overflow, where a generous
+  bound under-reports. LO-001 runs the other way: a loose bound over-reports a
+  shape that is on the canvas. It now says `medium` when it is bounding rather
+  than measuring.
+* **Two tests in `test_extent.py` passed only because the machine had no
+  Calibri-metric fonts.** CI has none, so CI could not see it.
+
+Still open from this: `LO-006` is written into every learned profile's
+`rules.disabled`, and an explicit profile disable beats the `--rules LO-006`
+opt-in that §3 documents -- so the documented escape hatch does nothing. And
+without Calibri-metric fonts LO-006 declines on every shape in the deck.
+
+---
+
 **What it cost.** With slide 12 correctly classified as `section_divider`, the
 deck has one divider, which is not enough evidence to learn a safe margin or a
 logo box for that archetype. LO-002 and BR-001/002/003 on slide 12 are now
