@@ -208,11 +208,11 @@ def _derive_bullets(
     for context in iter_runs(deck, furniture):
         if not context.paragraph.is_bulleted or context.cell is not None:
             continue
-        key = (context.slide.index, context.shape.ref.shape_id)
+        key = (context.slide.index, context.shape.ref.uid)
         per_list.setdefault(key, []).append(bullet_terminal(context.paragraph.text))
 
     observations: list[Observation] = []
-    for (slide_index, shape_id), terminals in sorted(per_list.items()):
+    for (slide_index, uid), terminals in sorted(per_list.items()):
         if not terminals:
             continue
         counts: dict[str, int] = {}
@@ -226,7 +226,7 @@ def _derive_bullets(
                 dominant,
                 slide_index,
                 1.0,
-                shape_id=shape_id,
+                uid=uid,
             )
         )
 
@@ -272,7 +272,7 @@ def _derive_numbers(
             if table is None:
                 continue
             for column, cells in table.iter_columns(skip_header=True):
-                scope = table_column_scope(slide.index, shape.ref.shape_id, column)
+                scope = table_column_scope(slide.index, shape.ref.uid, column)
                 decimals: set[int] = set()
                 for cell in cells:
                     text = cell.text

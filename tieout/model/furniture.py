@@ -26,10 +26,11 @@ consume it and neither should depend on the other.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
-from tieout.model.deck import DeckModel, ShapeModel, SlideModel
+from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
 
 if TYPE_CHECKING:
     from tieout.profile.schema import Profile
@@ -40,6 +41,20 @@ LOGO_SUPPORT_SHARE: Final[float] = 0.40
 #: How close an image must sit to the established logo slot -- in position and
 #: in size -- to be read as the same mark in another colourway.
 LOGO_VARIANT_TOLERANCE_PT: Final[float] = 2.0
+
+#: How far a backing plate may fall short of enclosing the text set on it. A
+#: badge is positioned by eye against its glyph, not snapped to the text box.
+LOCKUP_PLATE_TOLERANCE_PT: Final[float] = 2.0
+
+#: How much larger in area than that text a backing plate may be. This bounds the
+#: claim to a badge drawn around its own glyph: a panel big enough to be the
+#: slide's background is content, whatever text happens to sit on it.
+LOCKUP_PLATE_AREA_RATIO: Final[float] = 4.0
+
+#: How far apart two pieces of one lockup may sit, as a multiple of the taller
+#: one's height. Scale-relative rather than absolute, because the same mark is
+#: set at 19pt in a slide corner and at 36pt on a cover.
+LOCKUP_GAP_HEIGHTS: Final[float] = 1.0
 
 #: A string repeated verbatim on at least this share of slides is boilerplate.
 BOILERPLATE_SUPPORT_SHARE: Final[float] = 0.60
@@ -106,18 +121,24 @@ ROLES: Final[tuple[str, ...]] = (
 class SlideFurniture:
     """Which shapes on one slide are chrome rather than content."""
 
-    logo_shape_ids: frozenset[int] = frozenset()
-    page_number_shape_ids: frozenset[int] = frozenset()
-    boilerplate_shape_ids: frozenset[int] = frozenset()
+    logo_uids: frozenset[int] = frozenset()
+    page_number_uids: frozenset[int] = frozenset()
+    boilerplate_uids: frozenset[int] = frozenset()
+    #: Drawn shapes carrying no text of their own that back a piece of the above
+    #: -- the badge under a monogram, the tab behind a page number.
+    lockup_uids: frozenset[int] = frozenset()
 
     @property
     def all_ids(self) -> frozenset[int]:
         return (
-            self.logo_shape_ids | self.page_number_shape_ids | self.boilerplate_shape_ids
+            self.logo_uids
+            | self.page_number_uids
+            | self.boilerplate_uids
+            | self.lockup_uids
         )
 
-    def contains(self, shape_id: int) -> bool:
-        return shape_id in self.all_ids
+    def contains(self, uid: int) -> bool:
+        return uid in self.all_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +146,7 @@ class PageNumberObservation:
     """One page number found on a slide, with the value it displayed."""
 
     slide_index: int
-    shape_id: int
+    uid: int
     value: int
     text: str
     box_pt: tuple[float, float, float, float]
@@ -146,15 +167,15 @@ class Furniture:
     def for_slide(self, slide_index: int) -> SlideFurniture:
         return self.by_slide.get(slide_index, SlideFurniture())
 
-    def is_furniture(self, slide_index: int, shape_id: int) -> bool:
-        return self.for_slide(slide_index).contains(shape_id)
+    def is_furniture(self, slide_index: int, uid: int) -> bool:
+        return self.for_slide(slide_index).contains(uid)
 
-    def is_logo(self, slide_index: int, shape_id: int) -> bool:
-        return shape_id in self.for_slide(slide_index).logo_shape_ids
+    def is_logo(self, slide_index: int, uid: int) -> bool:
+        return uid in self.for_slide(slide_index).logo_uids
 
     def logo_shapes(self, slide: SlideModel) -> list[ShapeModel]:
-        ids = self.for_slide(slide.index).logo_shape_ids
-        return [s for s in slide.all_shapes() if s.ref.shape_id in ids]
+        ids = self.for_slide(slide.index).logo_uids
+        return [s for s in slide.all_shapes() if s.ref.uid in ids]
 
     def page_number_for(self, slide_index: int) -> PageNumberObservation | None:
         for observation in self.page_numbers:
@@ -174,7 +195,7 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
     boilerplate = _boilerplate(deck, profile)
 
     boilerplate_texts = set(boilerplate)
-    page_number_ids = {(o.slide_index, o.shape_id) for o in page_numbers}
+    page_number_ids = {(o.slide_index, o.uid) for o in page_numbers}
 
     by_slide: dict[int, SlideFurniture] = {}
     for slide in deck.slides:
@@ -183,15 +204,17 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
         plate: set[int] = set()
         for shape in slide.all_shapes():
             if shape.image_sha1 and shape.image_sha1 in logo_sha1s:
-                logos.add(shape.ref.shape_id)
-            if (slide.index, shape.ref.shape_id) in page_number_ids:
-                numbers.add(shape.ref.shape_id)
+                logos.add(shape.ref.uid)
+            if (slide.index, shape.ref.uid) in page_number_ids:
+                numbers.add(shape.ref.uid)
             if shape.has_text and normalise_text(shape.text) in boilerplate_texts:
-                plate.add(shape.ref.shape_id)
+                plate.add(shape.ref.uid)
+        text_chrome = frozenset(logos) | frozenset(numbers) | frozenset(plate)
         by_slide[slide.index] = SlideFurniture(
-            logo_shape_ids=frozenset(logos),
-            page_number_shape_ids=frozenset(numbers),
-            boilerplate_shape_ids=frozenset(plate),
+            logo_uids=frozenset(logos),
+            page_number_uids=frozenset(numbers),
+            boilerplate_uids=frozenset(plate),
+            lockup_uids=_lockup_plates(slide, text_chrome),
         )
 
     return Furniture(
@@ -200,6 +223,207 @@ def detect_furniture(deck: DeckModel, profile: Profile | None = None) -> Furnitu
         logo_support=logo_support,
         page_numbers=page_numbers,
         boilerplate=boilerplate,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LogoMark:
+    """One logo on one slide: an image part, or a lockup of drawn shapes.
+
+    The rules and the deriver both measure a logo's placement, and both used to
+    do it against a ``ShapeModel`` -- which works only where the mark is a single
+    image. A mark drawn in vector is several shapes, so what they need is the
+    box those shapes occupy together.
+    """
+
+    ref: ShapeRef
+    left_pt: float
+    top_pt: float
+    width_pt: float
+    height_pt: float
+    #: Native pixel size where the mark is an image. ``None`` for a drawn lockup,
+    #: which has no native size for a rendered one to be distorted against.
+    image_pixel_width: int | None = None
+    image_pixel_height: int | None = None
+
+    @property
+    def bbox_pt(self) -> tuple[float, float, float, float]:
+        return (self.left_pt, self.top_pt, self.width_pt, self.height_pt)
+
+    @property
+    def aspect_ratio(self) -> float | None:
+        return self.width_pt / self.height_pt if self.height_pt else None
+
+
+def logo_marks(
+    slide: SlideModel,
+    *,
+    image_sha1: frozenset[str] = frozenset(),
+    lockup_text: frozenset[str] = frozenset(),
+) -> list[LogoMark]:
+    """Every logo on ``slide``, by whichever identity the profile learned.
+
+    An image mark is one shape and therefore one mark. A lockup is the pieces
+    carrying the learned strings, plus the plates behind them, grouped by
+    proximity -- because a slide can carry the mark twice, as a divider often
+    does, and their union would be a box spanning the slide.
+    """
+    marks = [
+        LogoMark(
+            ref=shape.ref,
+            left_pt=shape.left_pt,
+            top_pt=shape.top_pt,
+            width_pt=shape.width_pt,
+            height_pt=shape.height_pt,
+            image_pixel_width=shape.image_pixel_width,
+            image_pixel_height=shape.image_pixel_height,
+        )
+        for shape in slide.all_shapes()
+        if shape.image_sha1 and shape.image_sha1 in image_sha1
+    ]
+    if not lockup_text:
+        return marks
+
+    pieces = [
+        shape
+        for shape in slide.leaf_shapes()
+        if shape.width_pt > 0
+        and shape.height_pt > 0
+        and shape.has_text
+        and normalise_text(shape.text) in lockup_text
+    ]
+    if not pieces:
+        return marks
+    plates = _lockup_plates(slide, frozenset(p.ref.uid for p in pieces))
+    pieces += [s for s in slide.leaf_shapes() if s.ref.uid in plates]
+
+    for group in _group_by_proximity(pieces):
+        left = min(s.left_pt for s in group)
+        top = min(s.top_pt for s in group)
+        marks.append(
+            LogoMark(
+                ref=min(group, key=lambda s: s.ref.uid).ref,
+                left_pt=left,
+                top_pt=top,
+                width_pt=max(s.right_pt for s in group) - left,
+                height_pt=max(s.bottom_pt for s in group) - top,
+            )
+        )
+    return marks
+
+
+def _group_by_proximity(shapes: list[ShapeModel]) -> list[list[ShapeModel]]:
+    """Single-linkage grouping of lockup pieces that sit together."""
+    remaining = sorted(shapes, key=lambda s: (s.left_pt, s.top_pt))
+    groups: list[list[ShapeModel]] = []
+    while remaining:
+        group = [remaining.pop(0)]
+        changed = True
+        while changed:
+            changed = False
+            for shape in list(remaining):
+                if any(_sits_with(shape, member) for member in group):
+                    group.append(shape)
+                    remaining.remove(shape)
+                    changed = True
+        groups.append(group)
+    return groups
+
+
+def _sits_with(one: ShapeModel, other: ShapeModel) -> bool:
+    reach = LOCKUP_GAP_HEIGHTS * max(one.height_pt, other.height_pt)
+    horizontal = max(one.left_pt - other.right_pt, other.left_pt - one.right_pt)
+    vertical = max(one.top_pt - other.bottom_pt, other.top_pt - one.bottom_pt)
+    return horizontal <= reach and vertical <= reach
+
+
+def lockup_strings(deck: DeckModel, boilerplate: Iterable[str]) -> frozenset[str]:
+    """Which repeated strings belong to a drawn mark rather than to the furniture.
+
+    A mark drawn in vector has no image part to be known by, so it has to be
+    known by the text it sets -- and "text this deck repeats" is far too broad.
+    The footer repeats. A standing callout on every slide repeats. Taking all of
+    them put a deck's own body text in the logo's place.
+
+    What distinguishes the mark is the badge. A drawn plate is set behind a
+    monogram and behind almost nothing else, so the plate seeds the group and the
+    wordmark beside it joins by proximity.
+
+    A mark drawn as text alone, with no badge, is therefore not found here, and
+    its geometry stays unchecked. That is deliberate: nothing separates such a
+    mark from any other line the deck repeats, and guessing costs more than the
+    miss does.
+    """
+    repeated = frozenset(boilerplate)
+    strings: set[str] = set()
+    for slide in deck.slides:
+        chrome = frozenset(
+            shape.ref.uid
+            for shape in slide.leaf_shapes()
+            if shape.has_text and normalise_text(shape.text) in repeated
+        )
+        plates = _lockup_plates(slide, chrome)
+        if not plates:
+            continue
+        pieces = [
+            shape
+            for shape in slide.leaf_shapes()
+            if shape.ref.uid in chrome or shape.ref.uid in plates
+        ]
+        for group in _group_by_proximity(pieces):
+            if not any(shape.ref.uid in plates for shape in group):
+                continue
+            strings.update(
+                normalise_text(shape.text) for shape in group if shape.has_text
+            )
+    return frozenset(strings)
+
+
+def _lockup_plates(slide: SlideModel, text_chrome: frozenset[int]) -> frozenset[int]:
+    """Drawn shapes sitting behind chrome text: the rest of a lockup.
+
+    A house mark shipped as vector artwork is a badge with the monogram set on
+    it, not an image part. Repetition across slides finds the monogram and the
+    wordmark, because those are text; the badge behind them carries no text and
+    no image, so nothing identified it and every layout rule measured the house
+    mark as if it were content. :func:`logo_variants` already settled that logo
+    identity is geometric rather than by pixels -- this is the same argument one
+    step further, for a mark that has no pixels to begin with.
+
+    Identity is containment bounded by area. A plate drawn for a glyph encloses
+    that glyph and is of its order of size; a panel that happens to lie under a
+    footer encloses it too but dwarfs it, so it stays content.
+    """
+    anchors = [
+        shape
+        for shape in slide.leaf_shapes()
+        if shape.ref.uid in text_chrome and shape.width_pt > 0 and shape.height_pt > 0
+    ]
+    if not anchors:
+        return frozenset()
+
+    plates: set[int] = set()
+    for shape in slide.leaf_shapes():
+        if shape.has_text or shape.image_sha1 or shape.ref.uid in text_chrome:
+            continue
+        if shape.width_pt <= 0 or shape.height_pt <= 0:
+            continue
+        area = shape.width_pt * shape.height_pt
+        for held in anchors:
+            if area > LOCKUP_PLATE_AREA_RATIO * held.width_pt * held.height_pt:
+                continue
+            if _encloses(shape, held, LOCKUP_PLATE_TOLERANCE_PT):
+                plates.add(shape.ref.uid)
+                break
+    return frozenset(plates)
+
+
+def _encloses(outer: ShapeModel, inner: ShapeModel, tolerance: float) -> bool:
+    return (
+        outer.left_pt <= inner.left_pt + tolerance
+        and outer.top_pt <= inner.top_pt + tolerance
+        and outer.right_pt >= inner.right_pt - tolerance
+        and outer.bottom_pt >= inner.bottom_pt - tolerance
     )
 
 
@@ -298,7 +522,7 @@ def _page_numbers(
             candidates.append(
                 PageNumberObservation(
                     slide_index=slide.index,
-                    shape_id=shape.ref.shape_id,
+                    uid=shape.ref.uid,
                     value=value,
                     text=text,
                     box_pt=shape.bbox_pt,
@@ -422,10 +646,10 @@ def font_role(
         return "table"
 
     title = slide.title_shape
-    if title is not None and shape.ref.shape_id == title.ref.shape_id:
+    if title is not None and shape.ref.uid == title.ref.uid:
         return "title"
 
-    if furniture is not None and furniture.is_furniture(slide.index, shape.ref.shape_id):
+    if furniture is not None and furniture.is_furniture(slide.index, shape.ref.uid):
         return "footnote"
 
     named = _role_from_name(shape.ref.name)
@@ -465,7 +689,7 @@ def content_shapes(
     return [
         shape
         for shape in slide.leaf_shapes()
-        if not furniture.is_furniture(slide.index, shape.ref.shape_id)
+        if not furniture.is_furniture(slide.index, shape.ref.uid)
         and shape.width_pt > 0
         and shape.height_pt > 0
     ]

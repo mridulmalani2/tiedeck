@@ -84,7 +84,7 @@ def _passages(
     """
     for shape in slide.leaf_shapes():
         if furniture is not None and furniture.is_furniture(
-            slide.index, shape.ref.shape_id
+            slide.index, shape.ref.uid
         ):
             continue
         for paragraph in shape.text_frame_paragraphs:
@@ -345,7 +345,7 @@ class BulletTerminal(Rule):
 
         for slide in deck.slides:
             for shape in slide.leaf_shapes():
-                if furniture.is_furniture(slide.index, shape.ref.shape_id):
+                if furniture.is_furniture(slide.index, shape.ref.uid):
                     continue
                 bullets = [
                     paragraph

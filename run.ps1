@@ -7,7 +7,7 @@ Start TieOut's local UI on Windows, setting everything up the first time.
 
 Safe to run every time. The first run builds a virtual environment and
 installs; later runs skip straight to starting the server, and reinstall only
-when pyproject.toml has changed since the last one.
+when something under the packages has changed since the last one.
 
 If PowerShell refuses to run this because of the execution policy, either
 
@@ -94,13 +94,22 @@ if (-not (Test-Path $VenvPython)) {
 
 # -- 3. install, but only when something changed ---------------------------- #
 
+# A pyproject.toml change alone is not enough: the install below is a copy, not
+# a link, and the console script's sys.path puts site-packages ahead of this
+# directory. After a pull brings new code with an unchanged pyproject.toml the
+# marker is still the newer file, the install is skipped, and the server serves
+# the previous copy -- the reader's change appears to do nothing.
 $needsInstall = -not (Test-Path $Marker)
 if (-not $needsInstall) {
-    $needsInstall = (Get-Item 'pyproject.toml').LastWriteTimeUtc -gt (Get-Item $Marker).LastWriteTimeUtc
+    $markerTime = (Get-Item $Marker).LastWriteTimeUtc
+    $sources = @('pyproject.toml', 'tieout', 'tieout_ui', 'tieout_review', 'tieout_fix') |
+        Where-Object { Test-Path $_ } |
+        ForEach-Object { Get-ChildItem -Path $_ -Recurse -File -ErrorAction SilentlyContinue }
+    $needsInstall = [bool]($sources | Where-Object { $_.LastWriteTimeUtc -gt $markerTime } | Select-Object -First 1)
 }
 
 if ($needsInstall) {
-    Write-Host 'Installing TieOut and its UI dependencies. This happens once.'
+    Write-Host 'Installing TieOut and its UI dependencies. This happens on a first run and after an update.'
     # A plain (non-editable) install: editable mode needs pip 21.3+, and the pip
     # bundled with an older Python fails with a message about setuptools that
     # tells the reader nothing. Upgrading pip is worth trying, not worth failing

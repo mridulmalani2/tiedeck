@@ -8,7 +8,7 @@
 #
 # Safe to run every time. The first run builds a virtual environment and
 # installs; later runs skip straight to starting the server, and reinstall only
-# when pyproject.toml has changed since the last one.
+# when something under the packages has changed since the last one.
 #
 # This exists because the alternative is six commands, one of which fails
 # silently on the Python that ships with macOS. Someone evaluating a QA tool
@@ -86,8 +86,20 @@ fi
 
 # -- 3. install, but only when something changed ---------------------------- #
 
-if [ ! -f "$MARKER" ] || [ pyproject.toml -nt "$MARKER" ]; then
-  say "Installing TieOut and its UI dependencies. This happens once."
+# Reinstalling on a pyproject.toml change alone is not enough. The install above
+# is a copy, not a link, and the console script's sys.path puts site-packages
+# ahead of this directory -- so after `git pull` brings new code with an
+# unchanged pyproject.toml, the marker is still the newer file, the install is
+# skipped, and the server serves the previous copy. The reader sees their change
+# do nothing and has no way to tell why. So: anything under the packages counts.
+stale() {
+  [ -f "$MARKER" ] || return 0
+  find pyproject.toml tieout tieout_ui tieout_review tieout_fix \
+    -newer "$MARKER" 2>/dev/null | head -n 1 | grep -q .
+}
+
+if stale; then
+  say "Installing TieOut and its UI dependencies. This happens on a first run and after an update."
   # A plain (non-editable) install, which every pip that can read a
   # pyproject.toml handles. Editable mode needs pip 21.3+, and the pip bundled
   # with an older Python is 21.2 -- it fails with a message about setuptools

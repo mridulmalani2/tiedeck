@@ -229,7 +229,7 @@ def _grouped_cells(deck: DeckModel) -> dict[tuple[str, str, str], list[Cell]]:
 
 
 def _table_of(cell: Cell) -> tuple[int, int]:
-    return (cell.slide_index, cell.shape.ref.shape_id)
+    return (cell.slide_index, cell.shape.ref.uid)
 
 
 def _spans_two_tables(cells: list[Cell]) -> bool:

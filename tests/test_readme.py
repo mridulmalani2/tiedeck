@@ -477,3 +477,67 @@ def test_every_top_level_package_is_declared_for_packaging():
         and path.name != "tests"
     }
     assert present <= declared, f"not declared for packaging: {sorted(present - declared)}"
+
+
+def _stale_predicate() -> str:
+    """The `stale` function as run.sh actually ships it."""
+    script = (README.parent / "run.sh").read_text(encoding="utf-8")
+    start = script.index("stale() {")
+    end = script.index("\n}\n", start) + len("\n}\n")
+    return script[start:end]
+
+
+def _ask_stale(project, marker_first: bool) -> str:
+    """Run the shipped predicate against a throwaway project tree."""
+    import subprocess
+    import time
+
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    for package in ("tieout", "tieout_ui", "tieout_review", "tieout_fix"):
+        (project / package).mkdir()
+        (project / package / "__init__.py").write_text("", encoding="utf-8")
+    venv = project / ".venv"
+    venv.mkdir()
+    marker = venv / ".tieout-ui-installed"
+
+    if marker_first:
+        marker.touch()
+        time.sleep(0.01)
+        (project / "tieout_ui" / "view.py").write_text("# pulled\n", encoding="utf-8")
+    else:
+        (project / "tieout_ui" / "view.py").write_text("# pulled\n", encoding="utf-8")
+        time.sleep(0.01)
+        marker.touch()
+
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'MARKER=".venv/.tieout-ui-installed"\n{_stale_predicate()}\n'
+            "stale && echo STALE || echo FRESH",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+
+
+def test_the_launcher_reinstalls_when_a_pull_brings_new_code(tmp_path):
+    """`pip install ".[ui]"` is a copy, not a link, and the console script's
+    sys.path puts site-packages ahead of the checkout. Keying the reinstall on
+    pyproject.toml alone meant a pull that changed only Python left the marker
+    the newer file: the install was skipped and the server kept serving the
+    previous copy, so the reader's change appeared to do nothing.
+
+    Hit for real while driving the UI in this session -- a fix to `view.py` was
+    invisible in the running app until the marker was deleted by hand.
+    """
+    assert _ask_stale(tmp_path / "pulled", marker_first=True) == "STALE"
+
+
+def test_the_launcher_skips_the_install_when_nothing_changed(tmp_path):
+    """The other half: `./run.sh` is meant to be safe to type every time, and
+    reinstalling on every start would cost seconds nobody has to spend."""
+    assert _ask_stale(tmp_path / "settled", marker_first=False) == "FRESH"

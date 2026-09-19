@@ -531,11 +531,22 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _slide_title(slide: object) -> str:
-    shapes = getattr(slide, "text_shapes", ())
-    for shape in shapes:
-        if shape.is_placeholder and (shape.placeholder_type or "").startswith("title"):
-            return " ".join(shape.text.split())[:90]
-    for shape in shapes:
+    """How the review note names a slide.
+
+    Asks the model rather than guessing. This used to take the title placeholder
+    and otherwise the first text shape in document order, which is the lockup's
+    monogram on any deck whose logo is drawn -- the client deck's note read
+    "Slide 1 — H" and "Slide 12 — H" -- and the eyebrow everywhere else, so a
+    slide headed "Important Notice" was named "INTRODUCTION".
+
+    `SlideModel.title_text` is what every rule means by the title, and a reader
+    comparing the note against the deck is entitled to the same answer. The old
+    walk stays as the fallback for a slide that has no title at all.
+    """
+    title = getattr(slide, "title_text", "")
+    if title:
+        return " ".join(title.split())[:90]
+    for shape in getattr(slide, "text_shapes", ()):
         text = " ".join(shape.text.split())
         if text:
             return text[:90]

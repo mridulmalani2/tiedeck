@@ -176,6 +176,7 @@ class ShapeOffCanvas(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
+        bleeds = bool(profile.layout.decorative_bleed_slides)
         for slide in deck.slides:
             width, height = _canvas(slide, deck)
             if width <= 0 or height <= 0:
@@ -187,7 +188,12 @@ class ShapeOffCanvas(Rule):
                 spills = _canvas_spills(shape.visual_bbox_pt, width, height)
                 if not spills:
                     continue
-                severity, qualifier = _overhang_kind(shape, slide, (width, height))
+                kind = _overhang_kind(
+                    shape, slide, (width, height), bleed_is_house_style=bleeds
+                )
+                if kind is None:
+                    continue
+                severity, qualifier = kind
                 edge, _, measured, limit = spills[0]
                 described = ", ".join(f"{name} by {over:.1f}pt" for name, over, _, _ in spills)
                 rotated = f", rotated {shape.rotation:g} degrees" if shape.rotation else ""
@@ -197,6 +203,12 @@ class ShapeOffCanvas(Rule):
                         profile=profile,
                         provenance_path="slide",
                         severity=severity,
+                        # An overhang measured against a bound is a claim about
+                        # where the ink might be, not where it is: a frame past
+                        # the edge holding a short label is off the canvas as a
+                        # bound and on it as a measurement. LO-002 and LO-004
+                        # have said so since #3; this said `high` either way.
+                        confidence=weakest(self.confidence, ink_confidence(shape)),
                         message=(
                             f"{shape.ref.name} extends off the {width:g}x{height:g}pt "
                             f"canvas: {described}{rotated}{qualifier}"
@@ -233,16 +245,36 @@ def _canvas_spills(
 
 
 def _overhang_kind(
-    shape: ShapeModel, slide: SlideModel, canvas: tuple[float, float]
-) -> tuple[Severity, str]:
+    shape: ShapeModel,
+    slide: SlideModel,
+    canvas: tuple[float, float],
+    *,
+    bleed_is_house_style: bool,
+) -> tuple[Severity, str] | None:
     """The severity a canvas overhang deserves, and how to describe it.
 
-    Invisible overhangs -- a deliberate bleed, and a frame whose ink stays on
-    the canvas -- are reported at ``info``. A reader should be able to see that
-    TieOut noticed, without a blocker standing between them and a send over
-    something nobody can see on the slide.
+    ``None`` where the overhang is not worth a line in the report. Both cases
+    are ones this function has itself established are invisible to a reader, and
+    both used to be reported at ``info`` so a reader could see that TieOut had
+    noticed. Against a real deck that reads differently: the summary offers
+    "3 things to do" and two of them say "Nothing to do unless this was not
+    intended", which teaches the reader to skim the list.
+
+    * **The ink provably stays on the canvas.** A text box wider than its text
+      is a fact about the frame, not about the slide. The bound is an upper
+      bound, so a frame that clears it clears it on any machine -- this is a
+      proof rather than a judgement, and it holds on any deck.
+    * **A deliberate bleed, in a house style that bleeds.** Whether a cover
+      device crossing the slide edge is intent or error is not in the file, so
+      the reference deck is asked: ``layout.decorative_bleed_slides`` records
+      where it did. With no such evidence the ``info`` line stays.
+
+    What is still reported is an overhang that is neither: one carrying text, or
+    sitting in front of the content, or wholly off the canvas.
     """
     if is_decorative_bleed(shape, slide, canvas):
+        if bleed_is_house_style:
+            return None
         return (
             "info",
             ", which reads as a deliberate bleed: it carries no text and sits "
@@ -250,11 +282,7 @@ def _overhang_kind(
         )
     extent = ink_extent(shape)
     if extent is not None and not _canvas_spills(extent.bbox, *canvas):
-        return (
-            "info",
-            ", though its text stays on the canvas: the frame is oversized "
-            "rather than the content misplaced",
-        )
+        return None
     return (ShapeOffCanvas.severity, "")
 
 
@@ -262,6 +290,35 @@ def _overhang_remedy(severity: Severity) -> str:
     if severity == "info":
         return "Nothing to do unless this was not intended"
     return "Move the shape back onto the canvas"
+
+
+def _reported_off_canvas(
+    shape: ShapeModel,
+    slide: SlideModel,
+    canvas: tuple[float, float],
+    bleed_is_house_style: bool,
+) -> bool:
+    """Whether LO-001 already has this shape, so LO-002 need not repeat it.
+
+    The safe margin lies inside the canvas, so a shape that has left the canvas
+    has necessarily left the margin: reporting both is one misplacement counted
+    twice, and counted in two different numbers, because LO-001 bounds the frame
+    where LO-002 bounds the ink. Nothing is lost by saying it once -- the shape
+    has to come back onto the slide either way, and the margin is measured again
+    on the run after it does.
+
+    Conditioned on LO-001 actually reporting rather than merely on the frame
+    leaving the canvas. An oversized frame whose ink stays on the slide is silent
+    there, and that ink can still break the margin: that one is LO-002's.
+    """
+    if not _canvas_spills(shape.visual_bbox_pt, *canvas):
+        return False
+    return (
+        _overhang_kind(
+            shape, slide, canvas, bleed_is_house_style=bleed_is_house_style
+        )
+        is not None
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -305,6 +362,7 @@ class MarginIntrusion(Rule):
         margins = profile.layout.safe_margin_pt
         tolerance = profile.layout.position_tolerance_pt
         furniture = self.furniture(deck, profile)
+        bleeds = bool(profile.layout.decorative_bleed_slides)
         findings: list[Finding] = []
 
         for slide in deck.slides:
@@ -319,6 +377,8 @@ class MarginIntrusion(Rule):
             full_bleed = FULL_BLEED_AREA_SHARE * width * height
             for shape in content_shapes(slide, furniture):
                 if full_bleed > 0 and shape.area_pt2 >= full_bleed:
+                    continue
+                if _reported_off_canvas(shape, slide, (width, height), bleeds):
                     continue
                 left, top, box_width, box_height = ink_bbox_pt(shape)
                 breaches = [
@@ -347,6 +407,10 @@ class MarginIntrusion(Rule):
                 edge, _, measured, limit = breaches[0]
                 described = ", ".join(f"{name} by {by:.1f}pt" for name, by, _, _ in breaches)
                 bleed = is_decorative_bleed(shape, slide, (width, height))
+                if bleed and bleeds:
+                    # House style, established from the reference deck. LO-001
+                    # says why.
+                    continue
                 qualifier = (
                     ", which reads as a deliberate bleed rather than misplaced content"
                     if bleed
@@ -506,14 +570,14 @@ class NearMissAlignment(Rule):
                 shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
             )
             settled = {
-                shape.ref.shape_id: _aligned_axes(grid, shape, local)
-                | evenly_spaced.get(shape.ref.shape_id, frozenset())
+                shape.ref.uid: _aligned_axes(grid, shape, local)
+                | evenly_spaced.get(shape.ref.uid, frozenset())
                 for shape in shapes
             }
             plotted = _data_series_axes(shapes, grid.tolerance_pt)
             for shape in shapes:
-                aligned = settled[shape.ref.shape_id] | plotted.get(
-                    shape.ref.shape_id, frozenset()
+                aligned = settled[shape.ref.uid] | plotted.get(
+                    shape.ref.uid, frozenset()
                 )
                 for edge in _edge_values(shape):
                     if edge.axis in aligned:
@@ -634,8 +698,8 @@ def _evenly_spaced_axes(
             if statistics.stdev(gutters) > stdev_limit:
                 continue
             for shape in group:
-                out.setdefault(shape.ref.shape_id, set()).add(settled)
-    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+                out.setdefault(shape.ref.uid, set()).add(settled)
+    return {uid: frozenset(axes) for uid, axes in out.items()}
 
 
 #: Members a data series needs before its shape is evidence of plotting rather
@@ -723,8 +787,8 @@ def _data_series_axes(
             ):
                 continue
             for shape in candidates:
-                out.setdefault(shape.ref.shape_id, set()).add(axis)
-    return {shape_id: frozenset(axes) for shape_id, axes in out.items()}
+                out.setdefault(shape.ref.uid, set()).add(axis)
+    return {uid: frozenset(axes) for uid, axes in out.items()}
 
 
 def _not_sharing(
@@ -812,7 +876,7 @@ def _closest_per_axis(observed: Iterable[_NearMiss]) -> list[_NearMiss]:
     """
     best: dict[tuple[int, int, str], _NearMiss] = {}
     for miss in observed:
-        key = (miss.ref.slide_index, miss.ref.shape_id, miss.axis)
+        key = (miss.ref.slide_index, miss.ref.uid, miss.axis)
         current = best.get(key)
         if current is None or (abs(miss.delta), miss.label) < (
             abs(current.delta),
@@ -898,12 +962,12 @@ class TextShapeOverlap(Rule):
                 for shape in content_shapes(slide, furniture)
                 if shape.has_text and not _is_thin(shape) and shape.area_pt2 > 0
             ]
-            inked = {shape.ref.shape_id: ink_bbox_pt(shape) for shape in candidates}
+            inked = {shape.ref.uid: ink_bbox_pt(shape) for shape in candidates}
             overlaps: list[tuple[float, float, ShapeModel, ShapeModel]] = []
             for index, first in enumerate(candidates):
-                first_box = inked[first.ref.shape_id]
+                first_box = inked[first.ref.uid]
                 for second in candidates[index + 1 :]:
-                    second_box = inked[second.ref.shape_id]
+                    second_box = inked[second.ref.uid]
                     area = rect_intersection_area_pt2(first_box, second_box)
                     if area <= 0:
                         continue
@@ -916,7 +980,7 @@ class TextShapeOverlap(Rule):
 
             # Worst first, so the representative that survives clustering is the
             # overlap a reader would actually notice.
-            overlaps.sort(key=lambda item: (-item[0], item[2].ref.shape_id))
+            overlaps.sort(key=lambda item: (-item[0], item[2].ref.uid))
             for share, area, first, second in overlaps:
                 upper, lower = (
                     (first, second) if first.z_order >= second.z_order else (second, first)
@@ -1655,7 +1719,7 @@ def _sibling_groups(
             )
             if len(siblings) < MIN_SIBLINGS:
                 continue
-            key = tuple(shape.ref.shape_id for shape in siblings)
+            key = tuple(shape.ref.uid for shape in siblings)
             if key in seen:
                 continue
             seen.add(key)
