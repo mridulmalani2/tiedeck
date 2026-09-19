@@ -416,3 +416,33 @@ def test_the_divider_lockup_is_not_reported_against_the_grid(vector_logo_reviewe
         for f in vector_logo_reviewed.reference_review.findings
     ]
     assert not findings, "\n".join(findings)
+
+
+# --------------------------------------------------------------------------------------
+# A headline set below the top third
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_a_centred_headline(path: Path) -> Path:
+    """A divider: the lockup at the top, the headline down the page."""
+    presentation = _deck()
+    slide = _blank(presentation)
+    _lockup(slide, 39.6, 36.0, 28.8, 18, 10)
+    _text(slide, 39.6, 212.4, 576, 25.2, "SECTION 03", size=14, colour=GOLD)
+    _text(slide, 39.6, 241.2, 756, 79.2, "Financial Performance and Valuation", size=29)
+    _text(slide, 39.6, 322.0, 633.6, 36, "Historical results and the framework.", size=12.5)
+    _text(slide, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+    presentation.save(str(path))
+    return path
+
+
+def test_a_headline_below_the_top_third_is_still_the_title(tmp_path: Path) -> None:
+    """A title slide and a divider set the headline down the page, by design.
+
+    The fallback looked for it in the top 30% of the canvas, which on those two
+    layouts contains nothing but the logo -- so the monogram won the title slot
+    by default, and the client deck's report called two of its slides "H".
+    """
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "divider.pptx")))
+    assert deck.slides[0].title_text == "Financial Performance and Valuation"
