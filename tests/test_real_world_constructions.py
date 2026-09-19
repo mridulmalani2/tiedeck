@@ -540,3 +540,21 @@ def test_every_learned_logo_box_is_a_placement_the_deck_uses(tmp_path: Path) -> 
             f"the {archetype} box describes no placement in the deck: "
             f"{box.describe()} against {sorted(placements)}"
         )
+
+
+def test_the_review_note_names_a_slide_by_its_headline(tmp_path: Path) -> None:
+    """The UI labels each slide in the review note, and had its own idea of a
+    title: the title placeholder, else the first text shape in document order.
+
+    A deck whose logo is a lockup puts the monogram first, so the client deck's
+    note read "Slide 1 — H" and "Slide 12 — H". On every other slide it named the
+    eyebrow rather than the headline — "Slide 2 — INTRODUCTION" for a slide
+    headed "Important Notice". Fixing `title_shape` did not reach this, because
+    this never called it.
+    """
+    from tieout_ui.view import _slide_title
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "note.pptx")))
+    assert _slide_title(deck.slides[1]) == "Financial Performance and Valuation"
+    assert _slide_title(deck.slides[0]) == "Executive Summary"
