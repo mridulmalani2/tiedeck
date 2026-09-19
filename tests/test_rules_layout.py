@@ -190,6 +190,28 @@ def test_lo002_ignores_archetypes_with_no_learned_margin(dirty_deck, reference_p
     assert SEEDED["LO-002"] not in slide_indices(findings)
 
 
+def test_one_misplaced_shape_is_not_reported_by_two_rules(dirty_deck, reference_profile):
+    """A shape off the canvas is off the safe margin too, necessarily.
+
+    The margin lies inside the canvas, so LO-002 restating LO-001 is one
+    misplacement measured twice -- and measured differently, because LO-001
+    bounds the frame and LO-002 the ink. On the defect deck the seeded off-canvas
+    box came back as "extends off the canvas: right by 120.0pt" *and* "intrudes
+    into the safe margin: right by ...", which reads as two things to fix.
+
+    Nothing is lost by saying it once: the shape has to come back onto the slide
+    either way, and the margin is measured again on the next run.
+    """
+    clear_caches()
+    result = run_rules(dirty_deck, reference_profile, include=["LO-001", "LO-002"])
+    seen: dict[tuple[int, object], set[str]] = {}
+    for finding in result.findings:
+        key = (finding.slide_index, getattr(finding.where, "name", None))
+        seen.setdefault(key, set()).add(finding.rule_id)
+    doubled = {key: rules for key, rules in seen.items() if len(rules) > 1}
+    assert not doubled, f"one shape reported by two rules: {doubled}"
+
+
 # --------------------------------------------------------------------------------------
 # LO-003 near-miss alignment
 # --------------------------------------------------------------------------------------

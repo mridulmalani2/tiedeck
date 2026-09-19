@@ -286,6 +286,35 @@ def _overhang_remedy(severity: Severity) -> str:
     return "Move the shape back onto the canvas"
 
 
+def _reported_off_canvas(
+    shape: ShapeModel,
+    slide: SlideModel,
+    canvas: tuple[float, float],
+    bleed_is_house_style: bool,
+) -> bool:
+    """Whether LO-001 already has this shape, so LO-002 need not repeat it.
+
+    The safe margin lies inside the canvas, so a shape that has left the canvas
+    has necessarily left the margin: reporting both is one misplacement counted
+    twice, and counted in two different numbers, because LO-001 bounds the frame
+    where LO-002 bounds the ink. Nothing is lost by saying it once -- the shape
+    has to come back onto the slide either way, and the margin is measured again
+    on the run after it does.
+
+    Conditioned on LO-001 actually reporting rather than merely on the frame
+    leaving the canvas. An oversized frame whose ink stays on the slide is silent
+    there, and that ink can still break the margin: that one is LO-002's.
+    """
+    if not _canvas_spills(shape.visual_bbox_pt, *canvas):
+        return False
+    return (
+        _overhang_kind(
+            shape, slide, canvas, bleed_is_house_style=bleed_is_house_style
+        )
+        is not None
+    )
+
+
 # --------------------------------------------------------------------------------------
 # LO-002
 # --------------------------------------------------------------------------------------
@@ -342,6 +371,8 @@ class MarginIntrusion(Rule):
             full_bleed = FULL_BLEED_AREA_SHARE * width * height
             for shape in content_shapes(slide, furniture):
                 if full_bleed > 0 and shape.area_pt2 >= full_bleed:
+                    continue
+                if _reported_off_canvas(shape, slide, (width, height), bleeds):
                     continue
                 left, top, box_width, box_height = ink_bbox_pt(shape)
                 breaches = [
