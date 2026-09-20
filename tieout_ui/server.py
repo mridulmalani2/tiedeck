@@ -16,9 +16,13 @@ The route list is short on purpose:
 * ``POST /api/confirm``          answer the questions, drop facts, write the YAML
 * ``POST /api/redact``           what would be sent, offline and without a key
 * ``POST /api/check``            the audit, slide by slide
-* ``GET  /api/thumbnails/...``   a rendered slide
+* ``GET  /api/thumbnails/...``   a rendered slide, as a photograph
+* ``GET  /api/canvas/...``       a slide's shape tree, for the live surface
+* ``GET  /api/media/...``        one picture's own bytes, for the live surface
 * ``POST /api/fix``              apply one correction to the open deck
 * ``POST /api/move``             put one shape where the person dragged it
+* ``POST /api/resize``           give one shape the size a person dragged it to
+* ``POST /api/edit-text``        set one run's text to what a person typed
 * ``POST /api/undo``             step back one correction
 * ``POST /api/reject``           turn one down, for this session only
 * ``GET  /api/export/{id}``      the corrected deck
@@ -32,6 +36,8 @@ profile.
 from __future__ import annotations
 
 import ipaddress
+import mimetypes
+import zipfile
 from pathlib import Path
 from typing import Annotated, Any, Final
 
@@ -54,7 +60,17 @@ from tieout.profile.loader import (
 from tieout.profile.schema import Profile
 from tieout.report import html as html_report
 from tieout.rules.base import AuditResult, clear_caches, run_rules
-from tieout_fix import Delta, Fix, apply_fix, delta, move_fix, plan_fixes
+from tieout_fix import (
+    Delta,
+    Fix,
+    apply_fix,
+    delta,
+    move_fix,
+    plan_fixes,
+    resize_fix,
+    retext_fix,
+)
+from tieout_ui.canvas import canvas_view
 from tieout_ui.edit import apply_edits, drop
 from tieout_ui.session import Deck, SessionStore
 from tieout_ui.view import audit_view, find_shape, movable, profile_view, rules_view
@@ -199,6 +215,42 @@ class MoveRequest(BaseModel):
     y_emu: int
 
 
+class ResizeRequest(BaseModel):
+    """The size a person dragged a handle to.
+
+    ``cx_emu`` and ``cy_emu`` are absolute, in whole EMU, for the same reason
+    :class:`MoveRequest`'s coordinates are: the page's own arithmetic during
+    the drag is what has to round-trip exactly, and a delta sent instead would
+    move that arithmetic onto the server.
+    """
+
+    deck_id: str
+    client: str
+    slide: int
+    shape_id: int
+    cx_emu: int
+    cy_emu: int
+
+
+class EditTextRequest(BaseModel):
+    """One run's new text, addressed by its exact position.
+
+    ``paragraph`` and ``run`` name a position rather than a pattern -- the
+    same numbering :mod:`tieout_ui.canvas` gave the page, counting ``a:r``,
+    ``a:br`` and ``a:fld`` together in document order -- so an edit made to
+    one occurrence of some words lands on that occurrence and not on every
+    place the same words happen to appear.
+    """
+
+    deck_id: str
+    client: str
+    slide: int
+    shape_id: int
+    paragraph: int
+    run: int
+    text: str = Field(max_length=10_000)
+
+
 class UndoRequest(BaseModel):
     deck_id: str
     client: str
@@ -307,6 +359,49 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         if not 1 <= index <= len(pages):
             raise HTTPException(status_code=404, detail="no such rendered slide")
         return Response(content=pages[index - 1], media_type="image/png")
+
+    @app.get("/api/canvas/{deck_id}/{index}")
+    def canvas(store: Guard, deck_id: str, index: int, client: str) -> JSONResponse:
+        """One slide's shape tree, for the live surface to draw.
+
+        Needs a client because :func:`tieout_ui.canvas.canvas_view` flags
+        data-mark shapes against the house grid's tolerance -- the one thing
+        about a slide's shapes that depends on more than the deck itself.
+        """
+        deck = _require(store, deck_id)
+        profile = _load(client)
+        slide = deck.model.slide(index)
+        if slide is None:
+            raise HTTPException(status_code=404, detail=f"this deck has no slide {index}")
+        return JSONResponse(canvas_view(slide, deck.model, profile))
+
+    @app.get("/api/media/{deck_id}/{index}/{uid}")
+    def media(store: Guard, deck_id: str, index: int, uid: int) -> Response:
+        """One picture's own bytes, straight from the package.
+
+        Keyed on the shape's uid rather than its ``cNvPr`` id, which is not
+        always unique on a slide -- the same caution the model itself takes
+        anywhere it needs to name one shape rather than describe one.
+        """
+        deck = _require(store, deck_id)
+        slide = deck.model.slide(index)
+        if slide is None:
+            raise HTTPException(status_code=404, detail=f"this deck has no slide {index}")
+        shape = next((s for s in slide.all_shapes() if s.ref.uid == uid), None)
+        if shape is None or not shape.image_part_name:
+            raise HTTPException(status_code=404, detail="no such picture on that slide")
+
+        with deck.lock:
+            try:
+                with zipfile.ZipFile(deck.current) as archive:
+                    data = archive.read(shape.image_part_name)
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=404, detail="that image is no longer in the package"
+                ) from exc
+
+        content_type = mimetypes.guess_type(shape.image_part_name)[0] or "application/octet-stream"
+        return Response(content=data, media_type=content_type)
 
     # -- profiles -------------------------------------------------------- #
 
@@ -426,22 +521,23 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         """Apply one correction and re-audit, so the count moves as it is made."""
         deck = _require(store, request.deck_id)
         profile = _load(request.client)
-        planned = _plan(deck, profile)
-        chosen = planned.get(request.key)
-        if chosen is None:
-            raise HTTPException(
-                status_code=400, detail="that correction is not available on this deck"
-            )
+        with deck.lock:
+            planned = _plan(deck, profile)
+            chosen = planned.get(request.key)
+            if chosen is None:
+                raise HTTPException(
+                    status_code=400, detail="that correction is not available on this deck"
+                )
 
-        version = store.next_version(deck)
-        report = apply_fix(deck.current, version, chosen)
-        if not report.applied:
-            version.unlink(missing_ok=True)
-            raise HTTPException(status_code=422, detail=report.detail)
+            version = store.next_version(deck)
+            report = apply_fix(deck.current, version, chosen)
+            if not report.applied:
+                version.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=report.detail)
 
-        store.record(deck, version, chosen.summary)
-        _reload(deck)
-        payload = _recheck(store, deck, profile, correction=True)
+            store.record(deck, version, chosen.summary)
+            _reload(deck)
+            payload = _recheck(store, deck, profile, correction=True)
         payload["fixed"] = chosen.summary
         payload["changes"] = report.changes
         return JSONResponse(payload)
@@ -460,69 +556,216 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         deck = _require(store, request.deck_id)
         profile = _load(request.client)
 
-        shape = find_shape(deck.model, request.slide, request.shape_id)
-        if shape is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"slide {request.slide} has no shape {request.shape_id}. "
-                    "Re-run the check and try again."
-                ),
+        with deck.lock:
+            shape = find_shape(deck.model, request.slide, request.shape_id)
+            if shape is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"slide {request.slide} has no shape {request.shape_id}. "
+                        "Re-run the check and try again."
+                    ),
+                )
+            refused = movable(shape)
+            if refused:
+                raise HTTPException(status_code=422, detail=refused)
+
+            _check_reach(deck.model, request.x_emu, request.y_emu)
+            if (request.x_emu, request.y_emu) == (
+                pt_to_emu(shape.left_pt),
+                pt_to_emu(shape.top_pt),
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="that is where the shape already is, so nothing was written.",
+                )
+
+            chosen = move_fix(
+                slide_index=request.slide,
+                shape_id=request.shape_id,
+                shape_name=shape.ref.display_name,
+                x_emu=request.x_emu,
+                y_emu=request.y_emu,
+                cx_emu=pt_to_emu(shape.width_pt) or 0,
+                cy_emu=pt_to_emu(shape.height_pt) or 0,
+                current_x_emu=pt_to_emu(shape.left_pt) or 0,
+                current_y_emu=pt_to_emu(shape.top_pt) or 0,
             )
-        refused = movable(shape)
-        if refused:
-            raise HTTPException(status_code=422, detail=refused)
+            version = store.next_version(deck)
+            report = apply_fix(deck.current, version, chosen)
+            if not report.applied:
+                version.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=report.detail)
 
-        _check_reach(deck.model, request.x_emu, request.y_emu)
-        if (request.x_emu, request.y_emu) == (
-            pt_to_emu(shape.left_pt),
-            pt_to_emu(shape.top_pt),
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="that is where the shape already is, so nothing was written.",
-            )
-
-        chosen = move_fix(
-            slide_index=request.slide,
-            shape_id=request.shape_id,
-            shape_name=shape.ref.display_name,
-            x_emu=request.x_emu,
-            y_emu=request.y_emu,
-            cx_emu=pt_to_emu(shape.width_pt) or 0,
-            cy_emu=pt_to_emu(shape.height_pt) or 0,
-        )
-        version = store.next_version(deck)
-        report = apply_fix(deck.current, version, chosen)
-        if not report.applied:
-            version.unlink(missing_ok=True)
-            raise HTTPException(status_code=422, detail=report.detail)
-
-        store.record(deck, version, chosen.summary)
-        deck.moved = True
-        _reload(deck)
-        # A move is the one correction worth re-rendering for: it is the only one
-        # whose result is a position, and a canvas still showing the old one
-        # would read as the move having failed.
-        store.render_in_background(deck, force=True)
-        payload = _recheck(store, deck, profile, correction=True)
+            store.record(deck, version, chosen.summary)
+            deck.moved = True
+            _reload(deck)
+            # A move is the one correction worth re-rendering for: it is the
+            # only one whose result is a position, and a canvas still showing
+            # the old one would read as the move having failed.
+            store.render_in_background(deck, force=True)
+            payload = _recheck(store, deck, profile, correction=True)
         payload["moved"] = chosen.summary
+        return JSONResponse(payload)
+
+    @app.post("/api/resize")
+    def resize(store: Guard, request: ResizeRequest) -> JSONResponse:
+        """Give one shape the size the person dragged a handle to, and re-audit.
+
+        The mirror of ``/api/move``: it computes no size of its own, only
+        writes the one it was given, and refuses for the same reason a move
+        does -- a grouped shape's extent is in the group's own coordinate
+        space, and a shape flagged as a data mark states a value through its
+        size or position rather than merely occupying one.
+        """
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+
+        with deck.lock:
+            shape = find_shape(deck.model, request.slide, request.shape_id)
+            if shape is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"slide {request.slide} has no shape {request.shape_id}. "
+                        "Re-run the check and try again."
+                    ),
+                )
+            refused = movable(shape)
+            if refused:
+                raise HTTPException(status_code=422, detail=refused)
+
+            _check_size_reach(deck.model, request.cx_emu, request.cy_emu)
+            if (request.cx_emu, request.cy_emu) == (
+                pt_to_emu(shape.width_pt),
+                pt_to_emu(shape.height_pt),
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="that is the size the shape already is, so nothing was written.",
+                )
+
+            chosen = resize_fix(
+                slide_index=request.slide,
+                shape_id=request.shape_id,
+                shape_name=shape.ref.display_name,
+                x_emu=pt_to_emu(shape.left_pt) or 0,
+                y_emu=pt_to_emu(shape.top_pt) or 0,
+                cx_emu=request.cx_emu,
+                cy_emu=request.cy_emu,
+                current_cx_emu=pt_to_emu(shape.width_pt) or 0,
+                current_cy_emu=pt_to_emu(shape.height_pt) or 0,
+            )
+            version = store.next_version(deck)
+            report = apply_fix(deck.current, version, chosen)
+            if not report.applied:
+                version.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=report.detail)
+
+            store.record(deck, version, chosen.summary)
+            deck.moved = True
+            _reload(deck)
+            # A resize changes what the slide looks like exactly as a move
+            # does, for the same reason: it is a result someone is looking at
+            # the canvas to confirm, and a stale image there reads as the
+            # resize having failed.
+            store.render_in_background(deck, force=True)
+            payload = _recheck(store, deck, profile, correction=True)
+        payload["resized"] = chosen.summary
+        return JSONResponse(payload)
+
+    @app.post("/api/edit-text")
+    def edit_text(store: Guard, request: EditTextRequest) -> JSONResponse:
+        """Set one run's text to exactly what a person typed, and re-audit.
+
+        Addressed positionally, the same way :mod:`tieout_ui.canvas` numbered
+        the run for the page: this paragraph, this run, counting a line break
+        and a field alongside a real run in document order. Refused rather
+        than guessed at wherever that position does not name an editable run,
+        because a stale index -- the deck changed under a page still showing
+        the previous check -- must not land on the wrong words.
+        """
+        deck = _require(store, request.deck_id)
+        profile = _load(request.client)
+
+        with deck.lock:
+            shape = find_shape(deck.model, request.slide, request.shape_id)
+            if shape is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"slide {request.slide} has no shape {request.shape_id}. "
+                        "Re-run the check and try again."
+                    ),
+                )
+            if not shape.has_text_frame:
+                raise HTTPException(status_code=422, detail="that shape has no text frame")
+
+            paragraphs = shape.text_frame_paragraphs
+            if not 0 <= request.paragraph < len(paragraphs):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"paragraph {request.paragraph} does not exist on that shape. "
+                        "Re-run the check and try again."
+                    ),
+                )
+            runs = paragraphs[request.paragraph].runs
+            if not 0 <= request.run < len(runs):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"run {request.run} does not exist in that paragraph. "
+                        "Re-run the check and try again."
+                    ),
+                )
+            if runs[request.run].text == request.text:
+                raise HTTPException(
+                    status_code=400,
+                    detail="that is already the text, so nothing was written.",
+                )
+
+            chosen = retext_fix(
+                slide_index=request.slide,
+                shape_id=request.shape_id,
+                shape_name=shape.ref.display_name,
+                paragraph=request.paragraph,
+                run=request.run,
+                text=request.text,
+            )
+            version = store.next_version(deck)
+            report = apply_fix(deck.current, version, chosen)
+            if not report.applied:
+                version.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=report.detail)
+
+            store.record(deck, version, chosen.summary)
+            # A text edit changes what the rendered slide shows exactly as a
+            # move or a resize does, so the fidelity preview is stale in the
+            # same way and re-renders for the same reason.
+            deck.moved = True
+            _reload(deck)
+            store.render_in_background(deck, force=True)
+            payload = _recheck(store, deck, profile, correction=True)
+        payload["edited_text"] = chosen.summary
         return JSONResponse(payload)
 
     @app.post("/api/undo")
     def undo(store: Guard, request: UndoRequest) -> JSONResponse:
         deck = _require(store, request.deck_id)
         profile = _load(request.client)
-        undone = store.undo(deck)
-        if undone is None:
-            raise HTTPException(status_code=400, detail="nothing to undo")
-        _reload(deck)
-        if deck.moved:
-            # Only decks whose geometry has been edited: everything else this
-            # tool applies is a recolour or a text substitution, which is not
-            # worth a LibreOffice conversion between a click and its result.
-            store.render_in_background(deck, force=True)
-        payload = _recheck(store, deck, profile)
+        with deck.lock:
+            undone = store.undo(deck)
+            if undone is None:
+                raise HTTPException(status_code=400, detail="nothing to undo")
+            _reload(deck)
+            if deck.moved:
+                # Only decks whose geometry has been edited: everything else
+                # this tool applies is a recolour or a text substitution,
+                # which is not worth a LibreOffice conversion between a click
+                # and its result.
+                store.render_in_background(deck, force=True)
+            payload = _recheck(store, deck, profile)
         payload["undone"] = undone
         return JSONResponse(payload)
 
@@ -538,14 +781,22 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
     @app.get("/api/export/{deck_id}")
     def export(store: Guard, deck_id: str) -> Response:
-        """The deck as it now stands, corrections included."""
+        """The deck as it now stands, corrections included.
+
+        Reads inside the deck's lock, alongside every correction: a version
+        file is not written atomically, so an export that read while one was
+        in flight could see it half-written rather than as it was before or
+        after.
+        """
         deck = _require(store, deck_id)
-        name = deck.filename
-        if deck.edited:
-            stem = name.rsplit(".", 1)[0]
-            name = f"{stem} (corrected).pptx"
+        with deck.lock:
+            name = deck.filename
+            if deck.edited:
+                stem = name.rsplit(".", 1)[0]
+                name = f"{stem} (corrected).pptx"
+            content = deck.current.read_bytes()
         return Response(
-            content=deck.current.read_bytes(),
+            content=content,
             media_type=(
                 "application/vnd.openxmlformats-officedocument.presentationml."
                 "presentation"
@@ -593,6 +844,30 @@ def _snap_reach(profile: Profile) -> float:
     the mistake auto-snapping made.
     """
     return max(profile.layout.grid.tolerance_pt, profile.layout.near_miss_alignment_pt.max)
+
+
+def _check_size_reach(model: DeckModel, cx_emu: int, cy_emu: int) -> None:
+    """The same sanity check as a move's, read as a size instead of a position.
+
+    A shape larger than several slides, or of negative or zero size, is not a
+    real resize -- it is a malformed request, most likely a stale drag whose
+    pointer coordinates were never inside the canvas at all.
+    """
+    limit_x = int((pt_to_emu(model.width_pt) or 0) * _MOVE_REACH)
+    limit_y = int((pt_to_emu(model.height_pt) or 0) * _MOVE_REACH)
+    if cx_emu <= 0 or cy_emu <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="a shape cannot be resized to zero or a negative size.",
+        )
+    if cx_emu > limit_x or cy_emu > limit_y:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "that size is larger than any shape is placed in practice, so it "
+                "was not written."
+            ),
+        )
 
 
 def _check_reach(model: DeckModel, x_emu: int, y_emu: int) -> None:

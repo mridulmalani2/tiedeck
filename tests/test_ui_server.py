@@ -111,6 +111,8 @@ API_PATHS = [
     ("GET", "/api/rules"),
     ("GET", "/api/decks/anything"),
     ("GET", "/api/thumbnails/anything/1"),
+    ("GET", "/api/canvas/anything/1"),
+    ("GET", "/api/media/anything/1/1"),
     ("GET", "/api/report/anything"),
     ("POST", "/api/learn"),
     ("POST", "/api/confirm"),
@@ -221,6 +223,76 @@ def test_the_page_says_why_there_are_no_thumbnails_rather_than_failing(uploaded)
     a broken upload."""
     thumbnails = uploaded["thumbnails"]
     assert thumbnails["available"] or thumbnails["rendering"] or thumbnails["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# The live surface: a slide's shape tree and its pictures' own bytes
+# --------------------------------------------------------------------------- #
+
+
+def test_the_canvas_route_needs_a_client(client, onboarded, uploaded):
+    response = client.get(f"/api/canvas/{uploaded['deck_id']}/1")
+    assert response.status_code == 422  # a required query param, missing
+
+
+def test_the_canvas_route_serves_the_shape_tree(client, onboarded, uploaded):
+    response = client.get(f"/api/canvas/{uploaded['deck_id']}/1?client=demo")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["width_pt"] > 0 and body["height_pt"] > 0
+    assert body["shapes"], "the title slide has shapes"
+    assert {"uid", "shape_id", "kind", "left_pt", "editable"} <= set(body["shapes"][0])
+
+
+def test_the_canvas_route_is_a_404_past_the_last_slide(client, onboarded, uploaded):
+    response = client.get(f"/api/canvas/{uploaded['deck_id']}/999?client=demo")
+    assert response.status_code == 404
+
+
+def _pictured_deck(path):
+    """One slide carrying a real picture, for the media route to serve back."""
+    import io
+
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    png = io.BytesIO()
+    Image.new("RGB", (40, 20), (10, 20, 30)).save(png, format="PNG")
+    png.seek(0)
+    slide.shapes.add_picture(png, Pt(60), Pt(80), Pt(200), Pt(100))
+
+    presentation.save(str(path))
+    return path
+
+
+def test_the_media_route_serves_a_pictures_own_bytes(client, onboarded, store, tmp_path):
+    import io
+
+    from PIL import Image
+
+    path = _pictured_deck(tmp_path / "pictured.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+    picture = next(s for _, s in deck.model.all_shapes() if s.kind == "picture")
+
+    response = client.get(f"/api/media/{uploaded['deck_id']}/1/{picture.ref.uid}")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/png"
+    assert response.content, "the image's own bytes came back"
+    assert Image.open(io.BytesIO(response.content)).size == (40, 20)
+
+
+def test_the_media_route_is_a_404_for_a_shape_with_no_picture(client, onboarded, uploaded):
+    response = client.get(f"/api/media/{uploaded['deck_id']}/1/999999")
+    assert response.status_code == 404
 
 
 # --------------------------------------------------------------------------- #
@@ -1378,7 +1450,7 @@ def test_snapping_a_near_miss_onto_its_grid_line_clears_the_finding(
 
 
 def _grouped_deck(path):
-    """A deck with one shape inside a group and one beside it."""
+    """A deck with one shape inside a group, at 1:1 scale, and one beside it."""
     from pptx import Presentation
     from pptx.util import Emu, Pt
 
@@ -1398,13 +1470,57 @@ def _grouped_deck(path):
     return path
 
 
-def test_a_shape_inside_a_group_is_refused_with_the_reason(
+def _scaled_grouped_deck(path):
+    """A group whose box was resized after the fact, the way dragging a
+    group's own corner handle in PowerPoint does: ``a:ext`` changes and
+    ``a:chExt`` does not, so its child's coordinates are no longer 1:1 with
+    the slide's. Doubled on both axes here, chosen so a scale bug shows up as
+    a wrong answer rather than as a coincidentally correct one."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    group.name = "Group"
+    inner = group.shapes.add_textbox(Pt(100), Pt(100), Pt(100), Pt(40))
+    inner.name = "Inside"
+    inner.text_frame.text = "Scaled."
+    # chOff/chExt freeze at (100, 100, 100, 40)pt here; only off/ext change.
+    group.left, group.top, group.width, group.height = Pt(150), Pt(150), Pt(200), Pt(80)
+    presentation.save(str(path))
+    return path
+
+
+def _rotated_grouped_deck(path):
+    """A group that also rotates its children -- the one case this feature
+    refuses rather than writing into, because a rotation is not a transform
+    "un-scaling" alone can invert."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    group.name = "Group"
+    inner = group.shapes.add_textbox(Pt(400), Pt(200), Pt(200), Pt(40))
+    inner.name = "Inside"
+    inner.text_frame.text = "Rotated group."
+    group.rotation = 30.0
+    presentation.save(str(path))
+    return path
+
+
+def test_a_shape_inside_a_plain_group_moves_in_its_own_coordinate_space(
     client, onboarded, store, tmp_path
 ):
-    """Not taste: a grouped shape's offset is stored in the group's coordinate
-    space, which the group then translates and scales. Writing a slide-space
-    number there moves the shape somewhere nobody asked for, so the refusal says
-    what to do about it instead of failing quietly."""
+    """The group here is 1:1 -- its own box was never resized after the fact
+    -- so the shape's own coordinate space and slide space agree, and the
+    write lands at exactly the slide-space target requested."""
     path = _grouped_deck(tmp_path / "grouped.pptx")
     uploaded = client.post(
         "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
@@ -1418,18 +1534,18 @@ def test_a_shape_inside_a_group_is_refused_with_the_reason(
     )
     assert inside.ref.group_path, "the fixture puts this shape inside a group"
 
+    target = (90 * 12700, 60 * 12700)
     response = client.post(
         "/api/move",
         json={
             "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
-            "shape_id": inside.ref.shape_id, "x_emu": 0, "y_emu": 0,
+            "shape_id": inside.ref.shape_id, "x_emu": target[0], "y_emu": target[1],
         },
     )
-    assert response.status_code == 422
-    assert "group" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert _at(store.require(uploaded["deck_id"]).model, 1, inside.ref.shape_id) == target
 
-    # And the shape beside it still moves, so the refusal is about the group
-    # rather than about the slide.
+    # And the shape beside it still moves too, independently.
     loose = next(
         shape for _, shape in deck.model.all_shapes() if shape.ref.name == "Loose"
     )
@@ -1444,16 +1560,82 @@ def test_a_shape_inside_a_group_is_refused_with_the_reason(
     assert moved.status_code == 200, moved.text
 
 
-def test_a_grouped_shape_is_reported_as_unmovable_with_its_reason(store, tmp_path):
+def test_a_shape_inside_a_scaled_group_moves_by_the_unscaled_amount(
+    client, onboarded, store, tmp_path
+):
+    """The group here doubled its own box without touching its children's
+    coordinate space, so its child space is half of slide space on both
+    axes. Moving the shape 40pt right and 20pt down in slide space has to
+    write 20pt and 10pt into the shape's own offset -- half, not the raw
+    slide-space amount -- or the shape lands at twice the requested
+    distance."""
+    path = _scaled_grouped_deck(tmp_path / "scaled.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+    inside = next(s for _, s in deck.model.all_shapes() if s.ref.name == "Inside")
+    before = _at(deck.model, 1, inside.ref.shape_id)
+
+    target = (before[0] + 40 * 12700, before[1] + 20 * 12700)
+    response = client.post(
+        "/api/move",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "x_emu": target[0], "y_emu": target[1],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _at(store.require(uploaded["deck_id"]).model, 1, inside.ref.shape_id) == target
+
+
+def test_a_shape_inside_a_rotated_group_is_refused_for_move_and_resize(
+    client, onboarded, store, tmp_path
+):
+    """The one case this feature does not attempt: a group that also rotates
+    or mirrors its children is a transform "un-scaling" alone cannot invert,
+    and guessing at it is exactly what this module refuses to do anywhere
+    else."""
+    path = _rotated_grouped_deck(tmp_path / "rotated.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+    inside = next(s for _, s in deck.model.all_shapes() if s.ref.name == "Inside")
+
+    moved = client.post(
+        "/api/move",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "x_emu": 0, "y_emu": 0,
+        },
+    )
+    assert moved.status_code == 422
+    assert "rotat" in moved.json()["detail"]
+
+    resized = client.post(
+        "/api/resize",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "cx_emu": 12700, "cy_emu": 12700,
+        },
+    )
+    assert resized.status_code == 422
+    assert "rotat" in resized.json()["detail"]
+
+
+def test_a_grouped_shape_reports_movable_unless_its_group_rotates(store, tmp_path):
     """The page has to be able to say *why* rather than just not offering, or a
     shape that cannot be dragged looks like a shape the tool failed to notice."""
-    path = _grouped_deck(tmp_path / "grouped.pptx")
-    model = load_deck(path)
-    inside = next(s for _, s in model.all_shapes() if s.ref.name == "Inside")
-    loose = next(s for _, s in model.all_shapes() if s.ref.name == "Loose")
-
-    assert "group" in movable(inside)
+    plain = load_deck(_grouped_deck(tmp_path / "grouped.pptx"))
+    inside = next(s for _, s in plain.all_shapes() if s.ref.name == "Inside")
+    loose = next(s for _, s in plain.all_shapes() if s.ref.name == "Loose")
+    assert movable(inside) == ""
     assert movable(loose) == ""
+
+    rotated = load_deck(_rotated_grouped_deck(tmp_path / "rotated.pptx"))
+    rotated_inside = next(s for _, s in rotated.all_shapes() if s.ref.name == "Inside")
+    assert "rotat" in movable(rotated_inside)
 
 
 def test_moving_a_shape_that_is_not_there_is_refused(client, dirty_uploaded, onboarded):
@@ -1516,6 +1698,399 @@ def test_moving_needs_the_token_like_everything_else(store, tmp_path, monkeypatc
 
 
 # --------------------------------------------------------------------------- #
+# Resizing a shape -- the mirror of moving one
+#
+# Every property tested above for /api/move, tested again for /api/resize: it
+# writes exactly the size it was given, undo and export carry it, a grouped
+# shape is refused with the reason, and the sanity checks hold. The two
+# features share one implementation underneath (tieout_fix._transform), so a
+# regression that broke only one of them would say something about which half
+# changed rather than about resizing itself.
+# --------------------------------------------------------------------------- #
+
+
+def _size_at(model, slide_index, shape_id):
+    """Where a shape's size actually is in a deck, in whole EMU."""
+    shape = find_shape(model, slide_index, shape_id)
+    assert shape is not None, f"slide {slide_index} has no shape {shape_id}"
+    cx, cy = pt_to_emu(shape.width_pt), pt_to_emu(shape.height_pt)
+    assert cx is not None and cy is not None
+    return (cx, cy)
+
+
+def test_resizing_a_shape_writes_the_extent_and_can_be_undone(
+    client, dirty_uploaded, onboarded, store
+):
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    slide_index, move = _movable(view)
+    assert move is not None
+
+    target = (move["cx_emu"] + 30 * 12700, move["cy_emu"] + 12 * 12700)
+    resized = client.post(
+        "/api/resize",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "cx_emu": target[0], "cy_emu": target[1],
+        },
+    )
+    assert resized.status_code == 200, resized.text
+    after = resized.json()
+    assert after["edited"] is True and after["can_undo"] is True
+    assert after["resized"].startswith("Resize ")
+    assert after["applied"] == [after["resized"]]
+
+    assert _size_at(store.require(deck_id).model, slide_index, move["shape_id"]) == target
+    # The position is untouched -- a resize is not a move.
+    assert _at(store.require(deck_id).model, slide_index, move["shape_id"]) == (
+        move["x_emu"], move["y_emu"],
+    )
+
+    undone = client.post("/api/undo", json={"deck_id": deck_id, "client": "demo"})
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["can_undo"] is False
+    assert _size_at(store.require(deck_id).model, slide_index, move["shape_id"]) == (
+        move["cx_emu"], move["cy_emu"],
+    )
+
+
+def test_a_resized_deck_exports_with_the_shape_resized(
+    client, dirty_uploaded, onboarded, tmp_path
+):
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    slide_index, move = _movable(view)
+    assert move is not None
+    target = (move["cx_emu"] + 40 * 12700, move["cy_emu"])
+
+    assert client.post(
+        "/api/resize",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "cx_emu": target[0], "cy_emu": target[1],
+        },
+    ).status_code == 200
+
+    exported = client.get(f"/api/export/{deck_id}")
+    assert exported.status_code == 200
+    out = tmp_path / "exported.pptx"
+    out.write_bytes(exported.content)
+    assert _size_at(load_deck(out), slide_index, move["shape_id"]) == target
+
+
+def test_a_shape_inside_a_plain_group_resizes_in_its_own_coordinate_space(
+    client, onboarded, store, tmp_path
+):
+    path = _grouped_deck(tmp_path / "grouped-resize.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+
+    inside = next(
+        shape for _, shape in deck.model.all_shapes() if shape.ref.name == "Inside"
+    )
+    assert inside.ref.group_path, "the fixture puts this shape inside a group"
+
+    target = (240 * 12700, 60 * 12700)
+    response = client.post(
+        "/api/resize",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "cx_emu": target[0], "cy_emu": target[1],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _size_at(store.require(uploaded["deck_id"]).model, 1, inside.ref.shape_id) == target
+
+    loose = next(
+        shape for _, shape in deck.model.all_shapes() if shape.ref.name == "Loose"
+    )
+    resized = client.post(
+        "/api/resize",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": loose.ref.shape_id,
+            "cx_emu": 200 * 12700, "cy_emu": 50 * 12700,
+        },
+    )
+    assert resized.status_code == 200, resized.text
+
+
+def test_a_shape_inside_a_scaled_group_resizes_by_the_unscaled_amount(
+    client, onboarded, store, tmp_path
+):
+    """The mirror of the equivalent move test: growing the shape by 60pt and
+    30pt in slide space has to write 30pt and 15pt into its own extent, given
+    the fixture's 2x group scale."""
+    path = _scaled_grouped_deck(tmp_path / "scaled-resize.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+    inside = next(s for _, s in deck.model.all_shapes() if s.ref.name == "Inside")
+    before = _size_at(deck.model, 1, inside.ref.shape_id)
+
+    target = (before[0] + 60 * 12700, before[1] + 30 * 12700)
+    response = client.post(
+        "/api/resize",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "cx_emu": target[0], "cy_emu": target[1],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _size_at(store.require(uploaded["deck_id"]).model, 1, inside.ref.shape_id) == target
+
+
+def test_resizing_a_shape_that_is_not_there_is_refused(client, dirty_uploaded, onboarded):
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.post(
+        "/api/resize",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": 999_999, "cx_emu": 12700, "cy_emu": 12700,
+        },
+    )
+    assert response.status_code == 404
+
+
+def test_a_size_nothing_could_be_placed_at_is_refused(client, dirty_uploaded, onboarded):
+    view = _check(client, dirty_uploaded["deck_id"])
+    slide_index, move = _movable(view)
+    assert move is not None
+    too_big = client.post(
+        "/api/resize",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "cx_emu": 99_999_999_999, "cy_emu": 12700,
+        },
+    )
+    assert too_big.status_code == 422
+
+    zero = client.post(
+        "/api/resize",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "cx_emu": 0, "cy_emu": 12700,
+        },
+    )
+    assert zero.status_code == 422
+
+
+def test_resizing_a_shape_to_the_size_it_already_is_writes_no_version(
+    client, dirty_uploaded, onboarded, store
+):
+    view = _check(client, dirty_uploaded["deck_id"])
+    slide_index, move = _movable(view)
+    assert move is not None
+    response = client.post(
+        "/api/resize",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": slide_index,
+            "shape_id": move["shape_id"], "cx_emu": move["cx_emu"], "cy_emu": move["cy_emu"],
+        },
+    )
+    assert response.status_code == 400
+    assert not store.require(dirty_uploaded["deck_id"]).history
+
+
+def test_resizing_needs_the_token_like_everything_else(store, tmp_path, monkeypatch):
+    monkeypatch.setenv(PROFILE_DIR_ENV, str(tmp_path / "profiles"))
+    with TestClient(create_app(store)) as anonymous:
+        response = anonymous.post(
+            "/api/resize",
+            json={"deck_id": "x", "client": "demo", "slide": 1, "shape_id": 1,
+                  "cx_emu": 12700, "cy_emu": 12700},
+        )
+    assert response.status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# Editing text -- addressed positionally, like a run tieout_ui.canvas numbered
+# --------------------------------------------------------------------------- #
+
+
+def _text_shape(model, slide_index, name):
+    slide = model.slide(slide_index)
+    assert slide is not None
+    return next(s for s in slide.all_shapes() if s.ref.name == name)
+
+
+def test_editing_text_writes_the_run_and_can_be_undone(
+    client, dirty_uploaded, onboarded, store
+):
+    deck_id = dirty_uploaded["deck_id"]
+    _check(client, deck_id)
+    model = store.require(deck_id).model
+    shape = next(
+        s
+        for _, s in model.all_shapes()
+        if s.has_text_frame and s.text_frame_paragraphs and s.text_frame_paragraphs[0].runs
+    )
+    original = shape.text_frame_paragraphs[0].runs[0].text
+
+    edited = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": shape.ref.slide_index,
+            "shape_id": shape.ref.shape_id, "paragraph": 0, "run": 0,
+            "text": "Edited from the canvas.",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    after = edited.json()
+    assert after["edited"] is True and after["can_undo"] is True
+    assert after["edited_text"].startswith("Edit text on")
+
+    after_shape = _text_shape(store.require(deck_id).model, shape.ref.slide_index, shape.ref.name)
+    assert after_shape.text_frame_paragraphs[0].runs[0].text == "Edited from the canvas."
+
+    undone = client.post("/api/undo", json={"deck_id": deck_id, "client": "demo"})
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["can_undo"] is False
+    restored = _text_shape(store.require(deck_id).model, shape.ref.slide_index, shape.ref.name)
+    assert restored.text_frame_paragraphs[0].runs[0].text == original
+
+
+def test_an_edited_deck_exports_with_the_text_changed(
+    client, dirty_uploaded, onboarded, store, tmp_path
+):
+    deck_id = dirty_uploaded["deck_id"]
+    _check(client, deck_id)
+    model = store.require(deck_id).model
+    shape = next(
+        s
+        for _, s in model.all_shapes()
+        if s.has_text_frame and s.text_frame_paragraphs and s.text_frame_paragraphs[0].runs
+    )
+
+    assert client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": deck_id, "client": "demo", "slide": shape.ref.slide_index,
+            "shape_id": shape.ref.shape_id, "paragraph": 0, "run": 0,
+            "text": "Exported with the edit.",
+        },
+    ).status_code == 200
+
+    exported = client.get(f"/api/export/{deck_id}")
+    assert exported.status_code == 200
+    out = tmp_path / "exported.pptx"
+    out.write_bytes(exported.content)
+    after_shape = _text_shape(load_deck(out), shape.ref.slide_index, shape.ref.name)
+    assert after_shape.text_frame_paragraphs[0].runs[0].text == "Exported with the edit."
+
+
+def test_editing_text_on_a_shape_inside_a_group_is_not_refused(
+    client, onboarded, store, tmp_path
+):
+    """Unlike a move or a resize: no coordinate space stands between an edit
+    to a run's words and the group it happens to sit in."""
+    path = _grouped_deck(tmp_path / "grouped-text.pptx")
+    uploaded = client.post(
+        "/api/decks", files={"file": (path.name, path.read_bytes(), _MIME)}
+    ).json()
+    deck = store.require(uploaded["deck_id"])
+    inside = next(
+        shape for _, shape in deck.model.all_shapes() if shape.ref.name == "Inside"
+    )
+    assert inside.ref.group_path
+
+    response = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": inside.ref.shape_id, "paragraph": 0, "run": 0,
+            "text": "Edited inside a group.",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_editing_a_shape_with_no_text_frame_is_refused(
+    client, dirty_uploaded, onboarded, store
+):
+    model = store.require(dirty_uploaded["deck_id"]).model
+    shape = next(s for _, s in model.all_shapes() if not s.has_text_frame)
+
+    response = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo",
+            "slide": shape.ref.slide_index, "shape_id": shape.ref.shape_id,
+            "paragraph": 0, "run": 0, "text": "anything",
+        },
+    )
+    assert response.status_code == 422
+    assert "no text frame" in response.json()["detail"]
+
+
+def test_editing_a_paragraph_that_is_not_there_is_refused(
+    client, dirty_uploaded, onboarded, store
+):
+    model = store.require(dirty_uploaded["deck_id"]).model
+    shape = next(s for _, s in model.all_shapes() if s.has_text_frame)
+
+    response = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo",
+            "slide": shape.ref.slide_index, "shape_id": shape.ref.shape_id,
+            "paragraph": 999, "run": 0, "text": "anything",
+        },
+    )
+    assert response.status_code == 422
+    assert "paragraph 999" in response.json()["detail"]
+
+
+def test_editing_text_to_what_it_already_is_writes_no_version(
+    client, dirty_uploaded, onboarded, store
+):
+    model = store.require(dirty_uploaded["deck_id"]).model
+    shape = next(
+        s
+        for _, s in model.all_shapes()
+        if s.has_text_frame and s.text_frame_paragraphs and s.text_frame_paragraphs[0].runs
+    )
+    current = shape.text_frame_paragraphs[0].runs[0].text
+
+    response = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo",
+            "slide": shape.ref.slide_index, "shape_id": shape.ref.shape_id,
+            "paragraph": 0, "run": 0, "text": current,
+        },
+    )
+    assert response.status_code == 400
+    assert not store.require(dirty_uploaded["deck_id"]).history
+
+
+def test_editing_a_shape_that_is_not_there_is_refused(client, dirty_uploaded, onboarded):
+    _check(client, dirty_uploaded["deck_id"])
+    response = client.post(
+        "/api/edit-text",
+        json={
+            "deck_id": dirty_uploaded["deck_id"], "client": "demo", "slide": 1,
+            "shape_id": 999_999, "paragraph": 0, "run": 0, "text": "anything",
+        },
+    )
+    assert response.status_code == 404
+
+
+def test_editing_text_needs_the_token_like_everything_else(store, tmp_path, monkeypatch):
+    monkeypatch.setenv(PROFILE_DIR_ENV, str(tmp_path / "profiles"))
+    with TestClient(create_app(store)) as anonymous:
+        response = anonymous.post(
+            "/api/edit-text",
+            json={"deck_id": "x", "client": "demo", "slide": 1, "shape_id": 1,
+                  "paragraph": 0, "run": 0, "text": "anything"},
+        )
+    assert response.status_code == 401
+
+
+# --------------------------------------------------------------------------- #
 # What a correction changed
 #
 # A new total is a number to compare from memory. These tests are about the
@@ -1543,6 +2118,51 @@ def test_every_finding_carries_an_identity_that_survives_a_re_audit(
     assert ids(first) == ids(again)
     assert all(ids(first)), "an empty identity would collapse unrelated findings"
     assert again["delta"]["fixed"] == 0 and again["delta"]["new"] == 0
+
+
+def test_two_concurrent_fixes_do_not_corrupt_the_deck(
+    client, dirty_uploaded, onboarded, store
+):
+    """Two clicks landing at the same moment must not race: FastAPI runs each
+    sync route in its own thread, and without ``Deck.lock`` serialising them, a
+    fix built from one request's read of ``deck.current`` can write over the
+    version file another request is still building from -- or the two writes
+    can interleave into a package that never opens at all."""
+    import threading
+
+    from pptx import Presentation
+
+    deck_id = dirty_uploaded["deck_id"]
+    view = _check(client, deck_id)
+    fixable = [a for a in view["actions"] if a["fixable"]]
+    assert len(fixable) >= 2, "the seeded deck needs at least two independent fixes"
+
+    results: list[object] = [None, None]
+
+    def apply(index: int, key: str) -> None:
+        results[index] = client.post(
+            "/api/fix", json={"deck_id": deck_id, "client": "demo", "key": key},
+        )
+
+    threads = [
+        threading.Thread(target=apply, args=(0, fixable[0]["key"])),
+        threading.Thread(target=apply, args=(1, fixable[1]["key"])),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert all(r.status_code == 200 for r in results), [r.text for r in results]  # type: ignore[attr-defined]
+    deck = store.require(deck_id)
+    assert len(deck.history) == 2
+    assert len(deck.log) == 2
+    Presentation(str(deck.current))  # opens cleanly; neither write clobbered the other
+
+    after = _check(client, deck_id)
+    remaining = {a["key"] for a in after["actions"] if a["fixable"]}
+    assert fixable[0]["key"] not in remaining
+    assert fixable[1]["key"] not in remaining
 
 
 def test_a_correction_says_what_it_fixed_and_what_is_left(

@@ -29,7 +29,7 @@ from tieout.model.package import load_package
 from tieout.model.units import EMU_PER_POINT, pt_to_emu
 from tieout.profile.schema import Profile, SlideProfile
 from tieout.rules.base import clear_caches, run_rules
-from tieout_fix import apply_fix, move_fix, plan_fixes
+from tieout_fix import apply_fix, move_fix, plan_fixes, resize_fix, retext_fix
 
 
 def _audit(deck, profile):
@@ -340,6 +340,8 @@ def _move(shape, slide_index, x_emu, y_emu):
         y_emu=y_emu,
         cx_emu=_emu(shape.width_pt),
         cy_emu=_emu(shape.height_pt),
+        current_x_emu=_emu(shape.left_pt),
+        current_y_emu=_emu(shape.top_pt),
     )
 
 
@@ -494,6 +496,8 @@ def test_a_move_naming_a_shape_that_is_not_there_writes_nothing(tmp_path):
         y_emu=10,
         cx_emu=_emu(shape.width_pt),
         cy_emu=_emu(shape.height_pt),
+        current_x_emu=_emu(shape.left_pt),
+        current_y_emu=_emu(shape.top_pt),
     )
 
     target = tmp_path / "after.pptx"
@@ -530,6 +534,464 @@ def test_planning_can_never_produce_a_move(dirty_deck, reference_profile):
     assert all(fix.rule_id != MOVE_RULE_ID for fix in planned.values())
     assert MOVE_RULE_ID not in _BUILDERS
     assert not set(_BUILDERS) & set(GEOMETRY_RULES)
+
+
+# --------------------------------------------------------------------------------------
+# Resizing: the same exception as a move, mirrored
+# --------------------------------------------------------------------------------------
+
+
+def _resize(shape, slide_index, cx_emu, cy_emu):
+    return resize_fix(
+        slide_index=slide_index,
+        shape_id=shape.ref.shape_id,
+        shape_name=shape.ref.name,
+        x_emu=_emu(shape.left_pt),
+        y_emu=_emu(shape.top_pt),
+        cx_emu=cx_emu,
+        cy_emu=cy_emu,
+        current_cx_emu=_emu(shape.width_pt),
+        current_cy_emu=_emu(shape.height_pt),
+    )
+
+
+def _extent(deck, slide_index, name):
+    shape = _shape(deck, slide_index, name)
+    return (_emu(shape.width_pt), _emu(shape.height_pt))
+
+
+@pytest.mark.parametrize("name", ["Body 0", "Table 0"])
+def test_a_resize_writes_the_extent_it_was_given(tmp_path, name):
+    """The mirror of the move test with the same name: exactly the size, with
+    nothing rounded toward anything."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, name)
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _resize(shape, 1, 2_345_678, 8_765_432)).applied
+
+    assert _extent(load_deck(target), 1, name) == (2_345_678, 8_765_432)
+
+
+def test_ten_resizes_out_and_ten_back_land_on_the_original_extent(tmp_path):
+    """The property a resize handle rests on, mirroring the move nudge test:
+    EMU_PER_POINT steps are integer addition, so the shape returns to exactly
+    the size it started at."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+    start = (_emu(shape.width_pt), _emu(shape.height_pt))
+
+    current, cx, cy = source, start[0], start[1]
+    for step in range(20):
+        direction = 1 if step < 10 else -1
+        cx += direction * EMU_PER_POINT
+        cy += direction * EMU_PER_POINT
+        nxt = tmp_path / f"step{step}.pptx"
+        report = apply_fix(current, nxt, _resize(shape, 1, cx, cy))
+        assert report.applied, report.detail
+        current = nxt
+
+    assert _extent(load_deck(current), 1, "Body 0") == start
+
+
+def test_a_resize_changes_nothing_but_the_extent(tmp_path):
+    """Not the position, not the rotation, not the other shapes, not the other
+    slides, and not the package's ability to open."""
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _resize(shape, 1, 400 * 12700, 90 * 12700)).applied
+
+    after = load_deck(target)
+    resized = _shape(after, 1, "Body 0")
+    assert (resized.width_pt, resized.height_pt) == (400.0, 90.0)
+    assert (resized.left_pt, resized.top_pt) == (shape.left_pt, shape.top_pt)
+    assert resized.rotation == shape.rotation
+
+    assert _extent(after, 1, "Table 0") == _extent(deck, 1, "Table 0")
+    assert _extent(after, 2, "Body 1") == _extent(deck, 2, "Body 1")
+    assert after.slide_count == deck.slide_count
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+    Presentation(str(target))
+
+
+def test_a_resize_gives_an_inherited_placeholder_a_transform_of_its_own(tmp_path):
+    """The mirror of the equivalent move test: a placeholder with no ``a:xfrm``
+    of its own gets a whole one written, holding its own current position
+    alongside the new size -- an extent with no offset is exactly as invalid
+    as the reverse."""
+    source = tmp_path / "before.pptx"
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "Inherited"
+    presentation.save(str(source))
+
+    deck = load_deck(source)
+    slide = deck.slide(1)
+    assert slide is not None
+    title = next(s for s in slide.all_shapes() if s.is_placeholder)
+    assert (title.width_pt, title.height_pt) != (0.0, 0.0), "it inherits a real box"
+
+    target = tmp_path / "after.pptx"
+    assert apply_fix(source, target, _resize(title, 1, 300 * 12700, 60 * 12700)).applied
+
+    after_slide = load_deck(target).slide(1)
+    assert after_slide is not None
+    after = next(s for s in after_slide.all_shapes() if s.is_placeholder)
+    assert (after.width_pt, after.height_pt) == (300.0, 60.0)
+    assert (after.left_pt, after.top_pt) == (title.left_pt, title.top_pt)
+
+
+def test_a_resize_naming_a_shape_that_is_not_there_writes_nothing(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+    ghost = resize_fix(
+        slide_index=1,
+        shape_id=999_999,
+        shape_name="gone",
+        x_emu=_emu(shape.left_pt),
+        y_emu=_emu(shape.top_pt),
+        cx_emu=10,
+        cy_emu=10,
+        current_cx_emu=_emu(shape.width_pt),
+        current_cy_emu=_emu(shape.height_pt),
+    )
+
+    target = tmp_path / "after.pptx"
+    report = apply_fix(source, target, ghost)
+    assert not report.applied
+    assert "999999" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_resize_off_the_end_of_the_deck_writes_nothing(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _moveable_deck(source)
+    shape = _shape(deck, 1, "Body 0")
+
+    target = tmp_path / "after.pptx"
+    report = apply_fix(source, target, _resize(shape, 9, 10, 10))
+    assert not report.applied
+    assert "slide 9" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_planning_can_never_produce_a_resize(dirty_deck, reference_profile):
+    """The same guarantee as :func:`test_planning_can_never_produce_a_move`,
+    for the other geometry writer: a resize comes from a handle a person
+    dragged, never from the audit."""
+    from tieout_fix import _BUILDERS, RESIZE_KIND, RESIZE_RULE_ID
+
+    planned = plan_fixes(_audit(dirty_deck, reference_profile), reference_profile)
+    assert all(fix.kind != RESIZE_KIND for fix in planned.values())
+    assert all(fix.rule_id != RESIZE_RULE_ID for fix in planned.values())
+    assert RESIZE_RULE_ID not in _BUILDERS
+
+
+def test_move_and_resize_keys_do_not_collide(tmp_path):
+    """A move and a resize on the same shape are two different corrections and
+    must never be looked up as one another."""
+    from tieout_fix import move_key, resize_key
+
+    assert move_key(1, 5) != resize_key(1, 5)
+
+
+# --------------------------------------------------------------------------------------
+# Group write-back: a move or a resize converted into a grouped shape's own space
+# --------------------------------------------------------------------------------------
+
+
+def _nested_group_deck(path):
+    """A shape two groups deep, each resized after the fact so neither level
+    is 1:1 with the level above it -- a compounded, not merely doubled,
+    scale. Chosen so a bug in composing the two levels together, rather than
+    in either one alone, would still show up as a wrong answer."""
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    outer = slide.shapes.add_group_shape()
+    outer.name = "Outer"
+    inner_group = outer.shapes.add_group_shape()
+    inner_group.name = "Inner"
+    leaf = inner_group.shapes.add_textbox(Pt(100), Pt(100), Pt(50), Pt(20))
+    leaf.name = "Leaf"
+    # chOff/chExt freeze at the auto-fit box each level had just before its
+    # own resize -- (100, 100, 50, 20)pt for the inner group, then whatever
+    # the inner group's own resize left the outer group's auto-fit at.
+    inner_group.left, inner_group.top, inner_group.width, inner_group.height = (
+        Pt(100), Pt(100), Pt(100), Pt(40),
+    )
+    outer.left, outer.top, outer.width, outer.height = Pt(50), Pt(50), Pt(200), Pt(80)
+
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_a_move_through_two_nested_groups_composes_both_scales(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _nested_group_deck(source)
+    shape = _shape(deck, 1, "Leaf")
+    assert shape.ref.group_path == ("Outer", "Inner")
+    before = (_emu(shape.left_pt), _emu(shape.top_pt))
+
+    target = (before[0] + 400 * 12700, before[1] - 80 * 12700)
+    fix = _move(shape, 1, *target)
+
+    dest = tmp_path / "after.pptx"
+    report = apply_fix(source, dest, fix)
+    assert report.applied, report.detail
+    assert _offset(load_deck(dest), 1, "Leaf") == target
+
+
+def test_a_resize_through_two_nested_groups_composes_both_scales(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _nested_group_deck(source)
+    shape = _shape(deck, 1, "Leaf")
+    before = (_emu(shape.width_pt), _emu(shape.height_pt))
+
+    target = (before[0] + 800 * 12700, before[1] + 200 * 12700)
+    fix = _resize(shape, 1, *target)
+
+    dest = tmp_path / "after.pptx"
+    report = apply_fix(source, dest, fix)
+    assert report.applied, report.detail
+    assert _extent(load_deck(dest), 1, "Leaf") == target
+
+
+def test_group_geometry_refusal_is_empty_for_a_plain_group(tmp_path):
+    from tieout_fix import group_geometry_refusal
+
+    deck = _nested_group_deck(tmp_path / "nested.pptx")
+    shape = _shape(deck, 1, "Leaf")
+    assert group_geometry_refusal(shape.raw_element) == ""
+
+
+def test_group_geometry_refusal_names_a_rotated_ancestor(tmp_path):
+    from tieout_fix import group_geometry_refusal
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    group.name = "Group"
+    leaf = group.shapes.add_textbox(Pt(100), Pt(100), Pt(50), Pt(20))
+    leaf.name = "Leaf"
+    group.rotation = 15.0
+    path = tmp_path / "rotated.pptx"
+    presentation.save(str(path))
+
+    deck = load_deck(path)
+    shape = _shape(deck, 1, "Leaf")
+    refusal = group_geometry_refusal(shape.raw_element)
+    assert "rotat" in refusal
+
+
+# --------------------------------------------------------------------------------------
+# Editing text: addressed by position, never by pattern
+# --------------------------------------------------------------------------------------
+
+
+def _text_deck(path):
+    """One slide, one loose shape and one grouped shape, each with text that
+    exercises the addressing this feature relies on: two runs in the first
+    paragraph, and a second paragraph carrying a run, a line break, then
+    another run."""
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    body = slide.shapes.add_textbox(Pt(60), Pt(80), Pt(400), Pt(100))
+    body.name = "Body"
+    frame = body.text_frame
+    first = frame.paragraphs[0]
+    first.add_run().text = "First "
+    first.add_run().text = "sentence."
+    second = frame.add_paragraph()
+    second.add_run().text = "Before"
+    second.add_line_break()
+    second.add_run().text = "After"
+
+    group = slide.shapes.add_group_shape()
+    group.name = "Group"
+    group.left, group.top, group.width, group.height = Pt(500), Pt(80), Pt(200), Pt(40)
+    inside = group.shapes.add_textbox(Pt(500), Pt(80), Pt(200), Pt(40))
+    inside.name = "Inside"
+    inside.text_frame.paragraphs[0].add_run().text = "Grouped text."
+
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def _retext(shape, slide_index, paragraph, run, text):
+    return retext_fix(
+        slide_index=slide_index,
+        shape_id=shape.ref.shape_id,
+        shape_name=shape.ref.name,
+        paragraph=paragraph,
+        run=run,
+        text=text,
+    )
+
+
+def _text_of(deck, slide_index, name):
+    shape = _shape(deck, slide_index, name)
+    return [p.text for p in shape.text_frame_paragraphs]
+
+
+def test_a_retext_replaces_exactly_the_addressed_run(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+    assert [p.text for p in shape.text_frame_paragraphs] == [
+        "First sentence.", "Before\nAfter",
+    ]
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 0, 1, "revision.")
+    report = apply_fix(source, target, fix)
+    assert report.applied, report.detail
+
+    after = load_deck(target)
+    assert _text_of(after, 1, "Body") == ["First revision.", "Before\nAfter"]
+
+
+def test_a_retext_touches_only_the_one_run(tmp_path):
+    """Not the run before it in the same paragraph, not the other paragraph,
+    not the font, not any other shape."""
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+    before_font = shape.text_frame_paragraphs[0].runs[0].font
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 0, 1, "correction.")
+    assert apply_fix(source, target, fix).applied
+
+    after = load_deck(target)
+    after_shape = _shape(after, 1, "Body")
+    assert after_shape.text_frame_paragraphs[0].runs[0].text == "First "
+    assert after_shape.text_frame_paragraphs[0].runs[0].font == before_font
+    assert after_shape.text_frame_paragraphs[1].text == "Before\nAfter"
+
+
+def test_a_retext_can_reach_a_shape_inside_a_group(tmp_path):
+    """Unlike a move or a resize: a run's text carries no coordinate-space
+    hazard, so there is nothing here for group membership to make unsafe."""
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = next(s for _, s in deck.all_shapes() if s.ref.name == "Inside")
+    assert shape.ref.group_path, "the fixture puts this shape inside a group"
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 0, 0, "Edited inside a group.")
+    report = apply_fix(source, target, fix)
+    assert report.applied, report.detail
+
+    after = load_deck(target)
+    after_shape = next(s for _, s in after.all_shapes() if s.ref.name == "Inside")
+    assert after_shape.text == "Edited inside a group."
+
+
+def test_a_retext_refuses_a_line_break(tmp_path):
+    """The run in between the two real runs of the second paragraph is a line
+    break with no text of its own to replace."""
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+    assert shape.text_frame_paragraphs[1].runs[1].text == "\n"
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 1, 1, "not a break any more")
+    report = apply_fix(source, target, fix)
+    assert not report.applied
+    assert "line break" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_retext_naming_a_paragraph_that_is_not_there_is_refused(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 5, 0, "nothing to attach this to")
+    report = apply_fix(source, target, fix)
+    assert not report.applied
+    assert "paragraph 5" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_retext_naming_a_run_that_is_not_there_is_refused(tmp_path):
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 0, 9, "nothing to attach this to")
+    report = apply_fix(source, target, fix)
+    assert not report.applied
+    assert "run 9" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_retext_naming_a_shape_that_is_not_there_writes_nothing(tmp_path):
+    source = tmp_path / "before.pptx"
+    _text_deck(source)
+    ghost = retext_fix(
+        slide_index=1, shape_id=999_999, shape_name="gone",
+        paragraph=0, run=0, text="anything",
+    )
+
+    target = tmp_path / "after.pptx"
+    report = apply_fix(source, target, ghost)
+    assert not report.applied
+    assert "999999" in report.detail
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_a_retext_preserves_leading_or_trailing_whitespace(tmp_path):
+    """PowerPoint collapses padding on an ``a:t`` with no ``xml:space``, so a
+    person's deliberate leading or trailing space on an edit has to survive
+    with the attribute that keeps it."""
+    source = tmp_path / "before.pptx"
+    deck = _text_deck(source)
+    shape = _shape(deck, 1, "Body")
+
+    target = tmp_path / "after.pptx"
+    fix = _retext(shape, 1, 0, 0, "  Padded  ")
+    assert apply_fix(source, target, fix).applied
+
+    with zipfile.ZipFile(target) as archive:
+        xml = archive.read("ppt/slides/slide1.xml").decode("utf-8")
+    assert '<a:t xml:space="preserve">  Padded  </a:t>' in xml
+
+
+def test_planning_can_never_produce_a_retext(dirty_deck, reference_profile):
+    from tieout_fix import _BUILDERS, RETEXT_KIND, RETEXT_RULE_ID
+
+    planned = plan_fixes(_audit(dirty_deck, reference_profile), reference_profile)
+    assert all(fix.kind != RETEXT_KIND for fix in planned.values())
+    assert all(fix.rule_id != RETEXT_RULE_ID for fix in planned.values())
+    assert RETEXT_RULE_ID not in _BUILDERS
+
+
+def test_retext_keys_are_unique_per_run(tmp_path):
+    from tieout_fix import retext_key
+
+    assert retext_key(1, 5, 0, 0) != retext_key(1, 5, 0, 1)
+    assert retext_key(1, 5, 0, 0) != retext_key(1, 5, 1, 0)
 
 
 def test_the_core_never_imports_the_fixer():

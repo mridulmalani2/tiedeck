@@ -303,7 +303,7 @@ def test_a_scatter_of_same_sized_shapes_is_a_data_series() -> None:
         _at(307.15, 347.40, 11.52, 11.52, 4),
         _at(137.95, 415.08, 11.52, 11.52, 5),
     ]
-    plotted = _data_series_axes(dots, 2.0)
+    plotted = _data_series_axes(dots, 2.0, CANVAS)
     for dot in dots:
         assert plotted.get(dot.ref.uid) == frozenset({"x", "y"})
 
@@ -318,7 +318,7 @@ def test_a_row_of_cards_nudged_off_one_column_is_not_a_data_series() -> None:
     from tieout.rules.layout import _data_series_axes
 
     cards = [_at(57.6, 100.0 + index * 70.0, 200.0, 60.0, index) for index in range(5)]
-    plotted = _data_series_axes(cards, 2.0)
+    plotted = _data_series_axes(cards, 2.0, CANVAS)
     assert all("y" not in plotted.get(card.ref.shape_id, frozenset()) for card in cards)
 
 
@@ -337,7 +337,7 @@ def test_a_group_holding_both_a_column_and_a_scatter_is_partitioned() -> None:
         _at(719.84, 222.48, 113.52, 37.44, 11),
         _at(702.64, 290.16, 110.08, 37.44, 12),
     ]
-    plotted = _data_series_axes([*column, *bars], 2.0)
+    plotted = _data_series_axes([*column, *bars], 2.0, CANVAS)
     assert all("x" not in plotted.get(entry.ref.uid, frozenset()) for entry in column)
     assert all("x" in plotted.get(bar.ref.uid, frozenset()) for bar in bars)
 
@@ -347,7 +347,7 @@ def test_two_scattered_shapes_are_not_a_series() -> None:
     from tieout.rules.layout import _data_series_axes
 
     pair = [_at(100.0, 100.0, 20.0, 20.0, 1), _at(240.0, 333.0, 20.0, 20.0, 2)]
-    assert _data_series_axes(pair, 2.0) == {}
+    assert _data_series_axes(pair, 2.0, CANVAS) == {}
 
 
 def test_a_row_of_equal_cards_is_not_a_data_series() -> None:
@@ -360,7 +360,7 @@ def test_a_row_of_equal_cards_is_not_a_data_series() -> None:
     from tieout.rules.layout import _data_series_axes
 
     cards = [_at(36.0 + index * 300.0, 120.0, 280.0, 106.0, index) for index in range(3)]
-    plotted = _data_series_axes(cards, 2.0)
+    plotted = _data_series_axes(cards, 2.0, CANVAS)
     assert all("x" not in plotted.get(card.ref.shape_id, frozenset()) for card in cards)
 
 

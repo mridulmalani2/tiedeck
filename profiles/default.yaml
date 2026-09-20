@@ -432,12 +432,10 @@ hygiene:
   extra_standard_fonts: []
   dictionary: []
 rules:
-  # why: TY-009, LO-006 ship disabled: one needs a client dictionary and the other needs
-  # the real font files to be worth reading. Add a rule id to `rules.enabled` to switch
-  # it on [confidence medium]
-  disabled:
-    - TY-009
-    - LO-006
+  disabled: []
+  # why: TY-009, LO-006 ship off by default: one needs a client dictionary and the other
+  # needs the real font files to be worth reading. Add a rule id here, or name it
+  # exactly with `--rules`, to switch it on [confidence medium]
   enabled: []
   severity_overrides: {}
 # rules deliberately not derived, and why. Silence is correct when the evidence is
@@ -562,8 +560,9 @@ provenance:
     inferred
   brand.title_geometry_tolerance_pt: 'default 2pt: a title is expected to sit where its own layout places
     it, which is not inferred from the reference deck'
-  rules.disabled: 'TY-009, LO-006 ship disabled: one needs a client dictionary and the other needs the
-    real font files to be worth reading. Add a rule id to `rules.enabled` to switch it on'
+  rules.enabled: 'TY-009, LO-006 ship off by default: one needs a client dictionary and the other needs
+    the real font files to be worth reading. Add a rule id here, or name it exactly with `--rules`, to
+    switch it on'
 # generated: how well evidenced each value is
 confidence:
   brand.palette_hex: high
@@ -619,4 +618,4 @@ confidence:
   hygiene.placeholder_markers: medium
   hygiene.min_image_dpi: medium
   brand.title_geometry_tolerance_pt: medium
-  rules.disabled: medium
+  rules.enabled: medium

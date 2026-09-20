@@ -52,12 +52,21 @@ from tieout.profile.schema import (
 
 __all__ = ["LearnResult", "learn", "learn_from_decks"]
 
-#: Rules disabled in a freshly learned profile.
+#: Rules that ship off by default, named here only so the provenance note and
+#: the reference review can say which ones and why.
 #:
 #: TY-009 needs a client dictionary before it is worth reading, and LO-006 is
-#: approximate and needs the real font files, so both ship off and are opted into
-#: through ``rules.enabled``. Section 8.5's own worked example disables TY-009 for
-#: the same reason.
+#: approximate and needs the real font files, so both ship off -- but *as*
+#: ``Rule.default_enabled = False`` on the rule classes themselves, not as an
+#: entry in this profile's ``rules.disabled``. The two are not the same thing:
+#: an id in ``rules.disabled`` beats everything else in
+#: :meth:`Profile.rule_enabled`, including a person naming the rule exactly
+#: on the command line (``--rules LO-006``) or adding it to ``rules.enabled``.
+#: A learner that wrote these into ``disabled`` was therefore emitting a
+#: profile that could never be told to run them -- the documented opt-in
+#: compiled and did nothing. Leaving ``rules.disabled`` empty here means the
+#: class default alone keeps them off out of the box, and both opt-ins reach
+#: them.
 DEFAULT_DISABLED_RULES: tuple[str, ...] = ("TY-009", "LO-006")
 
 
@@ -278,7 +287,7 @@ def _derive_one(
             dictionary=list(terms.vocabulary),
             document_metadata_allowed=_reference_metadata(deck),
         ),
-        rules=RulesProfile(disabled=list(DEFAULT_DISABLED_RULES)),
+        rules=RulesProfile(),
     )
 
     profile.typography.canon_terms = apply_canon_answers(terms, interview.answers)
@@ -363,10 +372,11 @@ def _note_defaults(profile: Profile, derivation: Derivation) -> None:
         "medium",
     )
     profile.set_provenance(
-        "rules.disabled",
-        f"{', '.join(DEFAULT_DISABLED_RULES)} ship disabled: one needs a client "
-        f"dictionary and the other needs the real font files to be worth reading. "
-        f"Add a rule id to `rules.enabled` to switch it on",
+        "rules.enabled",
+        f"{', '.join(DEFAULT_DISABLED_RULES)} ship off by default: one needs a "
+        f"client dictionary and the other needs the real font files to be worth "
+        f"reading. Add a rule id here, or name it exactly with `--rules`, to "
+        f"switch it on",
         "medium",
     )
     profile.set_provenance(

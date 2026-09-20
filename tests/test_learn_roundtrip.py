@@ -382,13 +382,37 @@ def test_the_deck_still_passes_with_the_off_by_default_rules_enabled(
     A spelling finding here means either the bundled dictionary is inadequate for
     banking prose or the vocabulary seeding has regressed."""
     profile = learned_profile.model_copy(deep=True)
-    profile.rules.disabled = []
     profile.rules.enabled = ["LO-006", "TY-009"]
     clear_caches()
     result = run_rules(clean_deck, profile)
     assert result.findings == [], "\n".join(
         f"slide {f.slide_index} {f.rule_id}: {f.message}" for f in result.findings
     )
+
+
+def test_a_freshly_learned_profile_never_hard_disables_the_off_by_default_rules(
+    learned_profile,
+):
+    """``rules.disabled`` beats everything else in ``Profile.rule_enabled`` --
+    including a rule named exactly on the command line and an entry in
+    ``rules.enabled``. A learner that put LO-006 and TY-009 there was emitting a
+    profile that could never be told to run them: the README's documented
+    ``--rules LO-006`` opt-in compiled and did nothing. They must ship off by way
+    of the rule classes' own ``default_enabled = False`` instead, which both
+    opt-ins can still see past."""
+    assert learned_profile.rules.disabled == []
+
+
+def test_naming_an_off_by_default_rule_reaches_it_with_no_profile_edit(
+    clean_deck, learned_profile
+):
+    """The regression this guards: a freshly learned profile, untouched, with the
+    rule named exactly on the ``include`` list -- exactly what a person who only
+    read the README and typed ``--rules LO-006`` would do."""
+    clear_caches()
+    result = run_rules(clean_deck, learned_profile, include=["LO-006"])
+    assert "LO-006" in result.rules_run
+    assert result.rules_skipped == []
 
 
 # --------------------------------------------------------------------------------------

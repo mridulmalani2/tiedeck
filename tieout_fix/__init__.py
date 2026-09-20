@@ -65,6 +65,10 @@ from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding
 __all__ = [
     "MOVE_KIND",
     "MOVE_RULE_ID",
+    "RESIZE_KIND",
+    "RESIZE_RULE_ID",
+    "RETEXT_KIND",
+    "RETEXT_RULE_ID",
     "Changed",
     "Delta",
     "Fix",
@@ -74,9 +78,14 @@ __all__ = [
     "apply_fix",
     "delta",
     "finding_key",
+    "group_geometry_refusal",
     "move_fix",
     "move_key",
     "plan_fixes",
+    "resize_fix",
+    "resize_key",
+    "retext_fix",
+    "retext_key",
 ]
 
 #: Parts whose XML carries slide content. Colour and typeface substitutions walk
@@ -493,6 +502,8 @@ def move_fix(
     y_emu: int,
     cx_emu: int,
     cy_emu: int,
+    current_x_emu: int,
+    current_y_emu: int,
 ) -> Fix:
     """A fix that puts one shape at one position, in EMU, exactly as given.
 
@@ -514,6 +525,15 @@ def move_fix(
     The extent written is the one the shape already resolves to, so the shape
     keeps the size it had; this is what PowerPoint itself does the first time
     someone drags a placeholder.
+
+    ``current_x_emu`` and ``current_y_emu`` are the shape's own position
+    *before* the move, in slide space -- the one thing this function does not
+    otherwise know and cannot re-derive from ``x_emu``/``y_emu`` alone. They
+    are used only when the shape sits inside a group: writing a slide-space
+    number straight into a grouped shape's ``a:off`` would put it somewhere
+    nobody asked for, so the write path needs the slide-space *move*
+    (``x_emu - current_x_emu``) to convert into the group's own coordinate
+    space. A shape with no group ignores both.
     """
     return Fix(
         key=move_key(slide_index, shape_id),
@@ -531,6 +551,148 @@ def move_fix(
             "y_emu": int(y_emu),
             "cx_emu": int(cx_emu),
             "cy_emu": int(cy_emu),
+            "current_x_emu": int(current_x_emu),
+            "current_y_emu": int(current_y_emu),
+        },
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Resizing a shape: the same exception as a move, for the same reason
+# --------------------------------------------------------------------------------------
+
+#: Not a real rule id, for the reason :data:`MOVE_RULE_ID` is not one: no rule
+#: proposes a size, so a resize that claimed one would be saying TieOut chose
+#: it.
+RESIZE_KIND: Final[str] = "resize"
+RESIZE_RULE_ID: Final[str] = "RESIZE"
+
+
+def resize_key(slide_index: int, shape_id: int) -> str:
+    """The identity of "this shape, on this slide, being resized".
+
+    A sibling of :func:`move_key` rather than the same string: a move and a
+    resize are two different edits to one shape's transform, and giving them
+    one identity would be indistinguishable to anything that ever keys a
+    lock, a rejection or a log entry on it -- :data:`RESIZE_RULE_ID` keeps
+    this in its own namespace for exactly the reason ``MOVE_RULE_ID`` keeps
+    a move out of :func:`action_key`'s.
+    """
+    return f"{RESIZE_RULE_ID}|{slide_index}|{shape_id}"
+
+
+def resize_fix(
+    *,
+    slide_index: int,
+    shape_id: int,
+    shape_name: str,
+    x_emu: int,
+    y_emu: int,
+    cx_emu: int,
+    cy_emu: int,
+    current_cx_emu: int,
+    current_cy_emu: int,
+) -> Fix:
+    """A fix that gives one shape one size, in EMU, exactly as given.
+
+    The mirror of :func:`move_fix`, with the two halves of the transform
+    swapped: ``cx_emu`` and ``cy_emu`` are the size a person dragged a handle
+    to, written with no rounding and no judgement about whether it is a good
+    size -- TieOut does not resize shapes on its own account any more than it
+    moves them. ``x_emu`` and ``y_emu`` are the shape's own current position,
+    carried along only for the case :func:`move_fix` carries its own size
+    along for: a shape with no transform of its own yet, where a fresh
+    ``a:xfrm`` must be written whole or not at all.
+
+    ``current_cx_emu`` and ``current_cy_emu`` are the shape's own size
+    *before* the resize, in slide space -- the mirror of ``move_fix``'s
+    ``current_x_emu``/``current_y_emu``, needed for exactly the same reason:
+    a shape inside a group writes into its own coordinate space, and the
+    write path needs the slide-space *change in size* to convert into it.
+    A shape with no group ignores both.
+    """
+    return Fix(
+        key=resize_key(slide_index, shape_id),
+        rule_id=RESIZE_RULE_ID,
+        summary=(
+            f"Resize {shape_name or f'shape {shape_id}'} on slide {slide_index} to "
+            f"{cx_emu / EMU_PER_POINT:.1f}×{cy_emu / EMU_PER_POINT:.1f}pt"
+        ),
+        slides=(slide_index,),
+        kind=RESIZE_KIND,
+        payload={
+            "slide": slide_index,
+            "shape_id": shape_id,
+            "x_emu": int(x_emu),
+            "y_emu": int(y_emu),
+            "cx_emu": int(cx_emu),
+            "cy_emu": int(cy_emu),
+            "current_cx_emu": int(current_cx_emu),
+            "current_cy_emu": int(current_cy_emu),
+        },
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Editing text: the third exception, addressed by position rather than pattern
+# --------------------------------------------------------------------------------------
+
+#: Not a real rule id, for the reason :data:`MOVE_RULE_ID` is not one: no rule
+#: proposes replacement text, so an edit that claimed one would be saying
+#: TieOut chose the words. A person did.
+RETEXT_KIND: Final[str] = "retext"
+RETEXT_RULE_ID: Final[str] = "RETEXT"
+
+
+def retext_key(slide_index: int, shape_id: int, paragraph: int, run: int) -> str:
+    """The identity of one run, on one shape, on one slide.
+
+    Finer-grained than :func:`move_key`, because a move or a resize has only
+    one transform to contend for but a shape can hold many runs, each an
+    independent edit. Two edits to two different runs on the same shape are
+    two corrections, not one applied twice.
+    """
+    return f"{RETEXT_RULE_ID}|{slide_index}|{shape_id}|{paragraph}|{run}"
+
+
+def retext_fix(
+    *,
+    slide_index: int,
+    shape_id: int,
+    shape_name: str,
+    paragraph: int,
+    run: int,
+    text: str,
+) -> Fix:
+    """A fix that sets one run's text to exactly what a person typed.
+
+    **Positional, not a substring match.** ``_apply_text`` above finds every
+    occurrence of a variant spelling or a double space because a rule found
+    that *pattern* wrong wherever it appears; this finds the third run of the
+    second paragraph of one specific shape, because a person editing text on
+    the canvas is correcting the one occurrence in front of them, and the same
+    characters can legitimately appear elsewhere in the deck as something that
+    was never wrong. Addressing by content instead would edit every match, and
+    the first time two slides happened to share a sentence it would edit the
+    slide nobody was looking at as well as the one that was.
+
+    Nothing about the run except its ``<a:t>`` content is touched -- its
+    resolved font, its language and its position in the paragraph survive
+    exactly as they were, because those are facts about the shape's design
+    that an edit to its words has no license to change.
+    """
+    return Fix(
+        key=retext_key(slide_index, shape_id, paragraph, run),
+        rule_id=RETEXT_RULE_ID,
+        summary=f"Edit text on {shape_name or f'shape {shape_id}'} on slide {slide_index}",
+        slides=(slide_index,),
+        kind=RETEXT_KIND,
+        payload={
+            "slide": slide_index,
+            "shape_id": shape_id,
+            "paragraph": int(paragraph),
+            "run": int(run),
+            "text": text,
         },
     )
 
@@ -820,7 +982,9 @@ _NS: Final[dict[str, str]] = {
 }
 
 _A: Final[str] = _NS["a"]
+_P: Final[str] = _NS["p"]
 _R_ID: Final[str] = f"{{{_NS['r']}}}id"
+_XML_SPACE: Final[str] = "{http://www.w3.org/XML/1998/namespace}space"
 
 #: Where each kind of shape keeps its transform, in the order the loader looks.
 #: A ``graphicFrame`` -- every table and every chart -- uses ``p:xfrm`` in the
@@ -878,17 +1042,28 @@ def _slide_parts(items: dict[str, bytes]) -> list[str]:
     return ordered
 
 
-def _shape_element(tree: etree._Element, shape_id: int) -> etree._Element:
-    """The top-level shape on this slide with this id.
+#: Elements a move, a resize or a text edit can ever target. Not ``grpSp``:
+#: nothing in this module writes a group's own transform, only what sits
+#: inside one.
+_GEOMETRY_TAGS: Final[tuple[str, ...]] = ("sp", "pic", "graphicFrame", "cxnSp")
 
-    ``./*/p:cNvPr`` rather than ``.//p:cNvPr`` on purpose: it reaches the shape's
-    own non-visual properties and stops there. A descendant search would match a
-    shape *inside* a group and then write an offset in the group's child
-    coordinate space as though it were slide space, which moves the shape
-    somewhere nobody asked for.
+
+def _shape_element_anywhere(tree: etree._Element, shape_id: int) -> etree._Element:
+    """This shape wherever it sits, including inside a group.
+
+    A descendant search, deliberately: earlier this stopped at the top level,
+    because a grouped shape's geometry is stored in the group's own
+    coordinate space and writing a slide-space number there would move the
+    shape somewhere nobody asked for. That hazard is now handled explicitly,
+    by :func:`_group_target` converting into the group's space before
+    anything is written, rather than by refusing to find the shape at all --
+    which is also what makes editing a run's text safe to reach into a group
+    for: no coordinate space stands between an edit to a shape's words and
+    the group it happens to sit in.
     """
-    for child in tree:
-        properties = child.find("./*/p:cNvPr", _NS)
+    tags = tuple(f"{{{_P}}}{name}" for name in _GEOMETRY_TAGS)
+    for element in tree.iter(*tags):
+        properties = element.find("./*/p:cNvPr", _NS)
         if properties is None:
             continue
         try:
@@ -896,15 +1071,160 @@ def _shape_element(tree: etree._Element, shape_id: int) -> etree._Element:
         except ValueError:
             continue
         if found == shape_id:
-            return child
+            return element
     raise MoveFailed(
-        f"no shape with id {shape_id} at the top level of that slide. "
-        "Re-run the check and try the move again."
+        f"no shape with id {shape_id} on that slide. "
+        "Re-run the check and try again."
     )
 
 
-def _transform(element: etree._Element, cx_emu: int, cy_emu: int) -> etree._Element:
-    """This shape's ``a:xfrm``, created with the size it already has if absent."""
+def _ancestor_groups(element: etree._Element) -> list[etree._Element]:
+    """This shape's ancestor ``p:grpSp`` elements, innermost first.
+
+    Stops at the slide's own shape tree, so a shape is never walked past the
+    slide it is on. Shared by the write path, which needs each ancestor's
+    scale to convert a slide-space delta into this shape's own coordinate
+    space, and by :func:`group_geometry_refusal`, which needs to know the
+    same ancestors to say up front whether that conversion is even possible.
+    """
+    groups: list[etree._Element] = []
+    node = element.getparent()
+    while node is not None:
+        local = etree.QName(node).localname
+        if local == "spTree":
+            break
+        if local == "grpSp":
+            groups.append(node)
+        node = node.getparent()
+    return groups
+
+
+def _group_scale(group: etree._Element) -> tuple[float, float]:
+    """``(scale_x, scale_y)`` one group applies to its children's coordinates.
+
+    Only the scale, never the offset. A slide-space *difference* -- the
+    amount a person moved or resized a shape by -- survives translation
+    unchanged; only its *scale* has to be un-done to land in the group's own
+    units, so that is the only piece of the group's transform this needs to
+    read. Raises where the group also rotates or mirrors its children, which
+    turns "un-scale it" into a real rotation this module does not do.
+    """
+    xfrm = group.find("p:grpSpPr/a:xfrm", _NS)
+    if xfrm is None:
+        return (1.0, 1.0)
+    rotation = int(xfrm.get("rot") or 0)
+    if rotation or xfrm.get("flipH") == "1" or xfrm.get("flipV") == "1":
+        raise MoveFailed(
+            "this shape is inside a group that is itself rotated or "
+            "mirrored, which cannot be written into safely here. Ungroup it "
+            "in PowerPoint to move or resize it."
+        )
+    ext = xfrm.find("a:ext", _NS)
+    ch_ext = xfrm.find("a:chExt", _NS)
+    ext_cx = int((ext.get("cx") if ext is not None else None) or 0)
+    ext_cy = int((ext.get("cy") if ext is not None else None) or 0)
+    ch_ext_cx = int((ch_ext.get("cx") if ch_ext is not None else None) or 0)
+    ch_ext_cy = int((ch_ext.get("cy") if ch_ext is not None else None) or 0)
+    if not ch_ext_cx or not ch_ext_cy:
+        raise MoveFailed("that group's coordinate space is degenerate")
+    return (ext_cx / ch_ext_cx, ext_cy / ch_ext_cy)
+
+
+def group_geometry_refusal(element: Any) -> str:
+    """Whether a move or a resize on this shape can be written safely, given
+    the groups it sits inside -- empty when it can.
+
+    Read-only and cheap enough to call from :mod:`tieout_ui.view`, which asks
+    it of every grouped shape an audit reports on. It answers the same
+    question :func:`_group_target` answers by actually doing the conversion,
+    checked here without writing anything, so the page can say up front which
+    shapes it can move and word the refusal the same way the write path would
+    fail with.
+    """
+    try:
+        groups = _ancestor_groups(element)
+        for group in groups:
+            _group_scale(group)
+    except MoveFailed as exc:
+        return str(exc)
+    return ""
+
+
+def _group_target(
+    element: etree._Element,
+    *,
+    slide_dx_emu: int,
+    slide_dy_emu: int,
+    slide_dcx_emu: int,
+    slide_dcy_emu: int,
+) -> tuple[int, int, int, int] | None:
+    """Where a slide-space *change* lands in this shape's own coordinates, or
+    ``None`` when the shape is not inside a group and slide space already is
+    its own.
+
+    Takes a change rather than an absolute target on purpose. The shape's
+    current position and size in slide space are not re-derived here -- doing
+    that would mean reimplementing the loader's own offset composition a
+    second time, free to disagree with it -- so instead this un-scales the
+    *difference* a move or a resize represents, which needs only the product
+    of each ancestor group's scale and none of their offsets, and adds it to
+    the shape's own current ``a:off``/``a:ext``, read fresh from this copy of
+    the file.
+    """
+    groups = _ancestor_groups(element)
+    if not groups:
+        return None
+
+    scale_x, scale_y = 1.0, 1.0
+    for group in groups:
+        gx, gy = _group_scale(group)
+        scale_x *= gx
+        scale_y *= gy
+    if not scale_x or not scale_y:
+        raise MoveFailed("that group's coordinate space is degenerate")
+
+    xfrm = None
+    for path in _XFRM_PATHS:
+        xfrm = element.find(path, _NS)
+        if xfrm is not None:
+            break
+    if xfrm is None:
+        raise MoveFailed(
+            "this shape has no transform of its own inside its group, so "
+            "there is nothing to adjust safely."
+        )
+    off = xfrm.find("a:off", _NS)
+    ext = xfrm.find("a:ext", _NS)
+    if off is None or ext is None:
+        raise MoveFailed(
+            "this shape's transform is incomplete, so there is nothing to "
+            "adjust safely."
+        )
+
+    current_x, current_y = int(off.get("x") or 0), int(off.get("y") or 0)
+    current_cx, current_cy = int(ext.get("cx") or 0), int(ext.get("cy") or 0)
+
+    return (
+        current_x + round(slide_dx_emu / scale_x),
+        current_y + round(slide_dy_emu / scale_y),
+        current_cx + round(slide_dcx_emu / scale_x),
+        current_cy + round(slide_dcy_emu / scale_y),
+    )
+
+
+def _transform(
+    element: etree._Element, x_emu: int, y_emu: int, cx_emu: int, cy_emu: int
+) -> etree._Element:
+    """This shape's ``a:xfrm``, created with its current whole box if absent.
+
+    Takes all four numbers rather than just the pair its caller is about to
+    write, because a transform that has to be created from nothing needs a
+    complete, valid box the instant it exists -- an ``a:xfrm`` with an offset
+    and no extent, or the reverse, is not valid OOXML. A move already knows
+    the shape's current size for exactly this reason and a resize its current
+    position, so each supplies the other's half and this writes both together;
+    only the caller's own half is ever touched again afterwards.
+    """
     for path in _XFRM_PATHS:
         existing = element.find(path, _NS)
         if existing is not None:
@@ -922,20 +1242,145 @@ def _transform(element: etree._Element, cx_emu: int, cy_emu: int) -> etree._Elem
 
     xfrm = etree.Element(f"{{{_A}}}xfrm")
     parent.insert(0, xfrm)
+    offset = etree.SubElement(xfrm, f"{{{_A}}}off")
+    offset.set("x", str(x_emu))
+    offset.set("y", str(y_emu))
     extent = etree.SubElement(xfrm, f"{{{_A}}}ext")
     extent.set("cx", str(cx_emu))
     extent.set("cy", str(cy_emu))
     return xfrm
 
 
+def _shape_in_slide(
+    items: dict[str, bytes], slide_index: int, shape_id: int
+) -> tuple[etree._Element, str, etree._Element]:
+    """The slide's parsed root, its part name, and the named shape.
+
+    Shared by every geometry writer, so "which slide is this really" and
+    "which shape on it" are answered the same way regardless of which
+    attribute of the transform is about to change. Finds the shape wherever
+    it sits, including inside a group -- writing safely into a grouped
+    shape's own coordinate space is :func:`_group_target`'s job, not this
+    one's.
+    """
+    parts = _slide_parts(items)
+    if not 1 <= slide_index <= len(parts):
+        raise MoveFailed(f"this deck has no slide {slide_index}")
+    part = parts[slide_index - 1]
+    if part not in items:
+        raise MoveFailed(f"slide {slide_index} points at {part}, which is not in the package")
+
+    root = etree.fromstring(items[part])
+    tree = root.find("p:cSld/p:spTree", _NS)
+    if tree is None:
+        raise MoveFailed(f"slide {slide_index} has no shape tree")
+
+    return root, part, _shape_element_anywhere(tree, shape_id)
+
+
+def _write_part(path: Path, items: dict[str, bytes], part: str, root: etree._Element) -> None:
+    items[part] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, content in items.items():
+            out.writestr(name, content)
+
+
 def _apply_move(path: Path, fix: Fix) -> int:
     """Write one shape's offset, and touch nothing else in the package.
 
-    Only ``a:off``'s ``x`` and ``y`` are assigned. The extent, the rotation, the
+    Only ``a:off``'s ``x`` and ``y`` are assigned, in slide space for a shape
+    with none to answer to and in its own group's space -- via
+    :func:`_group_target` -- for one that does. The extent, the rotation, the
     flips and every other attribute on the transform are left exactly as they
     were, because the person moved the shape -- they did not resize it, turn it
     or mirror it, and a fix that changed more than it was asked to is the defect
     this module exists to avoid.
+    """
+    payload = fix.payload
+    with zipfile.ZipFile(path) as archive:
+        items = {name: archive.read(name) for name in archive.namelist()}
+
+    root, part, element = _shape_in_slide(
+        items, int(payload["slide"]), int(payload["shape_id"])
+    )
+    x_emu, y_emu = int(payload["x_emu"]), int(payload["y_emu"])
+
+    grouped = _group_target(
+        element,
+        slide_dx_emu=x_emu - int(payload["current_x_emu"]),
+        slide_dy_emu=y_emu - int(payload["current_y_emu"]),
+        slide_dcx_emu=0,
+        slide_dcy_emu=0,
+    )
+    if grouped is not None:
+        x_emu, y_emu, cx_emu, cy_emu = grouped
+    else:
+        cx_emu, cy_emu = int(payload["cx_emu"]), int(payload["cy_emu"])
+
+    xfrm = _transform(element, x_emu, y_emu, cx_emu, cy_emu)
+    offset = xfrm.find("a:off", _NS)
+    if offset is None:
+        offset = etree.Element(f"{{{_A}}}off")
+        xfrm.insert(0, offset)  # a:off precedes a:ext; the schema fixes the order
+    offset.set("x", str(x_emu))
+    offset.set("y", str(y_emu))
+
+    _write_part(path, items, part, root)
+    return 1
+
+
+def _apply_resize(path: Path, fix: Fix) -> int:
+    """Write one shape's extent, and touch nothing else in the package.
+
+    The mirror of :func:`_apply_move`: only ``a:ext``'s ``cx`` and ``cy`` are
+    assigned, in the same coordinate space a move would use. The offset, the
+    rotation, the flips and everything else on the transform are left exactly
+    as they were, because the person resized the shape -- they did not move
+    it -- and a fix that moved it as a side effect of resizing it would be
+    exactly the defect :func:`_apply_move` avoids in the other direction.
+    """
+    payload = fix.payload
+    with zipfile.ZipFile(path) as archive:
+        items = {name: archive.read(name) for name in archive.namelist()}
+
+    root, part, element = _shape_in_slide(
+        items, int(payload["slide"]), int(payload["shape_id"])
+    )
+    cx_emu, cy_emu = int(payload["cx_emu"]), int(payload["cy_emu"])
+
+    grouped = _group_target(
+        element,
+        slide_dx_emu=0,
+        slide_dy_emu=0,
+        slide_dcx_emu=cx_emu - int(payload["current_cx_emu"]),
+        slide_dcy_emu=cy_emu - int(payload["current_cy_emu"]),
+    )
+    if grouped is not None:
+        x_emu, y_emu, cx_emu, cy_emu = grouped
+    else:
+        x_emu, y_emu = int(payload["x_emu"]), int(payload["y_emu"])
+
+    xfrm = _transform(element, x_emu, y_emu, cx_emu, cy_emu)
+    extent = xfrm.find("a:ext", _NS)
+    if extent is None:
+        extent = etree.SubElement(xfrm, f"{{{_A}}}ext")
+    extent.set("cx", str(cx_emu))
+    extent.set("cy", str(cy_emu))
+
+    _write_part(path, items, part, root)
+    return 1
+
+
+def _apply_retext(path: Path, fix: Fix) -> int:
+    """Replace one run's text, addressed by its exact position.
+
+    Reads the paragraph and the run the same way the loader counts them --
+    ``a:r``, ``a:br`` and ``a:fld`` together, in document order -- so an index
+    the page took from :mod:`tieout_ui.canvas` names the same run here that it
+    named there. A break or a field is refused rather than guessed at: a line
+    break has no text of its own to replace, and a field's is PowerPoint's own
+    rendering of a value TieOut does not own and would only overwrite until
+    the field next updates.
     """
     payload = fix.payload
     with zipfile.ZipFile(path) as archive:
@@ -954,27 +1399,46 @@ def _apply_move(path: Path, fix: Fix) -> int:
     if tree is None:
         raise MoveFailed(f"slide {index} has no shape tree")
 
-    element = _shape_element(tree, int(payload["shape_id"]))
-    xfrm = _transform(element, int(payload["cx_emu"]), int(payload["cy_emu"]))
+    element = _shape_element_anywhere(tree, int(payload["shape_id"]))
+    body = element.find("p:txBody", _NS)
+    if body is None:
+        raise MoveFailed("that shape has no text frame")
 
-    offset = xfrm.find("a:off", _NS)
-    if offset is None:
-        offset = etree.Element(f"{{{_A}}}off")
-        xfrm.insert(0, offset)  # a:off precedes a:ext; the schema fixes the order
-    offset.set("x", str(int(payload["x_emu"])))
-    offset.set("y", str(int(payload["y_emu"])))
+    paragraphs = body.findall("a:p", _NS)
+    p_index = int(payload["paragraph"])
+    if not 0 <= p_index < len(paragraphs):
+        raise MoveFailed(f"paragraph {p_index} does not exist in that text frame")
+    paragraph = paragraphs[p_index]
 
-    items[part] = etree.tostring(
-        root, xml_declaration=True, encoding="UTF-8", standalone=True
-    )
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as out:
-        for name, content in items.items():
-            out.writestr(name, content)
+    runs = [
+        child for child in paragraph if etree.QName(child).localname in ("r", "br", "fld")
+    ]
+    r_index = int(payload["run"])
+    if not 0 <= r_index < len(runs):
+        raise MoveFailed(f"run {r_index} does not exist in that paragraph")
+    run = runs[r_index]
+    if etree.QName(run).localname != "r":
+        raise MoveFailed(
+            "that is a line break or an auto-updating field, not editable text"
+        )
+
+    text_el = run.find("a:t", _NS)
+    if text_el is None:
+        text_el = etree.SubElement(run, f"{{{_A}}}t")
+    new_text = payload["text"]
+    text_el.text = new_text
+    # A run PowerPoint would otherwise trim or collapse the padding from.
+    if new_text != new_text.strip():
+        text_el.set(_XML_SPACE, "preserve")
+
+    _write_part(path, items, part, root)
     return 1
 
 
 _APPLIERS: Final[dict[str, Any]] = {
     MOVE_KIND: _apply_move,
+    RESIZE_KIND: _apply_resize,
+    RETEXT_KIND: _apply_retext,
     "colour": _apply_colour,
     "typeface": _apply_typeface,
     "metadata": _apply_metadata,

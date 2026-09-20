@@ -158,8 +158,8 @@ No findings.
 0 findings from 38 rules across 26 slides.
 
 rules not run
-  LO-006  disabled in the profile
-  TY-009  disabled in the profile
+  LO-006  disabled by default
+  TY-009  disabled by default
 
 not checked (34 shape(s))
   LO-002  no safe margin was learned for the section_divider archetype (4 shapes on 4 slides)
@@ -934,10 +934,13 @@ seeded into it. Learn from the first in the UI, then open the second and check
 it — you should get 47 findings. The rest are single-defect variants the test
 suite uses, plus the YAML spec both decks are generated from.
 
-**Want the slide images?** Install LibreOffice with its Impress filters
-(`libreoffice-impress` on Debian or Ubuntu; the normal LibreOffice download on
-macOS and Windows). Without it the rail and canvas show slide cards instead, and
-no finding changes.
+**Want the rail's photographic thumbnails?** Install LibreOffice with its
+Impress filters (`libreoffice-impress` on Debian or Ubuntu; the normal
+LibreOffice download on macOS and Windows). The slide itself is drawn straight
+from the shape model and needs none of this — clicking, dragging and editing
+text all work with no LibreOffice installed at all. Without it, only the small
+thumbnails down the left show a text label in place of a picture, and no
+finding changes.
 
 ### It looks like PowerPoint on purpose
 
@@ -1039,28 +1042,45 @@ findings would make a recolour appear to have fixed every one of them.
 
 ### Moving a shape yourself
 
-Where a finding is about *where something sits* — `LO-001` through `LO-005`,
-`LO-008`, `BR-002`, `BR-008` — the note offers **Move it** instead of **Fix it**,
-and the outline already drawn over the shape becomes something you can pick up.
+The slide on the canvas is not a photograph. Every shape is drawn straight from
+the same model the rules read, so clicking one selects it directly, wherever it
+sits, whether or not a finding happens to be about it. Where a finding *is*
+about *where something sits* — `LO-001` through `LO-005`, `LO-008`, `BR-002`,
+`BR-008` — the note offers **Move it** instead of **Fix it**, and clicking it
+opens the same editor, already centred on the shape.
 
 ```
 Off canvas · slide 21   X 36.0 │  Y 120.0 ─  (-864.0, +0.0pt)   ☑ Snap to grid
                                               [ Apply move ] [ Reset ] [ Done ]
-        Drag, or use the arrow keys — 1pt, or 10pt with Shift.
+        Drag the body to move, a handle to resize, or use the arrow keys —
+        1pt, or 10pt with Shift. Esc closes without writing anything.
 ```
 
-- **Drag** it with the mouse, and the learned grid appears as guides. Come within
-  the near-miss distance of a line and the shape is pulled onto it; the line
-  lights up and the readout marks the axis that snapped. Turn **Snap to grid**
-  off and the shape lands exactly where you left it.
+- **Drag the body** to move it, and the learned grid appears as guides. Come
+  within the near-miss distance of a line and the shape is pulled onto it; the
+  line lights up and the readout marks the axis that snapped. Turn **Snap to
+  grid** off and the shape lands exactly where you left it.
+- **Drag a handle** to resize — eight of them, one at every corner and edge,
+  offered only where the shape's own rules allow that resize at all. A rotated
+  shape resizes along its own tilted axes rather than the screen's, so dragging
+  "right" on a shape turned on its side grows it the way it looks like it
+  should. Resizing never snaps to the grid; a size is not an alignment.
 - **Arrow keys** move by exactly one point, or ten with Shift, and never snap.
   A nudge that a magnet pulled straight back would be a nudge that did nothing,
   so the keyboard is the precise instrument of the two.
-- **Apply move** writes it and re-audits, so the count moves as you work. **Undo**
-  on the ribbon steps back through moves and corrections alike. `Esc` closes the
-  editor without writing anything.
+- **Apply move** or **Apply resize** — the button reads back whichever you just
+  did — writes it and re-audits, so the count moves as you work. **Undo** on
+  the ribbon steps back through moves, resizes and corrections alike. `Esc`
+  closes the editor without writing anything; a second `Esc`, or a click
+  anywhere else on the canvas, puts down the outline it leaves behind.
 
-Two details worth knowing.
+Double-clicking a run of text opens it for editing in place — the shape it
+belongs to has to allow it, the same way it has to allow a move before dragging
+does anything. Type the correction and press `Enter` to write it, or `Esc` to
+leave the words exactly as they were; either way nothing is sent until you
+decide.
+
+Three details worth knowing.
 
 **The magnet reaches further than the grid's own tolerance, and has to.** LO-003
 reports an edge that is *further* from a line than `layout.grid.tolerance_pt` —
@@ -1071,11 +1091,24 @@ window instead: the deck's own account of how far off a line a shape can be and
 still be trying to sit on it. Wider than that would pull shapes onto lines they
 are deliberately away from, which is the mistake auto-snapping made.
 
-**A shape inside a group cannot be moved here**, and the editor says so rather
-than quietly not offering. A grouped shape's offset is stored in its group's
-coordinate space, which the group then translates and scales; writing a
-slide-space number into it would move the shape somewhere nobody asked for.
-Ungroup it in PowerPoint and TieOut will move it.
+**A shape whose position may itself be a figure asks before it lets you touch
+it.** A bar's length, or a point on a hand-drawn quadrant chart, can encode a
+value the same way a table cell does; dragging it could restate that figure
+rather than correct a mistake. TieOut warns and asks you to confirm rather than
+refusing outright — the heuristic that spots these shapes cannot always tell a
+real data mark from an oddly-proportioned title box — but it never lets the
+drag happen silently.
+
+**A shape inside a group moves and resizes here too, as long as the group
+itself is a plain one** — translated and scaled, with no rotation or flip.
+Its offset is stored in the group's own coordinate space, and the editor
+composes that scale (through nested groups, if there are several) so the
+number it writes lands the shape exactly where the drag put it in slide space.
+A rotated or flipped group refuses, and says so rather than quietly writing
+something wrong: flattening a slide-space move through a transform like that
+cannot be done without either guessing an interpretation or landing the shape
+somewhere its own file format cannot describe cleanly. Ungroup a rotated one in
+PowerPoint and TieOut will move it.
 
 The coordinates written are the ones you produced — nothing is rounded toward a
 rule, and the server consults no grid before writing them. That is the whole
@@ -1198,12 +1231,15 @@ throw away the other eleven; the save reports exactly which one it was and why.
 ### Slide images
 
 Thumbnails come from LibreOffice in headless mode, converted once to PDF and
-rasterised with pdfium. It is entirely optional: a machine without LibreOffice
-shows slide cards and a sentence saying why, and nothing about the audit
-changes. A core-only LibreOffice install (`libreoffice-core` with no
-`libreoffice-impress`) has no PowerPoint filter and fails the same way, which
-the message says explicitly because the error LibreOffice itself gives —
-"source file could not be loaded" — helps nobody.
+rasterised with pdfium. It is entirely optional and it is the *only* thing
+LibreOffice is for: the slide canvas itself is drawn from the shape model, not
+from these images, so a machine without LibreOffice still selects, moves,
+resizes and edits text exactly the same. All that is missing is the rail's own
+photographic preview — each thumbnail shows a text card and a sentence saying
+why, and nothing about the audit changes. A core-only LibreOffice install
+(`libreoffice-core` with no `libreoffice-impress`) has no PowerPoint filter and
+fails the same way, which the message says explicitly because the error
+LibreOffice itself gives — "source file could not be loaded" — helps nobody.
 
 Rendering happens on a background thread, so the upload returns immediately and
 images appear when they are ready.

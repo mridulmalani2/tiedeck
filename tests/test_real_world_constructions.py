@@ -265,13 +265,42 @@ def test_the_plotted_shapes_are_recognised_as_data(reviewed) -> None:
     from tieout.rules.layout import _data_series_axes
 
     slide = next(s for s in reviewed.decks[0].slides if s.index == 5)
-    plotted = _data_series_axes(list(slide.leaf_shapes()), 2.0)
+    plotted = _data_series_axes(
+        list(slide.leaf_shapes()), 2.0, (slide.width_pt, slide.height_pt)
+    )
     assert plotted, "no data series was recognised on the quadrant slide"
     # The chrome is laid out, not plotted, on every slide it appears on.
     wordmark = next(
         shape for shape in slide.leaf_shapes() if shape.text.strip() == "KESTREL PARTNERS"
     )
     assert wordmark.ref.shape_id not in plotted
+
+
+def test_data_mark_uids_agrees_with_the_rule_it_shares_logic_with(reviewed) -> None:
+    """tieout_ui's drag guardrail must never disagree with LO-003 about which
+    shapes are plotting a value. A shape they disagree about is exactly a shape
+    the editor would let someone drag silently -- a bar in a football field or a
+    dot in a quadrant that the guardrail's own copy of the heuristic missed."""
+    from tieout.rules.layout import _data_series_axes, data_mark_uids
+
+    deck = reviewed.decks[0]
+    profile = reviewed.profile
+    slide = next(s for s in deck.slides if s.index == 5)
+
+    marks = data_mark_uids(slide, deck, profile)
+    assert marks, "no data mark was recognised on the quadrant slide"
+
+    low_level = _data_series_axes(
+        list(slide.leaf_shapes()),
+        profile.layout.grid.tolerance_pt,
+        (slide.width_pt, slide.height_pt),
+    )
+    assert marks == frozenset(low_level)
+
+    wordmark = next(
+        shape for shape in slide.leaf_shapes() if shape.text.strip() == "KESTREL PARTNERS"
+    )
+    assert wordmark.ref.uid not in marks
 
 
 # --------------------------------------------------------------------------------------

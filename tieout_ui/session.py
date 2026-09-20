@@ -117,6 +117,16 @@ class Deck:
     #: house style, and writing it to the profile would make it one.
     rejected: set[str] = field(default_factory=set)
 
+    #: Serialises every route that reads or writes ``current``/``history``/
+    #: ``log`` against this deck. FastAPI's sync routes run in a thread pool,
+    #: so two clicks -- or a click and an export -- can arrive as genuinely
+    #: concurrent requests; without this, one correction's half-written file
+    #: could be the next correction's source, or the file an export reads.
+    #: Rendering is not covered: it touches only ``thumbnails*``, which no
+    #: correction reads, so serialising it too would make every fix wait on a
+    #: LibreOffice conversion for no reason.
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
     @property
     def applied(self) -> list[str]:
         """The corrections made, as sentences."""
