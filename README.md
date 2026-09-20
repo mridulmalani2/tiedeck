@@ -931,7 +931,7 @@ On Windows the interpreter is `.venv\Scripts\python.exe` and the command
 The two that matter are `decks/reference_clean.pptx`, a well-made deck to learn
 a house style from, and `decks/reference_dirty.pptx`, the same deck with defects
 seeded into it. Learn from the first in the UI, then open the second and check
-it — you should get 47 findings. The rest are single-defect variants the test
+it — you should get 44 findings. The rest are single-defect variants the test
 suite uses, plus the YAML spec both decks are generated from.
 
 **Want the rail's photographic thumbnails?** Install LibreOffice with its
@@ -1044,7 +1044,11 @@ findings would make a recolour appear to have fixed every one of them.
 
 The slide on the canvas is not a photograph. Every shape is drawn straight from
 the same model the rules read, so clicking one selects it directly, wherever it
-sits, whether or not a finding happens to be about it. Where a finding *is*
+sits, whether or not a finding happens to be about it. It is drawn in the
+slide's own units rather than the page's, so text keeps its size relative to
+the box holding it at any window size — and a text box that overflows is drawn
+overflowing, because `LO-006` reports exactly that and a surface that tidied it
+away would answer the finding with a box that looks fine. Where a finding *is*
 about *where something sits* — `LO-001` through `LO-005`, `LO-008`, `BR-002`,
 `BR-008` — the note offers **Move it** instead of **Fix it**, and clicking it
 opens the same editor, already centred on the shape.
@@ -1070,9 +1074,12 @@ Off canvas · slide 21   X 36.0 │  Y 120.0 ─  (-864.0, +0.0pt)   ☑ Snap to
   so the keyboard is the precise instrument of the two.
 - **Apply move** or **Apply resize** — the button reads back whichever you just
   did — writes it and re-audits, so the count moves as you work. **Undo** on
-  the ribbon steps back through moves, resizes and corrections alike. `Esc`
-  closes the editor without writing anything; a second `Esc`, or a click
-  anywhere else on the canvas, puts down the outline it leaves behind.
+  the ribbon steps back through moves, resizes and corrections alike, and so
+  does `Ctrl+Z` (`Cmd+Z`) from wherever you are standing — the shape is on the
+  Deck tab and the button is on the Review tab, and having to go and find it
+  after nudging the wrong shape is not a thing to ask of anyone. `Esc` closes
+  the editor without writing anything; a second `Esc`, or a click anywhere
+  else on the canvas, puts down the outline it leaves behind.
 
 Double-clicking a run of text opens it for editing in place — the shape it
 belongs to has to allow it, the same way it has to allow a move before dragging

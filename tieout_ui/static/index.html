@@ -490,8 +490,15 @@
   /* The readout. Floating over the canvas rather than docked in the ribbon,
      because during a drag the eye is on the shape and a number four inches away
      is a number nobody reads. */
+  /* Below the card, not on it. A banker's deck keeps its footnote, its page
+     number and its confidentiality line in the bottom strip of the slide --
+     exactly the band a bar floating inside the card sat on, and exactly the
+     furniture the layout rules are usually complaining about when someone
+     opens this editor in the first place. The canvas aligns the card to the
+     top and leaves grey space under it; when a window is too short to have
+     any, focusEditor scrolls the bar into view. */
   .posbar {
-    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+    position: absolute; left: 50%; top: calc(100% + 10px); transform: translateX(-50%);
     z-index: 6; display: flex; align-items: stretch; gap: 0;
     background: rgba(32,31,30,.94); color: #fff; border-radius: 5px;
     box-shadow: 0 6px 22px rgba(0,0,0,.4); font-size: 12px; max-width: calc(100% - 28px);
@@ -539,8 +546,14 @@
      SmartArt, an embedded object) is a labelled placeholder at its true box,
      never a guess. */
   #shapes { position: absolute; inset: 0; }
+  /* Not clipped. A text box that overflows in PowerPoint overflows on the
+     page too, and LO-006 reports precisely that overflow -- a surface that
+     clipped it would answer the finding with a tidy box and hide the thing
+     the person opened the slide to check. Every other child (a picture, a
+     table, a placeholder card) is sized to the shape and cannot exceed it,
+     so text is the only thing this lets out. */
   .shape {
-    position: absolute; overflow: hidden; box-sizing: border-box;
+    position: absolute; box-sizing: border-box;
     transform-origin: center center;
   }
   .shape.pickable { cursor: pointer; }
@@ -549,13 +562,17 @@
   }
   .shape.data-mark.pickable:hover { outline-color: var(--major); }
   .shape .text {
-    position: absolute; inset: 0; overflow: hidden; box-sizing: border-box;
+    position: absolute; inset: 0; box-sizing: border-box;
     display: flex; flex-direction: column; word-break: break-word;
+    /* Text that spills past its shape stays visible but stops catching
+       clicks: the runs themselves take the pointer, so an overflowing
+       paragraph cannot swallow a click meant for whatever it spilled over. */
+    pointer-events: none;
   }
   .shape .text.anchor-ctr { justify-content: center; }
   .shape .text.anchor-b { justify-content: flex-end; }
   .shape .text p { margin: 0; white-space: pre-wrap; }
-  .shape .text [data-run] { cursor: text; }
+  .shape .text [data-run] { cursor: text; pointer-events: auto; }
   .shape .text [contenteditable="true"] {
     outline: 2px solid var(--accent); outline-offset: 1px;
     background: rgba(255,255,255,.92); user-select: text; z-index: 6;
@@ -585,7 +602,8 @@
      frame to the editor -- select stops here, per PLAN.md; there is no
      cell-level write-back for a click to reach for. */
   .shape .grid {
-    display: grid; position: absolute; inset: 0; font-size: 8px; line-height: 1.25;
+    display: grid; position: absolute; inset: 0; line-height: 1.25;
+    font-size: calc(var(--pt, 1.333px) * 8);  /* 8pt of slide space, not of paper */
   }
   .shape .grid > div {
     border: .5px solid rgba(20,22,26,.28); overflow: hidden; padding: 1px 3px;
@@ -908,6 +926,10 @@ const S = {
   // What the last correction or undo changed: {what, kind, delta}. Null until
   // something has been done to the deck, because a first check changes nothing.
   lastChange: null,
+  // The shape a correction has just touched: {uid, slide, at}. State rather
+  // than a class on the element, because the thumbnail pollers redraw this
+  // surface on a schedule of their own -- see flashShape.
+  flash: null,
   // The live surface: each slide's shape tree, fetched once and kept until a
   // correction invalidates it. Keyed by slide index; canvasVersion is bumped
   // whenever the deck's file on disk changes under it (any correction, any
@@ -976,6 +998,10 @@ $("slide").addEventListener("click", (event) => {
   if (event.target.closest(".shape") || event.target.closest(".mark")) return;
   if (S.mark || S.edit) select(S.slide, null, "");
 });
+// One point of slide space is a different number of pixels at every window
+// size, so the card itself is watched rather than the window: the pane and
+// the rail can change its width without the window changing at all.
+new ResizeObserver(() => scaleSlideUnits()).observe($("slide"));
 
 async function upload(file) {
   busy(`Opening ${file.name}`);
@@ -2044,6 +2070,7 @@ function renderSlide() {
   const cached = S.canvas[S.slide];
   if (cached) {
     $("slide").innerHTML = renderShapes(cached) + markup();
+    scaleSlideUnits();
     wireShapes(cached);
     wireEdit();
     return;
@@ -2079,6 +2106,28 @@ function renderShapes(view) {
   return `<div id="shapes" style="${bgCss}">${shapes}</div>`;
 }
 
+/* ---------- slide-space units ----------
+
+   Everything drawn inside the slide is a share of the slide, so a physical
+   unit in there sizes by the paper's own inch rather than by the slide's
+   rendered size -- the mistake tableHtml already avoids for its tracks. Text
+   made it anyway: an 11pt run stayed 11pt on screen while the box holding it
+   shrank with the window, so a one-line footnote was drawn half again taller
+   than its own box and had its descenders sliced off. `--pt` is one point of
+   slide space in rendered pixels; every length inside the slide is written as
+   a multiple of it. Set on #slide, which survives a re-render, and refreshed
+   whenever the card changes size. The fallback is 96dpi's own 1pt, so a
+   browser that somehow drops the property degrades to the old behaviour
+   rather than to no size at all. */
+const ptU = (v) => `calc(var(--pt, 1.333px) * ${v})`;
+
+function scaleSlideUnits() {
+  const slide = $("slide");
+  if (!slide || !S.deck || !S.deck.width_pt) return;
+  const px = slide.clientWidth / S.deck.width_pt;
+  if (px > 0) slide.style.setProperty("--pt", `${px}px`);
+}
+
 function shapeHtml(shape, slideW, slideH) {
   const pc = (v, total) => `${(v / total) * 100}%`;
   const style = [
@@ -2093,7 +2142,8 @@ function shapeHtml(shape, slideW, slideH) {
   ].filter(Boolean).join(";");
 
   const canEdit = shape.editable.movable || shape.editable.resizable;
-  const cls = ["shape", canEdit ? "pickable" : "", shape.editable.data_mark ? "data-mark" : ""]
+  const cls = ["shape", canEdit ? "pickable" : "", shape.editable.data_mark ? "data-mark" : "",
+    flashing(shape) ? "just-corrected" : ""]
     .filter(Boolean).join(" ");
   return `<div class="${cls}" data-uid="${shape.uid}" style="${style}"
     title="${esc(shape.name)}">${shapeInnerHtml(shape)}</div>`;
@@ -2107,7 +2157,7 @@ function fillCss(fill) {
 function lineCss(line) {
   if (!line || line.kind === "none" || !line.hex) return "";
   const width = line.width_pt ? Math.max(0.5, line.width_pt) : 0.75;
-  return `border:${width}pt solid ${hexToRgba(line.hex, line.alpha == null ? 1 : line.alpha)}`;
+  return `border:${ptU(width)} solid ${hexToRgba(line.hex, line.alpha == null ? 1 : line.alpha)}`;
 }
 
 function hexToRgba(hex, alpha) {
@@ -2159,10 +2209,17 @@ const ALIGN_CSS = { left: "left", right: "right", centre: "center", justify: "ju
 
 function textFrameHtml(shape) {
   const t = shape.text;
+  // A frame with no text in it at all draws nothing, the same as in
+  // PowerPoint. Without this a decorative rule -- a 6pt-tall line shape
+  // carrying an empty text body -- was given a full line box by the
+  // placeholder character its own empty run renders, and stood three times
+  // its own height. Paragraphs that are empty *within* a frame that has
+  // text elsewhere are kept: there a blank line is real layout.
+  if (!t.paragraphs.some((p) => p.runs.some((r) => r.text))) return "";
   const anchor = t.vertical_anchor === "middle" || t.vertical_anchor === "center" ? "anchor-ctr"
     : t.vertical_anchor === "bottom" ? "anchor-b" : "";
   const inset = t.inset_pt;
-  const style = `padding:${inset.top}pt ${inset.right}pt ${inset.bottom}pt ${inset.left}pt`;
+  const style = `padding:${ptU(inset.top)} ${ptU(inset.right)} ${ptU(inset.bottom)} ${ptU(inset.left)}`;
   const paras = t.paragraphs.map((p) => paragraphHtml(p, shape)).join("");
   return `<div class="text ${anchor}" style="${style}">${paras || ""}</div>`;
 }
@@ -2170,7 +2227,7 @@ function textFrameHtml(shape) {
 function paragraphHtml(p, shape) {
   const align = ALIGN_CSS[p.alignment] || "left";
   const font = (p.runs[0] && p.runs[0].font) || shape.text.default_font;
-  const size = font && font.size_pt ? `font-size:${font.size_pt}pt` : "";
+  const size = font && font.size_pt ? `font-size:${ptU(font.size_pt)}` : "";
   const runs = p.runs.map((r) => runHtml(r)).join("");
   return `<p style="text-align:${align};${size}" data-paragraph="${p.index}">${runs || "&nbsp;"}</p>`;
 }
@@ -2180,7 +2237,7 @@ function runHtml(r) {
   const f = r.font || {};
   const style = [
     f.name ? `font-family:${fontStack(f.name)}` : "",
-    f.size_pt ? `font-size:${f.size_pt}pt` : "",
+    f.size_pt ? `font-size:${ptU(f.size_pt)}` : "",
     f.bold ? "font-weight:700" : "",
     f.italic ? "font-style:italic" : "",
     f.underline ? "text-decoration:underline" : "",
@@ -2275,16 +2332,33 @@ function wireShapes(view) {
 // as changed. Looked up by shape_id, which is what every correction route
 // takes, then resolved to the uid the freshly reloaded tree keyed its
 // element on.
+//: How long the shape a correction touched stays marked, in ms. Longer than
+//: the animation, so a redraw landing near the end of it still finishes.
+const FLASH_MS = 1200;
+
 function flashShape(shapeId) {
   const view = S.canvas[S.slide];
   if (!view) return;
   const shape = view.shapes.find((s) => s.shape_id === shapeId);
   if (!shape) return;
+  // Recorded in state, not only written onto the element. Both thumbnail
+  // pollers redraw this surface whenever their images land, which replaces
+  // every node under #shapes -- a class poked straight onto one of them was a
+  // confirmation that survived only until the next background redraw, and on
+  // a machine with no LibreOffice that redraw arrives about half a second
+  // after the correction. shapeHtml re-applies it while the flash is live, so
+  // a redraw mid-flash continues it rather than cutting it off.
+  S.flash = { uid: shape.uid, slide: S.slide, at: Date.now() };
   const el = document.querySelector(`#shapes [data-uid="${shape.uid}"]`);
   if (!el) return;
   el.classList.remove("just-corrected");
   void el.offsetWidth; // restart the animation if the same shape flashed moments ago
   el.classList.add("just-corrected");
+}
+
+function flashing(shape) {
+  const f = S.flash;
+  return !!f && f.uid === shape.uid && f.slide === S.slide && Date.now() - f.at < FLASH_MS;
 }
 
 // The outline over the shape a finding is about. Positioned as a percentage of
@@ -2358,8 +2432,7 @@ function beginMove(slideIndex, source) {
     lineX: null, lineY: null, busy: false,
   };
   renderSlide();
-  const box = $("slide").querySelector(".mark");
-  if (box) box.focus();
+  focusEditor();
 }
 
 // The other way into the same editor: clicking a real shape on the live
@@ -2388,8 +2461,18 @@ function beginEditFromCanvas(slideIndex, shape) {
     lineX: null, lineY: null, busy: false,
   };
   renderSlide();
+  focusEditor();
+}
+
+// The editor's box takes focus so the arrow keys reach it rather than the
+// page, and the bar it opens with is scrolled to only if it needs to be --
+// `nearest` does nothing when it is already on screen, which is every window
+// tall enough to leave grey space under the card.
+function focusEditor() {
   const box = $("slide").querySelector(".mark");
   if (box) box.focus();
+  const bar = $("posbar");
+  if (bar) bar.scrollIntoView({ block: "nearest" });
 }
 
 function endMove() {
@@ -2653,6 +2736,23 @@ function nudge(dx, dy, big) {
 const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 document.addEventListener("keydown", (event) => {
+  // Ctrl/Cmd+Z undoes the last correction that was written, from wherever the
+  // person is standing. Shapes are moved, resized and retyped on the Deck tab
+  // while the Undo button sits on the Review tab's ribbon, and a surface you
+  // can drag things on that cannot be undone from the keyboard sends someone
+  // who has just nudged the wrong shape off to another tab to find a button.
+  // Never while typing: inside a text edit, or in any field of the house style
+  // editor, Ctrl+Z belongs to the browser and undoes the keystroke.
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+    const on = document.activeElement;
+    if (S.textEdit || (on && (on.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(on.tagName))))
+      return;
+    const button = $("undo");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    button.click();  // the one implementation, disabled state and all
+    return;
+  }
   if (S.edit && !S.edit.busy) {
     const on = document.activeElement;
     if (on && /^(INPUT|TEXTAREA|SELECT)$/.test(on.tagName) && on.id !== "snaptoggle") return;
