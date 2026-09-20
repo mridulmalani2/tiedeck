@@ -256,3 +256,110 @@ def test_the_key_is_not_written_to_a_profile_or_a_report():
         for path in _modules(root):
             source = path.read_text(encoding="utf-8")
             assert "ANTHROPIC_API_KEY" not in source or path.name == _TRANSPORT
+
+
+# --------------------------------------------------------------------------- #
+# The single call site
+# --------------------------------------------------------------------------- #
+#
+# Everything above is about which modules *can* reach the network. This is about
+# where, in the one module that can, the outbound call actually happens — and
+# the argument for asserting it structurally is the argument this whole file
+# makes: a test proving that one code path refused to send proves nothing about
+# a second path added next month. There is one call, it is in ``send``, and the
+# hold, the re-verification and the outbound record all execute before it. That
+# is the safety property, and it is a property of the shape of the code rather
+# than of any run of it.
+
+
+def _complete_calls(root: Path) -> list[tuple[Path, int]]:
+    """Every ``<something>.complete(...)`` in a package, with its line."""
+    found: list[tuple[Path, int]] = []
+    for path in _modules(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found.extend(
+            (path, node.lineno)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "complete"
+        )
+    return found
+
+
+def test_the_transport_is_called_from_exactly_one_place():
+    """Two call sites would mean two places to get the hold right."""
+    calls = [
+        (path, line)
+        for root in (_CORE, _REVIEW, _UI)
+        for path, line in _complete_calls(root)
+    ]
+    assert len(calls) == 1, f"expected one call to client.complete(), found: {calls}"
+    (path, _) = calls[0]
+    assert path.name == "review.py", path
+
+
+def _send_body() -> list[ast.stmt]:
+    tree = ast.parse((_REVIEW / "review.py").read_text(encoding="utf-8"))
+    send = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "send"
+    )
+    return send.body
+
+
+def test_the_one_call_site_is_inside_send():
+    body = _send_body()
+    lines = {
+        node.lineno
+        for statement in body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "complete"
+    }
+    assert len(lines) == 1, f"send() should hold the only complete() call: {lines}"
+
+
+def test_nothing_is_transmitted_before_the_hold_the_verification_and_the_record():
+    """The order of the four statements, read off the syntax tree.
+
+    Reordering any of them still passes every behavioural test in the suite —
+    the stub client does not care when it is called — and would quietly undo the
+    guarantee. Hence this.
+    """
+    body = _send_body()
+
+    def index_of(predicate: object) -> int:
+        for position, statement in enumerate(body):
+            for node in ast.walk(statement):
+                if predicate(node):  # type: ignore[operator]
+                    return position
+        raise AssertionError(f"send() no longer contains {predicate}")
+
+    held = index_of(
+        lambda n: isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "RedactionHeld"
+    )
+    verified = index_of(
+        lambda n: isinstance(n, ast.Attribute) and n.attr == "verify"
+    )
+    recorded = index_of(
+        lambda n: isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "record_outbound"
+    )
+    transmitted = index_of(
+        lambda n: isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "complete"
+    )
+
+    assert held < transmitted, "the hold must be checked before anything is sent"
+    assert verified < transmitted, "the re-verification must run before anything is sent"
+    assert recorded < transmitted, (
+        "the outbound record must be written before the payload is handed over, "
+        "or a send that dies mid-flight leaves no evidence that it happened"
+    )

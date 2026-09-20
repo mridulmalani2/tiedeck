@@ -897,7 +897,11 @@ if (location.search) history.replaceState(null, "", location.pathname);
 const TOKEN = "__TIEOUT_TOKEN__";
 const S = {
   deck: null, client: null, profile: null, audit: null, plan: null,
-  approved: false, slide: 1,
+  // What the last preview showed, named by the digest the server issued for it.
+  // The check request echoes the digest back, and the server refuses it if the
+  // deck or the term list has moved since — so a stale preview cannot approve a
+  // payload nobody read. Cleared wherever the preview stops describing reality.
+  approved: false, digest: null, slide: 1,
   // The house style derived from the open deck on upload, before anyone has
   // named it. Shown on the House style tab so that tab is never empty and never
   // makes someone wait for work the server has already done.
@@ -1014,6 +1018,7 @@ async function upload(file) {
   // tally up made the status bar read "16 blocker" under a deck that had not
   // been checked.
   S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
+  S.plan = null; S.digest = null; S.approved = false;
   S.lastChange = null; S.canvas = {}; S.canvasVersion++; S.selected = null; S.mark = null;
   $("tally").textContent = "";
   $("openreport").disabled = true;
@@ -1339,6 +1344,15 @@ $("semantic").onchange = () => {
   S.approved = false;
 };
 
+// Changing either of these changes the payload, which changes its digest. The
+// preview on screen is then describing something that no longer exists, so the
+// approval it carried goes with it rather than being silently reused.
+for (const id of ["forbidden", "notes"]) {
+  const el = $(id);
+  if (el) el.addEventListener("input", () => { S.digest = null; S.approved = false; });
+  if (el) el.addEventListener("change", () => { S.digest = null; S.approved = false; });
+}
+
 $("preview").onclick = async () => {
   busy("Redacting");
   try {
@@ -1380,6 +1394,7 @@ function renderPlan(plan) {
   const a = $("approve");
   if (a) a.onchange = () => { S.approved = a.checked; };
   S.approved = plan.is_clear;
+  S.digest = plan.digest;
 }
 
 $("check").onclick = async () => {
@@ -1404,7 +1419,8 @@ $("check").onclick = async () => {
     S.audit = await api("/api/check", { method: "POST", body: {
       deck_id: S.deck.deck_id, client: S.client, semantic,
       forbidden: $("forbidden").value, include_notes: $("notes").checked,
-      approved: S.approved, api_key: semantic ? $("apikey").value.trim() : null,
+      approved_digest: S.approved ? S.digest : null,
+      api_key: semantic ? $("apikey").value.trim() : null,
     }});
   } catch (e) {
     S.checking = false; $("check").disabled = false; busy("");
@@ -1658,6 +1674,12 @@ async function correct(path, body, working) {
   // fixed now or about to be re-audited, and a box that outlives the finding
   // it named is the "stays boxed forever" defect PLAN.md 3.2 describes.
   S.edit = null; S.mark = null;
+  // The correction rewrites the deck, so the redaction preview on the Review
+  // tab now describes a payload that no longer exists. Dropping the digest here
+  // means the next check asks for a fresh preview rather than being refused by
+  // the server for carrying a stale approval -- which is the same outcome, but
+  // one the person can act on without wondering what they did wrong.
+  S.digest = null; S.approved = false;
   S.checking = true;
   busy(working);
   let next;
@@ -2810,6 +2832,7 @@ async function applyEdit() {
   busy("");
   S.audit = next;
   S.lastChange = { what: summary, kind: "fix", delta: next.delta };
+  S.digest = null; S.approved = false;
   const shapeId = e.shapeId;
   S.edit = null;
   // The live surface redraws straight from the model -- no LibreOffice
@@ -2904,6 +2927,7 @@ async function commitTextEdit() {
   busy("");
   S.audit = next;
   S.lastChange = { what: next.edited_text, kind: "fix", delta: next.delta };
+  S.digest = null; S.approved = false;
   S.mark = null;
   const shapeId = t.shape.shape_id;
   S.textEdit = null;

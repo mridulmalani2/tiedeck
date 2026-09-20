@@ -270,8 +270,11 @@ class CheckRequest(BaseModel):
     semantic: bool = False
     forbidden: str = ""
     include_notes: bool = False
-    #: Set only after the residual list has been shown and accepted.
-    approved: bool = False
+    #: The digest ``/api/redact`` returned, echoed back by whoever read the
+    #: residual list it came with. A bare boolean used to sit here, and the
+    #: server had no way to tell which list it referred to; this one names the
+    #: payload, so a deck edited between the two requests stops the send.
+    approved_digest: str | None = None
     #: Held for this request and dropped with it. Never stored anywhere.
     api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
@@ -1150,6 +1153,11 @@ def _plan_payload(prepared: Any) -> dict[str, Any]:
             for residual in plan.residuals
         ],
         "term_count": len(prepared.terms),
+        # Echoed back on the check request. It is not a secret — anyone who can
+        # reach this endpoint can ask for it again — and it is not meant to be:
+        # what it proves is that the approval and the payload are the same
+        # vintage, not that the approver was authorised.
+        "digest": prepared.digest,
     }
 
 
@@ -1175,30 +1183,67 @@ def _semantic(
 ) -> dict[str, Any]:
     """Run the semantic pass, refusing exactly where the CLI refuses.
 
-    The browser does not get to skip the hold: ``approved`` has to have been set
-    by someone who was shown the residual list, and the send path re-verifies
-    the payload regardless.
+    The browser does not get to skip the hold, and — since the digest landed —
+    it does not get to assert its way past it either. ``approved_digest`` has to
+    name the payload this request just rebuilt from the deck on disk. A deck
+    replaced, a blocklist edited or a forbidden-terms box changed between
+    ``/api/redact`` and here moves that digest, and the send is refused rather
+    than applying a stale approval to a payload nobody read. The send path
+    re-verifies the redaction regardless.
     """
-    from tieout_review.review import RedactionFailed, RedactionHeld, ResponseError, send
+    from tieout_review.outbound import OutboundLogError
+    from tieout_review.review import (
+        ApprovalMismatch,
+        RedactionFailed,
+        RedactionHeld,
+        ResponseError,
+        send,
+    )
 
     prepared = _prepare(
         store, request.deck_id, request.client, request.forbidden, request.include_notes
     )
-    if not prepared.plan.is_clear and not request.approved:
-        payload = _plan_payload(prepared)
-        payload["held"] = True
-        payload["detail"] = (
-            f"{len(prepared.plan.residuals)} item(s) could not be redacted "
-            "confidently. Nothing has been sent."
-        )
-        return payload
+    if not prepared.plan.is_clear:
+        if not request.approved_digest:
+            payload = _plan_payload(prepared)
+            payload["held"] = True
+            payload["detail"] = (
+                f"{len(prepared.plan.residuals)} item(s) could not be redacted "
+                "confidently. Nothing has been sent."
+            )
+            return payload
+        try:
+            prepared = prepared.approve(request.approved_digest)
+        except ApprovalMismatch as exc:
+            payload = _plan_payload(prepared)
+            payload["held"] = True
+            payload["detail"] = str(exc)
+            return payload
+    elif request.approved_digest:
+        # Nothing outstanding, so nothing needs approving — but an approval that
+        # was offered and does not fit is still worth refusing. It means the page
+        # is showing a preview of a deck that has since moved, and the person is
+        # about to read findings against text they never saw.
+        try:
+            prepared = prepared.approve(request.approved_digest)
+        except ApprovalMismatch as exc:
+            payload = _plan_payload(prepared)
+            payload["held"] = True
+            payload["detail"] = str(exc)
+            return payload
 
     from tieout_review.client import ReviewClientError
 
     try:
         client = _build_review_client(request.model, request.api_key)
-        outcome = send(prepared.approve() if request.approved else prepared, client)
-    except (ReviewClientError, RedactionFailed, RedactionHeld, ResponseError) as exc:
+        outcome = send(prepared, client)
+    except (
+        OutboundLogError,
+        ReviewClientError,
+        RedactionFailed,
+        RedactionHeld,
+        ResponseError,
+    ) as exc:
         payload = _plan_payload(prepared)
         payload["held"] = True
         payload["detail"] = str(exc)

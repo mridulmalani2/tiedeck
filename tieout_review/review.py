@@ -4,9 +4,9 @@ The shape of this module is the safety property. There is no function that takes
 a deck and returns findings, because such a function would have to decide on its
 own that a payload was safe to transmit. Instead:
 
-    prepared = prepare(deck, profile, forbidden=...)   # offline, always
-    prepared.plan.is_clear                             # or show the residuals
-    outcome = send(prepared.approve(), client)         # refuses otherwise
+    prepared = prepare(deck, profile, forbidden=...)      # offline, always
+    prepared.plan.is_clear                                # or show the residuals
+    outcome = send(prepared.approve(digest), client)      # refuses otherwise
 
 :func:`prepare` never touches a network and never needs a key, so an analyst can
 run it — via ``tieout-review redact`` — to see exactly what would leave the
@@ -15,6 +15,14 @@ residuals outstanding, and independently re-verifies that every literal term is
 absent from the outgoing text. Two people would have to be wrong for a client
 name to leave the building: whoever wrote the detectors, and whoever approved a
 residual list they had read.
+
+The approval names a digest rather than being a bare ``True``, because over HTTP
+"approved" arrives in a request after the one that displayed the list, and the
+server had no way to tell the two apart from an approval of something else
+entirely. :mod:`tieout_review.attest` says what the digest covers and why it has
+to cover the payload text as well as the list. Every send is recorded by
+:mod:`tieout_review.outbound` before it leaves, and a send that cannot be
+recorded is not made.
 
 Findings arrive in a ``semantic`` category, which
 :data:`tieout.rules.base.NON_GATING_CATEGORIES` excludes from ``--fail-on``. A
@@ -27,12 +35,16 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from tieout.model.deck import DeckModel
 from tieout.profile.schema import Confidence, Profile, Severity
 from tieout.rules.base import Finding
+from tieout_review.attest import residual_digest, short_digest, text_digest
 from tieout_review.extract import DeckPayload, extract
+from tieout_review.outbound import OutboundRecord
+from tieout_review.outbound import record as record_outbound
 from tieout_review.redact import Redacted, Redactor, TermSource
 from tieout_review.terms import assemble
 
@@ -42,7 +54,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "SEMANTIC_CATEGORY",
     "SEMANTIC_RULES",
+    "ApprovalMismatch",
     "Prepared",
+    "RedactionFailed",
     "RedactionHeld",
     "ResponseError",
     "ReviewOutcome",
@@ -61,10 +75,30 @@ class RedactionHeld(RuntimeError):
     def __init__(self, prepared: Prepared) -> None:
         self.prepared = prepared
         count = len(prepared.plan.residuals)
+        if prepared.approved_digest is None:
+            reason = "have not been reviewed"
+        else:
+            # Only reachable if a ``Prepared`` was built with a digest rather
+            # than approved through :meth:`Prepared.approve`, which validates.
+            # Saying so beats repeating "have not been reviewed" at someone who
+            # is quite sure they reviewed them.
+            reason = (
+                f"were approved under {short_digest(prepared.approved_digest)}, which "
+                f"is not this payload ({short_digest(prepared.digest)})"
+            )
         super().__init__(
-            f"{count} item(s) could not be confidently redacted and have not been "
-            "reviewed; nothing has been sent"
+            f"{count} item(s) could not be confidently redacted and {reason}; "
+            "nothing has been sent"
         )
+
+
+class ApprovalMismatch(RuntimeError):
+    """An approval was offered for a payload other than the one at hand.
+
+    The wording matters more than the type. Whoever sees this did read a
+    residual list and did agree to it; what they need to be told is that the
+    thing in front of them is no longer that list.
+    """
 
 
 class RedactionFailed(RuntimeError):
@@ -168,19 +202,48 @@ class Prepared:
     payload: DeckPayload
     plan: Redacted
     terms: dict[str, TermSource]
-    approved: bool = False
+    #: The digest that was approved, not the fact that something was. ``None``
+    #: means nobody has agreed to anything yet.
+    approved_digest: str | None = None
 
-    def approve(self) -> Prepared:
-        """Record that the residual list has been read and accepted.
+    @property
+    def digest(self) -> str:
+        """What an approval of *this* payload has to name.
 
-        Separate from :func:`send` so that the approval is a decision someone
-        made rather than a default someone forgot to change.
+        See :mod:`tieout_review.attest`: it covers the residual list and the
+        payload text together, so an approval cannot be carried from one deck
+        to another simply because both redacted cleanly.
         """
-        return replace(self, approved=True)
+        return residual_digest(self.plan.text, self.plan.residuals)
+
+    def approve(self, digest: str) -> Prepared:
+        """Record that *this* residual list has been read and accepted.
+
+        The digest is the argument rather than the return value because that is
+        what makes the approval a statement about something. ``approve()`` with
+        no argument could only ever mean "yes", and "yes" to what was precisely
+        the gap: over HTTP the approval arrives in a second request, by which
+        time the deck, the blocklist or the forbidden-terms list may all have
+        moved. Here the caller has to name the payload it is agreeing to, and a
+        payload that has moved no longer answers to that name.
+
+        Separate from :func:`send` so that the approval is still a decision
+        someone made rather than a default someone forgot to change.
+        """
+        expected = self.digest
+        if digest != expected:
+            raise ApprovalMismatch(
+                "the deck changed since you approved this: the approval names "
+                f"{short_digest(digest)} and the payload now redacts to "
+                f"{short_digest(expected)}. Nothing has been sent. Look at the "
+                "redaction again — the residual list you agreed to is not the "
+                "one this payload has — and approve that."
+            )
+        return replace(self, approved_digest=expected)
 
     @property
     def may_send(self) -> bool:
-        return self.plan.is_clear or self.approved
+        return self.plan.is_clear or self.approved_digest == self.digest
 
     @property
     def characters(self) -> int:
@@ -226,12 +289,28 @@ def prepare(
     )
 
 
-def send(prepared: Prepared, client: ReviewClient) -> ReviewOutcome:
+def send(
+    prepared: Prepared, client: ReviewClient, *, log_path: str | Path | None = None
+) -> ReviewOutcome:
     """Transmit the redacted payload and turn the answer into findings.
 
-    Refuses on an unapproved residual list, and refuses again — with
-    :class:`RedactionFailed`, which is a bug report rather than a user error — if
-    a term the redactor was given survives into the outgoing text.
+    Three things happen before the payload is handed over, and the order is the
+    safety argument rather than an implementation detail:
+
+    1. the hold — an approval that does not name *this* payload is not an
+       approval, and a residual list nobody agreed to stops the run;
+    2. the re-verification — every literal term the redactor was given is
+       searched for in the outgoing text, and one that survived raises
+       :class:`RedactionFailed`, which is a bug report rather than a user error;
+    3. the record — one line in the outbound log, written *before* the
+       transport is called so that a send which dies mid-flight still leaves
+       evidence. If it cannot be written the send does not happen.
+
+    There is exactly one call to :meth:`ReviewClient.complete` in this package
+    and it is the statement below. ``tests/test_review_airgap.py`` asserts both
+    halves of that — that it is the only one, and that it sits after all three
+    steps — because a second call site added later would be invisible to every
+    behavioural test in the suite.
     """
     if not prepared.may_send:
         raise RedactionHeld(prepared)
@@ -243,6 +322,19 @@ def send(prepared: Prepared, client: ReviewClient) -> ReviewOutcome:
             + ", ".join(repr(term) for term in leaked[:5])
             + "; nothing has been sent. This is a defect in tieout_review.redact."
         )
+
+    record_outbound(
+        OutboundRecord.now(
+            deck_path=prepared.deck_path,
+            model=client.model,
+            characters=prepared.characters,
+            redactions=len(prepared.plan.redactions),
+            residuals=len(prepared.plan.residuals),
+            digest=prepared.approved_digest or prepared.digest,
+            text_sha256=text_digest(prepared.plan.text),
+        ),
+        log_path,
+    )
 
     text, usage = client.complete(
         build_system_prompt(), build_user_prompt(prepared), build_response_schema()

@@ -788,9 +788,9 @@ convention. There is no function that takes a deck and returns findings, because
 such a function would have to decide on its own that a payload was safe:
 
 ```python
-prepared = prepare(deck, profile, forbidden=[...])   # offline, no key
-prepared.plan.is_clear                               # or read the residuals
-outcome = send(prepared.approve(), client)           # refuses otherwise
+prepared = prepare(deck, profile, forbidden=[...])      # offline, no key
+prepared.plan.is_clear                                  # or read the residuals
+outcome = send(prepared.approve(digest), client)        # refuses otherwise
 ```
 
 `send` refuses a payload with residuals outstanding, and then independently
@@ -803,6 +803,50 @@ report rather than a user error, and nothing is sent.
 Residuals are deliberately over-eager. Clearing one is a judgement, so it
 persists: pass it to `--forbid` if it identifies someone, or to the profile's
 allowlist if it does not.
+
+### The approval names what it approves
+
+`approve` takes a digest rather than being a bare `True`, because "approved" on
+its own does not say *approved what*. In the CLI that distinction is academic —
+`prepare` and `send` are two lines apart. In the browser they are two HTTP
+requests, and between them the deck can be replaced, the forbidden-words box
+edited or the blocklist changed, and a stale approval would then apply to a
+payload nobody had read.
+
+The digest is a SHA-256 over the residual list **and** the payload text
+together. Both halves are needed: over the residual list alone, "nothing
+outstanding" would hash to one constant for every deck that redacts cleanly, and
+an approval granted for one clean deck would validate a send of any other.
+
+`redact` prints it, and `check --approve DIGEST` refuses if anything has moved
+since:
+
+```
+$ tieout-review redact deck.pptx --client acme --forbid "Meridian Capital"
+...
+approval digest 9f2c4e...c1a0
+
+$ tieout-review check deck.pptx --client acme --forbid "Meridian Capital" \
+    --approve 9f2c4e...c1a0
+```
+
+It is not a signature and is not meant to be. It defends against drift, which
+happens by accident and leaves no trace; it does not defend against someone who
+can already post to the loopback API, which is the session token's job.
+
+### What left, and when
+
+Every transmission appends one line to `profiles/outbound.jsonl` — timestamp,
+deck filename, model, character count, redaction count, residual count, the
+approved digest, and a SHA-256 of the transmitted text. **Never the text.** A
+log that quotes the payload is a second copy of the thing being protected,
+sitting in plaintext somewhere nobody is thinking about.
+
+The line is written *before* the payload is handed to the transport, so a send
+that dies mid-flight still leaves evidence that it happened. A transmission that
+cannot be recorded does not happen: if the log cannot be written, the review is
+refused rather than sent unlogged. Set `TIEOUT_OUTBOUND_LOG` to put it
+somewhere else — a share the analyst cannot edit, for instance.
 
 ### The questions it asks
 
@@ -1196,7 +1240,10 @@ when the server stops.
 4. **Content review** (optional, off by default). A key field and a forbidden
    words box, then **Show me what would be sent**: the redaction table, the
    residual list, and the payload verbatim. Nothing is sent until you have read
-   the residuals and said so.
+   the residuals and said so — and that agreement is bound to the payload you
+   were shown, so editing the forbidden words, or correcting the deck, after
+   agreeing means the preview is asked for again rather than a stale approval
+   being applied to text nobody read.
 5. **Run.**
 6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
    can correct exactly, **Move it** where the answer is a position rather than a
@@ -1489,15 +1536,20 @@ tieout-review redact DECK [--client NAME] [--profile PATH]
                           [--include-notes] [--show-payload]
 
 tieout-review check  DECK [--client NAME] [--profile PATH]
-                          [--forbid "a,b,c"] [--forbid-file PATH] [--yes]
+                          [--forbid "a,b,c"] [--forbid-file PATH]
+                          [--yes | --approve DIGEST]
                           [--include-notes] [--model NAME]
                           [--format table|json|html] [--out PATH]
                           [--fail-on SEVERITY] [--fail-on-semantic] [--quiet]
 ```
 
 `redact` exits `1` when something could not be cleared, so it scripts as a
-pre-flight check. `check` refuses to send in that case unless `--yes` is passed,
-and exits `2` rather than proceeding. Its diagnostic summary goes to stderr, so
+pre-flight check, and prints the approval digest that `check --approve` binds
+to. `check` refuses to send while anything is outstanding unless `--yes` or
+`--approve` is passed, and exits `2` rather than proceeding. `--approve DIGEST`
+is the stronger of the two: it names the residual list that was read, and
+refuses if the deck or the term list has moved since. `--yes` accepts whatever
+the list says at that moment. Its diagnostic summary goes to stderr, so
 `--format json` on stdout stays parseable.
 
 Speaker notes are excluded from the payload unless `--include-notes` is passed.

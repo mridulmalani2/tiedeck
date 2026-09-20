@@ -323,6 +323,26 @@ def build_reference_profile(spec: ReferenceSpec, logo_sha1: str) -> Profile:
 
 
 # --------------------------------------------------------------------------------------
+# The outbound log
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def outbound_log(tmp_path, monkeypatch):
+    """Every send in the suite records itself somewhere disposable.
+
+    Autouse and unconditional. ``tieout_review.review.send`` writes one line per
+    transmission and refuses to transmit if it cannot, so without this the suite
+    would append to ``profiles/outbound.jsonl`` in the working tree -- a file
+    under version control, growing by a line per test run, describing sends that
+    never happened. Yielding the path lets a test that cares read it back.
+    """
+    path = tmp_path / "outbound.jsonl"
+    monkeypatch.setenv("TIEOUT_OUTBOUND_LOG", str(path))
+    return path
+
+
+# --------------------------------------------------------------------------------------
 # Assertion helpers
 # --------------------------------------------------------------------------------------
 

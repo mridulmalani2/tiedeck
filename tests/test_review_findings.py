@@ -75,7 +75,7 @@ def test_preparation_needs_no_key_and_no_network(clean_deck, reference_profile):
     """The command an analyst runs to decide whether to trust this at all."""
     prepared = prepare(clean_deck, reference_profile)
     assert prepared.characters > 0
-    assert not prepared.approved
+    assert prepared.approved_digest is None
 
 
 def test_a_payload_with_residuals_outstanding_is_not_sent(prepared_held):
@@ -90,14 +90,15 @@ def test_a_payload_with_residuals_outstanding_is_not_sent(prepared_held):
 def test_the_same_payload_is_sent_once_a_person_has_approved_it(prepared_held):
     """Approval is the only thing that changes, and it is enough."""
     client = StubClient()
-    send(prepared_held.approve(), client)
+    send(prepared_held.approve(prepared_held.digest), client)
     assert len(client.calls) == 1
 
 
 def test_approval_is_an_act_and_not_a_default(prepared_clean):
-    assert not prepared_clean.approved
-    assert prepared_clean.approve().approved
-    assert not prepared_clean.approved, "approve() must not mutate in place"
+    assert prepared_clean.approved_digest is None
+    approved = prepared_clean.approve(prepared_clean.digest)
+    assert approved.approved_digest == prepared_clean.digest
+    assert prepared_clean.approved_digest is None, "approve() must not mutate in place"
 
 
 def test_a_clear_payload_needs_no_approval(prepared_clean):
@@ -120,7 +121,7 @@ def test_a_term_surviving_redaction_stops_the_send(clean_deck, reference_profile
     prepared.terms["Revenue"] = TermSource("custom", "blocklist")
     client = StubClient()
     with pytest.raises(RedactionFailed) as excinfo:
-        send(prepared.approve(), client)
+        send(prepared.approve(prepared.digest), client)
     assert "Revenue" in str(excinfo.value)
     assert client.calls == []
 
@@ -129,7 +130,7 @@ def test_nothing_identifying_reaches_the_transport(clean_deck, reference_profile
     """The end-to-end property, asserted against what the stub actually received."""
     prepared = prepare(clean_deck, reference_profile, forbidden=["Ashcombe Partners"])
     client = StubClient()
-    send(prepared.approve(), client)
+    send(prepared.approve(prepared.digest), client)
     (_, user) = client.calls[0]
     for term in prepared.terms:
         assert term.lower() not in user.lower(), term
@@ -139,7 +140,7 @@ def test_the_figures_do_reach_the_transport(clean_deck, reference_profile):
     """The other half of the bargain, and the reason for the whole exercise."""
     prepared = prepare(clean_deck, reference_profile, forbidden=["Ashcombe Partners"])
     client = StubClient()
-    send(prepared.approve(), client)
+    send(prepared.approve(prepared.digest), client)
     (_, user) = client.calls[0]
     assert "1,908" in user
     assert "18.4%" in user
@@ -179,7 +180,7 @@ def test_the_response_schema_enumerates_exactly_the_known_rules():
 def test_the_schema_travels_with_the_request(clean_deck, reference_profile):
     prepared = prepare(clean_deck, reference_profile, forbidden=["Ashcombe Partners"])
     client = StubClient()
-    send(prepared.approve(), client)
+    send(prepared.approve(prepared.digest), client)
     assert client.schema == build_response_schema()
 
 
@@ -416,7 +417,7 @@ def test_every_semantic_rule_is_reportable_and_none_is_a_blocker():
 
 def test_the_outcome_reports_what_it_sent(clean_deck, reference_profile):
     prepared = prepare(clean_deck, reference_profile, forbidden=["Ashcombe Partners"])
-    outcome = send(prepared.approve(), StubClient())
+    outcome = send(prepared.approve(prepared.digest), StubClient())
     assert outcome.characters_sent == prepared.characters
     assert outcome.model == "stub-model"
     assert outcome.usage["input_tokens"] == 100
@@ -425,7 +426,7 @@ def test_the_outcome_reports_what_it_sent(clean_deck, reference_profile):
 def test_the_redaction_plan_travels_with_the_outcome(clean_deck, reference_profile):
     """A report has to be able to say what was withheld."""
     prepared = prepare(clean_deck, reference_profile, forbidden=["Ashcombe Partners"])
-    outcome = send(prepared.approve(), StubClient())
+    outcome = send(prepared.approve(prepared.digest), StubClient())
     assert outcome.plan.redactions == prepared.plan.redactions
 
 
