@@ -32,8 +32,9 @@ run that printed nothing.
 style — was run through `learn` and then `check` on 2026-09-17, which is the
 first time anything here met real material. Three results worth keeping:
 
-* **The invariant holds.** `check(D, learn(D))` exits 0: four findings, three
-  of them `info` decorative bleeds. The one `minor` is a true positive (§4a).
+* **The invariant holds, and as of #5 it holds completely.** `check(D, learn(D))`
+  reports **nothing at all**, from 41 rules across 20 slides. The four findings
+  the first run produced were all false flags, and §4b says what each one was.
 * **The grid guard from #2 works on real material.** That deck previously
   derived 27 columns and **53 rows**, and every remaining LO-003 finding sat on
   the y axis. It now derives 27 columns and **4 rows**, and the spurious
@@ -277,19 +278,136 @@ consistency category is proven on real material.
 
 ### Slide 12 is classified as `content`, not `section_divider`
 
-The archetype classifier reads the `H` logo monogram as the slide's title, so
-slide 12 — plainly a section divider, carrying `SECTION 03` and a heading — is
-filed as a content slide and measured against content-slide margins.
+**Fixed in #5, but not by the cause named here.** This section said the cause
+was that "a one-character shape wins the title slot", and proposed reading a
+single glyph inside a lockup as a monogram. That diagnosis was wrong, and acting
+on it would have patched these two slides while leaving the defect live.
 
-Harmless on this deck, because the divider's geometry happens to pass. Not
-harmless in general: an archetype decides which margins, which logo rule and
-which capitalisation convention apply, so a misclassified divider is measured
-against the wrong expectations throughout.
+`title_shape` picked the right 29pt headline on 18 of the 20 slides. The `H` did
+not beat the headline: the headline was never a candidate. The fallback searched
+the top 30% of the canvas, and a title slide and a divider set their headline
+down the page by design — 34% and 45% here — so the only text in the band was
+the lockup's own. See §4b.
 
-The cause is in `tieout/model/archetype.py`: a one-character shape wins the
-title slot. A single-glyph, non-dictionary shape sitting inside a logo lockup
-is a monogram, not a heading, and the classifier has the lockup's geometry
-available to say so.
+The lesson is worth more than the fix: the first explanation that accounts for
+the symptom on the slide in front of you is not necessarily the cause. Check it
+against the slides that *work* before acting on it.
+
+---
+
+## 4b. What #5 fixed, and what it cost
+
+The client deck was run through the UI and came back with four findings. Every
+one was a false flag, and they had two causes between them.
+
+**The logo was invisible to the tool.** `detect_furniture` identified a logo by
+the SHA1 of its image part, and this deck's mark is vector — a hexagon with the
+monogram set on it and the wordmark beside it. `image_sha1_slide_support` is
+empty, so `logo_shapes()` returned nothing on all twenty slides. Consequences:
+
+* the badge entered `content_shapes`, so **the learned grid was partly a
+  description of the logo** — columns at 808.78 and 827.5, rows at 28.8 and
+  47.52 are the mark's own edges;
+* on the divider, whose lockup is a different size, LO-003 then asked for the
+  house mark to be nudged onto a grid the house mark had set;
+* **BR-001, BR-002 and BR-003 never ran**, so nothing checked the logo's
+  position or size on any slide.
+
+A drawn shape that encloses a piece of chrome text and is of its order of size
+is the plate that text is set on. That makes the badge chrome, and it makes a
+vector mark identifiable: the plate seeds the lockup and the wordmark joins by
+proximity.
+
+**Overhangs the rule had already judged invisible were reported anyway.** Three
+findings were LO-001 and LO-002 at `info` with the remedy "Nothing to do unless
+this was not intended", on the deck that defines the house style. The UI renders
+that as "3 things to do", two of which are things not to do. The ink case is now
+silent on a proof; the bleed case is silent where `layout.decorative_bleed_slides`
+records that the reference deck bled too.
+
+Five further defects surfaced while fixing those. The last two were found by
+running the UI rather than the suite, which is the argument for doing it:
+
+* LO-002 restated LO-001 whenever a shape left the canvas — one misplacement,
+  two findings, in two different numbers.
+* `title_shape` searched the top 30% of the canvas, which is where a *content*
+  slide puts its headline. See §4a.
+* `_derive_logo_boxes` classifies each edge on its own, so a slide setting the
+  mark twice can produce a box describing no placement the deck actually uses.
+  Reachable before #5 by any deck with two logo images on a slide.
+* The UI names each slide in the review note and had its own idea of a title --
+  the placeholder, else the first text shape in document order. Widening the
+  title band did not reach it, because it never called `title_shape`. The note
+  still read "SLIDE 12 / H" after the model was fixed.
+* `./run.sh` reinstalled only when `pyproject.toml` changed. The install is a
+  copy and the console script's sys.path prefers site-packages, so a pull that
+  changes only Python left the previous copy running and the reader's change
+  appearing to do nothing. Anyone merging #5 and typing `./run.sh` would have
+  hit it, since nothing in #5 touches `pyproject.toml`.
+
+**Where things stand.** The clean deck reports nothing, from 41 rules. The defect
+deck reports 20 findings for its 20 seeded defects and nothing else — it was 26.
+A copy of the clean deck with the lockup dragged 40pt on one slide and scaled
+25% on another is now reported; neither was visible before.
+
+**The oracle runs now.** Installing `libreoffice-impress` and `poppler-utils`
+in the dev container takes the suite from 1398 passed / 6 skipped to 1407 passed
+and nothing skipped: `tests/test_render_oracle.py` runs, and the layout model
+still agrees with LibreOffice after all of the above. Still only against the
+synthetic fixtures -- §6 item 1 remains open -- but it is one command away now:
+
+```
+apt-get update && apt-get install -y --no-install-recommends libreoffice-impress poppler-utils
+```
+
+Watch the second package: installing both in one `apt-get` aborted the whole
+transaction on a 404 for poppler and left a core-only LibreOffice behind, which
+reports "source file could not be loaded" and looks exactly like a bad deck.
+
+## 4c. The second deck, and what n=2 found
+
+A five-slide deck from a different house (EXA Advisory: an *image* logo, EUR,
+sentence case, an exact 960x540 canvas) went through `learn` and `check`. The
+house style came back well -- an 8-colour palette, per-role font bands, the mark
+in two colourways with per-archetype boxes, a page-number box, per-archetype
+margins, a 7x9 grid, `^(EUR)\s?[\d(]` -- with seven honest declines. **The image
+logo path still works**: BR-001/002/003 ran and passed, which is the regression
+that mattered after #5 taught the tool about vector marks.
+
+It reported three findings. Two were true: "SPA negotiation and signing" on
+slide 5 sits 132pt left of its siblings and below its own date, which a render
+confirms, and LO-004 and LO-008 both point at it. The third was false, and its
+cause was worth the whole exercise -- see the `cNvPr@id` collision above, which
+had been present on the Falcon deck all along.
+
+Three things this run corrected about what the previous sections claimed:
+
+* **"All twenty seeded defects are caught" is environment-dependent.** Install
+  Carlito and Caladea and it is nineteen. The twentieth, slide 12's LO-001, is a
+  frame dragged past the right edge holding the words "SECTION 03": bounded at
+  1.15 em the ink might reach 1406pt, measured in its own face it ends at 892.6pt
+  and renders in full. The measurement is right and the seed does not produce a
+  visible defect. Quote the number with the fonts it was measured under.
+* **The bounds are not free of false positives, only of one kind.** §7 says they
+  "never produce a false positive", which holds for overflow, where a generous
+  bound under-reports. LO-001 runs the other way: a loose bound over-reports a
+  shape that is on the canvas. It now says `medium` when it is bounding rather
+  than measuring.
+* **Two tests in `test_extent.py` passed only because the machine had no
+  Calibri-metric fonts.** CI has none, so CI could not see it.
+
+Still open from this: `LO-006` is written into every learned profile's
+`rules.disabled`, and an explicit profile disable beats the `--rules LO-006`
+opt-in that §3 documents -- so the documented escape hatch does nothing. And
+without Calibri-metric fonts LO-006 declines on every shape in the deck.
+
+---
+
+**What it cost.** With slide 12 correctly classified as `section_divider`, the
+deck has one divider, which is not enough evidence to learn a safe margin or a
+logo box for that archetype. LO-002 and BR-001/002/003 on slide 12 are now
+reported as *not checked*. They were previously measured against the wrong
+archetype's expectations and happened to pass. Read the `not checked` block.
 
 ---
 
@@ -354,12 +472,9 @@ census across `hygiene.py` (9 bare returns, 4 unchecked) and `layout.py` (9 bare
 returns, 7 unchecked) has not been done. For a pre-send check, "I could not
 verify this" and "this is fine" must never look the same.
 
-### 4. Fix the archetype classifier's monogram blindness
+### 4. ~~Fix the archetype classifier's monogram blindness~~ — done in #5
 
-See §4a. `tieout/model/archetype.py` takes a one-character shape as a slide
-title, which misfiles a section divider as content and measures it against the
-wrong margins. Small, contained, and the kind of defect that produces confident
-nonsense rather than a visible gap.
+Done, though not as described. See §4b.
 
 ### 5. Get a deck whose tables restate figures
 
@@ -407,10 +522,18 @@ style. Treat them as `n=1` until a second has been through.
 * **`canon_accepted` inherits the reference deck's inconsistencies.** TY-005
   learns accepted spellings from the reference; if that deck spells a term two
   ways, both become canon.
-* **An archetype can be decided by a logo monogram.** See §4a. Until that is
-  fixed, check the archetype assignment in the emitted profile against what the
-  slides actually are; a divider filed as content is measured against the wrong
-  margins and the wrong capitalisation convention.
+* **A logo drawn as text alone is not found.** #5 identifies a vector mark by the
+  badge behind its monogram, and the wordmark joins that group by proximity. A
+  house mark set as type with no badge and no image is therefore not learned, so
+  BR-002 and BR-003 do not check its position or size. Deliberate: nothing
+  separates such a mark from any other line the deck repeats, and the derivation
+  records it in `not_learned` rather than guessing.
+* **A bleed that is house style hides a misplaced background graphic.** Where the
+  reference deck bleeds, LO-001 and LO-002 stop reporting any shape that is
+  structurally a deliberate bleed — no text, behind the content, partly on the
+  canvas. A genuinely misplaced *text-free* graphic behind the content is
+  therefore not reported. Anything carrying text, or in front of the content, or
+  wholly off the canvas, still blocks.
 * **The consistency category is unproven on real material.** See §4a.
 * **The learn/check asymmetry is mitigated, not solved.** `review_reference`
   reports the gap; it does not close it.

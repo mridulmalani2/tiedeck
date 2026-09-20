@@ -50,12 +50,22 @@ class ShapeRef:
 
     ``slide_index`` is 1-based to match what PowerPoint's status bar shows. A
     finding that says "slide 0" is a finding a banker cannot act on.
+
+    ``shape_id`` names the shape as the file does; ``uid`` identifies it.
     """
 
     slide_index: int
     shape_id: int
     name: str
     group_path: tuple[str, ...] = ()
+    #: Unique within the slide, in document order. ``shape_id`` is the file's own
+    #: ``cNvPr@id``, which is unique per slide by specification and not in
+    #: practice: both client decks carry a slide where a table's graphicFrame and
+    #: a text box share one. That attribute is what a reader and the correction
+    #: writer need, so it stays; anything keyed on *identity* -- a dict of
+    #: measurements, a set of furniture -- uses this instead, or it holds one
+    #: entry where there are two shapes and answers for the wrong one.
+    uid: int = -1
 
     def __str__(self) -> str:
         if self.group_path:
@@ -81,6 +91,10 @@ class TextRun:
     def char_count(self) -> int:
         return len(self.text)
 
+
+#: How far down the canvas the title fallback looks for a headline. A title sits
+#: above the body it names; below the midline it no longer does.
+TITLE_BAND_SHARE: Final[float] = 0.5
 
 #: The paragraph alignments the loader emits, spelled once.
 #:
@@ -504,11 +518,24 @@ class SlideModel:
 
     @property
     def title_shape(self) -> ShapeModel | None:
-        """The title placeholder, or the topmost large text shape as a fallback.
+        """The title placeholder, or the largest short text shape near the top.
 
         Real decks frequently replace the title placeholder with a plain text box
         so the designer can control the rule beneath it. A title check that only
         looks at placeholders silently passes those slides.
+
+        The fallback searches the top half rather than the top third. A content
+        slide sets its headline against the top, but a title slide and a section
+        divider set theirs down the page on purpose -- the client deck this was
+        found on puts them at 34% and 45% of the canvas. The top third contained
+        nothing but the logo lockup on those slides, so the monogram won the slot
+        by default and the report named two slides "H". The classifier reads the
+        title as well, which filed a plainly marked divider as a content slide.
+
+        Half the canvas is as far as this can go: a title sits above the body it
+        names, and below the midline it no longer does. Widening the band does
+        not change which shape is chosen anywhere the old band found a real
+        headline, because the choice is still the largest type on offer.
         """
         for shape in self.all_shapes():
             if shape.placeholder_type in ("title", "ctrTitle"):
@@ -516,7 +543,7 @@ class SlideModel:
         candidates = [
             s
             for s in self.text_shapes
-            if s.top_pt < self.height_pt * 0.3 and s.char_count <= 200
+            if s.top_pt < self.height_pt * TITLE_BAND_SHARE and s.char_count <= 200
         ]
         if not candidates:
             return None
@@ -560,7 +587,7 @@ class SlideModel:
         boxes = [
             s.visual_bbox_pt
             for s in self.leaf_shapes()
-            if s.ref.shape_id not in exclude and s.width_pt > 0 and s.height_pt > 0
+            if s.ref.uid not in exclude and s.width_pt > 0 and s.height_pt > 0
         ]
         if not boxes:
             return None

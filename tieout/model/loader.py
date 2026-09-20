@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import itertools
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Final
 
@@ -130,6 +132,7 @@ def load_deck(path: str | Path, *, classify: bool = True) -> DeckModel:
             package=package,
             slide_index=position,
             group_path=(),
+            uids=itertools.count(),
         )
         is_hidden = slide.element.get("show") == "0"
         if is_hidden:
@@ -274,6 +277,7 @@ def _load_shape_tree(
     package: PackageInfo,
     slide_index: int,
     group_path: tuple[str, ...],
+    uids: Iterator[int],
     transform: _Transform | None = None,
 ) -> list[ShapeModel]:
     out: list[ShapeModel] = []
@@ -286,6 +290,7 @@ def _load_shape_tree(
             group_path=group_path,
             z_order=z_order,
             transform=transform,
+            uids=uids,
         )
         if model is not None:
             out.append(model)
@@ -301,6 +306,7 @@ def _load_shape(
     group_path: tuple[str, ...],
     z_order: int,
     transform: _Transform | None,
+    uids: Iterator[int],
 ) -> ShapeModel | None:
     element = shape._element
     name = _shape_name(shape, element)
@@ -310,6 +316,7 @@ def _load_shape(
         shape_id=shape_id,
         name=name,
         group_path=group_path,
+        uid=next(uids),
     )
 
     ph_type, ph_idx = _placeholder_identity(element)
@@ -326,6 +333,7 @@ def _load_shape(
             package=package,
             slide_index=slide_index,
             group_path=(*group_path, name),
+            uids=uids,
             transform=child_transform,
         )
         return ShapeModel(

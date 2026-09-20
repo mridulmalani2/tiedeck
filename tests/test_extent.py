@@ -89,7 +89,9 @@ def _shape(
     shape_id: int = 1,
 ) -> ShapeModel:
     return ShapeModel(
-        ref=ShapeRef(slide_index=1, shape_id=shape_id, name=f"Shape {shape_id}"),
+        ref=ShapeRef(
+            slide_index=1, shape_id=shape_id, name=f"Shape {shape_id}", uid=shape_id
+        ),
         kind=kind,
         left_pt=left,
         top_pt=top,
@@ -134,14 +136,22 @@ def test_the_width_bound_is_never_tighter_than_the_widest_possible_glyphs() -> N
     shape = _shape(width=400.0, paragraphs=[_paragraph("Hi", 10.0)])
     extent = ink_extent(shape)
     assert extent is not None
-    assert extent.width >= 2 * 10.0 * MAX_ADVANCE_EM - 1e-9
+    if extent.measured:
+        # Real metrics for this face are installed, so this is a measurement and
+        # not the bound. The bound still has to contain it.
+        assert extent.width <= 2 * 10.0 * MAX_ADVANCE_EM + 1e-9
+    else:
+        assert extent.width >= 2 * 10.0 * MAX_ADVANCE_EM - 1e-9
 
 
 def test_the_height_bound_covers_a_full_line() -> None:
     shape = _shape(width=400.0, height=200.0, paragraphs=[_paragraph("Hi", 10.0)])
     extent = ink_extent(shape)
     assert extent is not None
-    assert extent.height >= 10.0 * MAX_LINE_EM - 1e-9
+    if extent.measured:
+        assert extent.height <= 10.0 * MAX_LINE_EM + 1e-9
+    else:
+        assert extent.height >= 10.0 * MAX_LINE_EM - 1e-9
 
 
 def test_text_that_fills_its_frame_is_not_narrowed_horizontally() -> None:
@@ -295,7 +305,7 @@ def test_a_scatter_of_same_sized_shapes_is_a_data_series() -> None:
     ]
     plotted = _data_series_axes(dots, 2.0)
     for dot in dots:
-        assert plotted.get(dot.ref.shape_id) == frozenset({"x", "y"})
+        assert plotted.get(dot.ref.uid) == frozenset({"x", "y"})
 
 
 def test_a_row_of_cards_nudged_off_one_column_is_not_a_data_series() -> None:
@@ -328,8 +338,8 @@ def test_a_group_holding_both_a_column_and_a_scatter_is_partitioned() -> None:
         _at(702.64, 290.16, 110.08, 37.44, 12),
     ]
     plotted = _data_series_axes([*column, *bars], 2.0)
-    assert all("x" not in plotted.get(entry.ref.shape_id, frozenset()) for entry in column)
-    assert all("x" in plotted.get(bar.ref.shape_id, frozenset()) for bar in bars)
+    assert all("x" not in plotted.get(entry.ref.uid, frozenset()) for entry in column)
+    assert all("x" in plotted.get(bar.ref.uid, frozenset()) for bar in bars)
 
 
 def test_two_scattered_shapes_are_not_a_series() -> None:

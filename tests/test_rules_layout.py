@@ -21,7 +21,7 @@ from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import default_defects
 from tieout.model.furniture import detect_furniture
 from tieout.profile.schema import FontRole
-from tieout.rules.base import run_rules
+from tieout.rules.base import clear_caches, run_rules
 
 SEEDED = {d.rule_id: d.slide_index for d in default_defects() if d.variant is None}
 
@@ -111,6 +111,58 @@ def test_lo001_accounts_for_rotation(clean_deck, reference_profile):
         shape.rotation, shape.left_pt = original_rotation, original_left
 
 
+def _deck_with_a_bled_graphic(path):
+    """One slide: a decorative graphic off the corner, content in front of it."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    oval = slide.shapes.add_shape(MSO_SHAPE.OVAL, Pt(760), Pt(-100), Pt(374), Pt(374))
+    oval.fill.solid()
+    oval.line.fill.background()
+    for index in range(3):
+        box = slide.shapes.add_textbox(Pt(36), Pt(100 + index * 40), Pt(400), Pt(30))
+        box.name = f"Body {index + 1}"
+        box.text_frame.text = f"Line {index + 1} of the slide's own content"
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_lo001_reports_a_bleed_where_the_reference_deck_had_none(
+    tmp_path, reference_profile
+):
+    """No evidence either way, so the info line stays: this is the old behaviour,
+    and it is what a house style that does not bleed should still get."""
+    deck = _deck_with_a_bled_graphic(tmp_path / "bleed-unseen.pptx")
+    profile = reference_profile.model_copy(deep=True)
+    profile.layout.decorative_bleed_slides = []
+    clear_caches()
+    findings = findings_for(_run(deck, profile, "LO-001"), "LO-001")
+    assert [f.severity for f in findings] == ["info"]
+
+
+def test_lo001_says_nothing_where_the_reference_deck_bled_too(
+    tmp_path, reference_profile
+):
+    """The reference deck bled, so bleeding is house style and not a finding.
+
+    Before this, a profile learned from a deck with a cover device reported that
+    same device on that same deck, with the remedy "Nothing to do unless this was
+    not intended".
+    """
+    deck = _deck_with_a_bled_graphic(tmp_path / "bleed-known.pptx")
+    profile = reference_profile.model_copy(deep=True)
+    profile.layout.decorative_bleed_slides = [1]
+    clear_caches()
+    assert not findings_for(_run(deck, profile, "LO-001"), "LO-001")
+
+
 # --------------------------------------------------------------------------------------
 # LO-002 margin intrusion
 # --------------------------------------------------------------------------------------
@@ -136,6 +188,28 @@ def test_lo002_ignores_archetypes_with_no_learned_margin(dirty_deck, reference_p
     reference_profile.layout.safe_margin_pt.pop("content", None)
     findings = findings_for(_run(dirty_deck, reference_profile, "LO-002"), "LO-002")
     assert SEEDED["LO-002"] not in slide_indices(findings)
+
+
+def test_one_misplaced_shape_is_not_reported_by_two_rules(dirty_deck, reference_profile):
+    """A shape off the canvas is off the safe margin too, necessarily.
+
+    The margin lies inside the canvas, so LO-002 restating LO-001 is one
+    misplacement measured twice -- and measured differently, because LO-001
+    bounds the frame and LO-002 the ink. On the defect deck the seeded off-canvas
+    box came back as "extends off the canvas: right by 120.0pt" *and* "intrudes
+    into the safe margin: right by ...", which reads as two things to fix.
+
+    Nothing is lost by saying it once: the shape has to come back onto the slide
+    either way, and the margin is measured again on the next run.
+    """
+    clear_caches()
+    result = run_rules(dirty_deck, reference_profile, include=["LO-001", "LO-002"])
+    seen: dict[tuple[int, object], set[str]] = {}
+    for finding in result.findings:
+        key = (finding.slide_index, getattr(finding.where, "name", None))
+        seen.setdefault(key, set()).add(finding.rule_id)
+    doubled = {key: rules for key, rules in seen.items() if len(rules) > 1}
+    assert not doubled, f"one shape reported by two rules: {doubled}"
 
 
 # --------------------------------------------------------------------------------------
@@ -628,3 +702,45 @@ def test_an_overlap_between_filled_shapes_stays_high_confidence(
     findings = _run(deck, reference_profile, "LO-004").findings
     assert findings
     assert findings[0].confidence == "high"
+
+
+def _deck_with_a_frame_past_the_edge(path, face: str):
+    """One slide: a short label in a frame that runs off the right edge."""
+    from pptx import Presentation
+    from pptx.util import Emu, Pt
+
+    from tieout.model.loader import load_deck
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Pt(830), Pt(212), Pt(576), Pt(25))
+    box.name = "Kicker"
+    run = box.text_frame.paragraphs[0].add_run()
+    run.text = "SECTION 03"
+    run.font.size = Pt(14)
+    run.font.name = face
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_lo001_says_how_far_an_unmeasurable_overhang_can_be_trusted(
+    tmp_path, reference_profile
+):
+    """LO-001 declared `high` on every finding, including ones resting on the
+    1.15 em bound rather than on a measurement -- while LO-002 and LO-004 have
+    weakened theirs by `ink_confidence` since #3.
+
+    It matters here. A frame dragged past the right edge holding a short label
+    is off the canvas by 446pt as a bound and entirely on it as a measurement:
+    on the defect deck's slide 12 the words "SECTION 03" render in full, and the
+    blocker is a fact about the frame. Reported either way, but a reader is owed
+    the difference.
+    """
+    clear_caches()
+    deck = _deck_with_a_frame_past_the_edge(
+        tmp_path / "bounded.pptx", "No Such Typeface At All"
+    )
+    findings = findings_for(_run(deck, reference_profile, "LO-001"), "LO-001")
+    assert [f.confidence for f in findings] == ["medium"]

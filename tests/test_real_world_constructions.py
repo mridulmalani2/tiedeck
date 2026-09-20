@@ -220,17 +220,20 @@ def reviewed(real_world_deck: Path):
     return learn_from_decks([deck], "kestrel")
 
 
-def test_the_reference_review_reports_nothing_above_info(reviewed) -> None:
+def test_the_reference_review_reports_nothing_at_all(reviewed) -> None:
     """The whole point, in one assertion.
 
-    A profile learned from these constructions must not report them. ``info`` is
-    allowed: the bleed on slide 3 is reported there deliberately, so that a
-    graphic leaving the canvas stays visible without gating a send.
+    A profile learned from these constructions must not report them -- including
+    at ``info``. The cover's bled circle used to be reported there, on the deck
+    that taught the tool what this house style looks like, with the remedy
+    "Nothing to do unless this was not intended". A pre-send check whose list of
+    things to do contains things not to do is teaching the reader to skim it.
     """
-    gating = [f for f in reviewed.reference_review.findings if f.severity != "info"]
-    assert not gating, "\n".join(
-        f"{f.rule_id} [{f.severity}] slide {f.slide_index}: {f.message}" for f in gating
-    )
+    findings = [
+        f"{f.rule_id} [{f.severity}] slide {f.slide_index}: {f.message}"
+        for f in reviewed.reference_review.findings
+    ]
+    assert not findings, "\n".join(findings)
 
 
 def test_no_rule_crashed_while_reviewing(reviewed) -> None:
@@ -269,3 +272,344 @@ def test_the_plotted_shapes_are_recognised_as_data(reviewed) -> None:
         shape for shape in slide.leaf_shapes() if shape.text.strip() == "KESTREL PARTNERS"
     )
     assert wordmark.ref.shape_id not in plotted
+
+
+# --------------------------------------------------------------------------------------
+# A logo that is drawn rather than placed
+# --------------------------------------------------------------------------------------
+#
+# Furniture detection recognised a logo by the SHA1 of its image part, so a house
+# mark shipped as vector artwork was not a logo at all: an autoshape with the
+# monogram set on it and the wordmark beside it is three ordinary shapes as far
+# as the file is concerned. Every fixture in this suite draws its logo with
+# ``_logo_png``, which is the assumption the code was written from, so nothing
+# noticed.
+#
+# The badge then entered ``content_shapes``, and on the one slide whose lockup is
+# a different size -- a divider, which sets the mark larger -- its edge landed
+# near the row the other slides' badges had established but not on it. The tool
+# measured the logo against a grid derived from everything except the logo, and
+# reported the difference.
+
+
+#: The divider lockup's top edge, against a corner lockup pitched at 39.6pt. The
+#: 3.6pt gap is the one the real deck produced: far enough to clear the grid's
+#: own 2pt tolerance, near enough to sit inside the near-miss window.
+DIVIDER_BADGE_TOP_PT = 36.0
+FOOTER_TEXT = "Project Falcon  |  Strictly Private"
+DIVIDER_BADGE_PT = 28.8
+
+
+def _lockup(slide, left, top, badge_pt, monogram_pt, wordmark_pt):
+    """The house mark as a brand team ships it in vector: badge, monogram, wordmark."""
+    badge = slide.shapes.add_shape(
+        MSO_SHAPE.HEXAGON, Pt(left), Pt(top), Pt(badge_pt), Pt(badge_pt)
+    )
+    badge.fill.solid()
+    badge.fill.fore_color.rgb = GOLD
+    badge.line.fill.background()
+    _text(slide, left, top - 1.08, badge_pt, badge_pt, "H", size=monogram_pt)
+    _text(
+        slide,
+        left + badge_pt * 1.52,
+        top - 0.44,
+        badge_pt * 5.75,
+        badge_pt * 1.35,
+        "HALYARD PARTNERS",
+        size=wordmark_pt,
+    )
+    return badge
+
+
+def _vector_chrome(slide, page: int) -> None:
+    _lockup(slide, 808.78, 28.8, 18.72, 12, 6)
+    _text(slide, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+    _text(slide, 877.18, 509.76, 43.2, 17.28, str(page), size=8, colour=GREY)
+
+
+def _build_vector_logo_deck(path: Path) -> Path:
+    """Five content slides at one lockup size, and a divider at another."""
+    presentation = _deck()
+
+    for page, (eyebrow, headline) in enumerate(
+        (
+            ("EXECUTIVE SUMMARY", "Executive Summary"),
+            ("EXECUTIVE SUMMARY", "Investment Highlights"),
+            ("COMPANY OVERVIEW", "Company Overview"),
+            ("MARKET OVERVIEW", "Market Overview and Growth"),
+            ("VALUATION", "Valuation Overview"),
+        ),
+        start=1,
+    ):
+        slide = _blank(presentation)
+        _text(slide, 39.6, 39.6, 300, 14, eyebrow, size=11, colour=GOLD)
+        _text(slide, 39.6, 57.6, 880, 40, headline, size=29)
+        _text(slide, 39.6, 120, 426, 22, "Recurring revenue mix of 64 per cent.", size=12.5)
+        _text(slide, 39.6, 156, 426, 22, "Twelve hundred active industrial sites.")
+        _text(slide, 500.4, 120, 420, 22, "A direct sales force across four regions.", size=14)
+        _text(slide, 500.4, 156, 420, 22, "Average contract length of four years.")
+        _text(slide, 39.6, 460, 400, 22, "Source: management information.", size=9, colour=GREY)
+        _vector_chrome(slide, page)
+
+    divider = _blank(presentation)
+    _lockup(divider, 39.6, DIVIDER_BADGE_TOP_PT, DIVIDER_BADGE_PT, 18, 10)
+    _text(divider, 39.6, 96.0, 576, 25.2, "SECTION 03", size=14, colour=GOLD)
+    _text(divider, 39.6, 120.0, 756, 79.2, "Financial Performance and Valuation", size=29)
+    _text(divider, 39.6, 200.0, 633.6, 36, "Historical results and the valuation framework.")
+    _text(divider, 39.6, 240.0, 633.6, 36, "Recurring revenue mix of 64 per cent.")
+    _text(divider, 39.6, 280.0, 633.6, 36, "Twelve hundred active industrial sites.")
+    _text(divider, 39.6, 320.0, 633.6, 36, "A direct sales force across four regions.")
+    _text(divider, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+    _text(divider, 877.18, 509.76, 43.2, 17.28, "6", size=8, colour=GREY)
+
+    presentation.save(str(path))
+    return path
+
+
+@pytest.fixture(scope="module")
+def vector_logo_deck(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _build_vector_logo_deck(
+        tmp_path_factory.mktemp("vector-logo") / "lockup.pptx"
+    )
+
+
+@pytest.fixture(scope="module")
+def vector_logo_reviewed(vector_logo_deck: Path):
+    clear_caches()
+    deck = load_deck(str(vector_logo_deck))
+    return learn_from_decks([deck], "halyard")
+
+
+def test_a_drawn_logo_badge_is_chrome_on_every_slide(vector_logo_deck: Path) -> None:
+    """The badge behind the monogram is part of the mark, not content.
+
+    Asserted on the badge directly rather than through a rule, because every
+    consequence -- the grid it skews, the margin it tightens, the title slot its
+    monogram wins -- follows from this one classification.
+    """
+    from tieout.model.furniture import detect_furniture
+
+    clear_caches()
+    deck = load_deck(str(vector_logo_deck))
+    furniture = detect_furniture(deck)
+
+    content = [
+        (slide.index, shape.ref.display_name)
+        for slide in deck.slides
+        for shape in slide.leaf_shapes()
+        if not shape.has_text
+        and shape.width_pt > 0
+        and not furniture.is_furniture(slide.index, shape.ref.shape_id)
+    ]
+    assert not content, f"badge measured as content on: {content}"
+
+
+def test_the_divider_lockup_is_not_reported_against_the_grid(vector_logo_reviewed) -> None:
+    """The whole deck, learned and checked, reports nothing.
+
+    Before the badge was chrome this said: "Hexagon 1 sits 3.6pt short of the
+    learned grid: top at 36pt against the 39.6pt row" -- the tool asking for the
+    house mark to be nudged onto a grid the house mark had no part in setting.
+    """
+    findings = [
+        f"{f.rule_id} [{f.severity}] slide {f.slide_index}: {f.message}"
+        for f in vector_logo_reviewed.reference_review.findings
+    ]
+    assert not findings, "\n".join(findings)
+
+
+# --------------------------------------------------------------------------------------
+# A headline set below the top third
+# --------------------------------------------------------------------------------------
+
+
+def _deck_with_a_centred_headline(path: Path) -> Path:
+    """A content slide, then a divider: lockup at the top, headline down the page."""
+    presentation = _deck()
+
+    opener = _blank(presentation)
+    _lockup(opener, 808.78, 28.8, 18.72, 12, 6)
+    _text(opener, 39.6, 39.6, 300, 14, "EXECUTIVE SUMMARY", size=11, colour=GOLD)
+    _text(opener, 39.6, 57.6, 880, 40, "Executive Summary", size=29)
+    _text(opener, 39.6, 120, 426, 22, "Recurring revenue mix of 64 per cent.")
+    _text(opener, 39.6, 156, 426, 22, "Twelve hundred active industrial sites.")
+    _text(opener, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+
+    slide = _blank(presentation)
+    # Twice, as a real divider does: large beside the heading, small in the corner.
+    _lockup(slide, 39.6, 36.0, 28.8, 18, 10)
+    _lockup(slide, 808.78, 28.8, 18.72, 12, 6)
+    _text(slide, 39.6, 212.4, 576, 25.2, "SECTION 03", size=14, colour=GOLD)
+    _text(slide, 39.6, 241.2, 756, 79.2, "Financial Performance and Valuation", size=29)
+    _text(slide, 39.6, 322.0, 633.6, 36, "Historical results and the framework.", size=12.5)
+    _text(slide, 39.6, 360.0, 633.6, 36, "Recurring revenue mix of 64 per cent.", size=12.5)
+    _text(slide, 39.6, 400.0, 633.6, 36, "Twelve hundred active industrial sites.", size=12.5)
+    _text(slide, 39.6, 440.0, 633.6, 36, "A direct sales force across four regions.", size=12.5)
+    _text(slide, 39.6, 509.76, 504, 17.28, FOOTER_TEXT, size=8, colour=GREY)
+    presentation.save(str(path))
+    return path
+
+
+def test_a_headline_below_the_top_third_is_still_the_title(tmp_path: Path) -> None:
+    """A title slide and a divider set the headline down the page, by design.
+
+    The fallback looked for it in the top 30% of the canvas, which on those two
+    layouts contains nothing but the logo -- so the monogram won the title slot
+    by default, and the client deck's report called two of its slides "H".
+    """
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "divider.pptx")))
+    assert deck.slides[1].title_text == "Financial Performance and Valuation"
+
+
+def test_a_divider_marked_section_03_is_not_a_content_slide(tmp_path: Path) -> None:
+    """The kicker announces the divider; the headline beside it is an ordinary
+    heading. Testing only the title missed the announcement, so a slide plainly
+    marked SECTION 03 was filed as content and measured against content-slide
+    margins, the content logo box and the content capitalisation convention.
+    """
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "marked.pptx")))
+    assert deck.slides[1].archetype == "section_divider"
+
+
+# --------------------------------------------------------------------------------------
+# The logo rules, on a mark that is drawn
+# --------------------------------------------------------------------------------------
+
+
+def test_a_drawn_mark_is_learned_as_the_logo(vector_logo_reviewed) -> None:
+    """BR-001, BR-002 and BR-003 all require ``brand.logo``, and the deriver gave
+    up with "the reference deck contains no images". On the client deck that left
+    the logo's position and size unchecked on all twenty slides, silently, behind
+    a clean report.
+    """
+    logo = vector_logo_reviewed.profile.brand.logo
+    assert logo is not None, "no logo learned from a deck whose mark is vector"
+    assert "halyard partners" in logo.lockup_text
+    assert logo.per_archetype, "a logo was learned but no archetype expects it"
+
+
+def test_a_moved_drawn_logo_is_reported(vector_logo_deck, vector_logo_reviewed, tmp_path):
+    """The defect the three rules exist for, on a mark they could not see."""
+    from pptx import Presentation
+
+    from tieout.rules.base import run_rules
+
+    moved = tmp_path / "moved.pptx"
+    presentation = Presentation(str(vector_logo_deck))
+    for shape in presentation.slides[1].shapes:
+        if shape.left is not None and shape.left > Pt(800) and shape.top < Pt(60):
+            shape.left = shape.left - Pt(40)
+            shape.top = shape.top + Pt(12)
+    presentation.save(str(moved))
+
+    clear_caches()
+    result = run_rules(
+        load_deck(str(moved)), vector_logo_reviewed.profile, include=["BR-002"]
+    )
+    assert [f.slide_index for f in result.findings] == [2]
+
+
+def test_every_learned_logo_box_is_a_placement_the_deck_uses(tmp_path: Path) -> None:
+    """Each edge of the box is classified on its own, so a slide setting the mark
+    twice offers two lefts, two tops and two sizes -- and the dominant value of
+    each need not come from the same placement.
+
+    The client deck's divider produced left 39.6 with top 27.36 and the corner
+    mark's size: a box neither placement occupies, reported at ``major`` against
+    both, on the deck it was learned from.
+    """
+    from tieout.model.furniture import logo_marks
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "twice.pptx")))
+    learned = learn_from_decks([deck], "halyard")
+    logo = learned.profile.brand.logo
+    assert logo is not None
+
+    placements = {
+        (round(m.left_pt, 2), round(m.top_pt, 2), round(m.width_pt, 2), round(m.height_pt, 2))
+        for slide in deck.slides
+        for m in logo_marks(slide, lockup_text=frozenset(logo.lockup_text))
+    }
+    for archetype, box in logo.per_archetype.items():
+        if box == "exempt":
+            continue
+        assert (box.left, box.top, box.width, box.height) in placements, (
+            f"the {archetype} box describes no placement in the deck: "
+            f"{box.describe()} against {sorted(placements)}"
+        )
+
+
+def test_the_review_note_names_a_slide_by_its_headline(tmp_path: Path) -> None:
+    """The UI labels each slide in the review note, and had its own idea of a
+    title: the title placeholder, else the first text shape in document order.
+
+    A deck whose logo is a lockup puts the monogram first, so the client deck's
+    note read "Slide 1 — H" and "Slide 12 — H". On every other slide it named the
+    eyebrow rather than the headline — "Slide 2 — INTRODUCTION" for a slide
+    headed "Important Notice". Fixing `title_shape` did not reach this, because
+    this never called it.
+    """
+    from tieout_ui.view import _slide_title
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_centred_headline(tmp_path / "note.pptx")))
+    assert _slide_title(deck.slides[1]) == "Financial Performance and Valuation"
+    assert _slide_title(deck.slides[0]) == "Executive Summary"
+
+
+# --------------------------------------------------------------------------------------
+# Two shapes carrying the same OOXML id
+# --------------------------------------------------------------------------------------
+#
+# `cNvPr@id` is unique per slide by specification and not in practice: both client
+# decks carry a slide where a table's graphicFrame and a text box share one. The
+# model took that attribute as identity, and every collection keyed on it then
+# held one entry where there were two shapes -- so a rule reading the map back
+# got the other shape's geometry, and a set membership test answered for the
+# wrong shape.
+
+
+def _share_ooxml_id(donor, taker) -> int:
+    """Give ``taker`` the id ``donor`` already has, as a real deck does."""
+    from pptx.oxml.ns import qn
+
+    donor_id = donor._element.find(".//" + qn("p:cNvPr")).get("id")
+    taker._element.find(".//" + qn("p:cNvPr")).set("id", donor_id)
+    return int(donor_id)
+
+
+def _deck_with_a_shared_id(path: Path) -> Path:
+    """A table and a text box, nowhere near each other, sharing one id."""
+    presentation = _deck()
+    slide = _blank(presentation)
+    _text(slide, 43.2, 30.24, 763.2, 36, "Historical and projected performance", size=28)
+    caption = _text(slide, 43.2, 69.12, 763.2, 21.6, "Revenue has nearly doubled since FY22A")
+    table = slide.shapes.add_table(2, 2, Pt(583.2), Pt(147.6), Pt(333.6), Pt(72)).table
+    table.cell(0, 0).text = "Metric"
+    table.cell(0, 1).text = "FY26E"
+    table.cell(1, 0).text = "Revenue"
+    table.cell(1, 1).text = "184.2"
+    _share_ooxml_id(slide.shapes[-1], caption)
+    presentation.save(str(path))
+    return path
+
+
+def test_two_shapes_sharing_an_ooxml_id_do_not_overlap_each_other(
+    tmp_path: Path, reference_profile
+) -> None:
+    """The caption sits at y 69-91 and the table at y 148-220: 57pt apart.
+
+    Keyed on the shared id, LO-004's ink cache held one box for both, so the
+    table appeared to sit exactly on top of the caption and the rule reported
+    "overlaps Text 1 across 100% of the smaller shape" on a deck where nothing
+    overlaps anything.
+    """
+    from tieout.rules.base import run_rules
+
+    clear_caches()
+    deck = load_deck(str(_deck_with_a_shared_id(tmp_path / "shared.pptx")))
+    result = run_rules(deck, reference_profile, include=["LO-004"])
+    assert not result.findings, [f.message for f in result.findings]
