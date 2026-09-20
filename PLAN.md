@@ -1,9 +1,10 @@
 # TieOut — tying and ticking, and the confidentiality boundary
 
-Written 2026-09-20, replacing the build document of the same name whose queue is
-spent. §2 accounts for every section of that document and what it became; it is
-deleted because it was built, not because it was abandoned. This is the only
-build document. Start here.
+Written 2026-09-20, replacing the previous contents of this file — "what it is,
+what it has to become, and the work between" — whose queue is spent. §2 accounts
+for every section of that document and what it became; it is deleted because it
+was built, not because it was abandoned. This is the only build document. Start
+here.
 
 ---
 
@@ -26,7 +27,7 @@ Every item verified against code and tests before its section was deleted.
 
 | Previous section | Asked for | Where it landed |
 | --- | --- | --- |
-| §3.1 / §5.3 | Canvas never re-rendered after a correction; `thumbnails.version` never incremented | Live surface redraws from the model; `session.py:281` bumps `thumbnails_version`, all four correction paths call `render_in_background(force=True)` |
+| §3.1 / §5.3 | Canvas never re-rendered after a correction; `thumbnails.version` never incremented | The live surface redraws from the model on every correction, which is the verify step; `session.py:281` bumps `thumbnails_version`, and `/api/move`, `/api/resize`, `/api/edit-text` and `/api/undo` force the rail's preview to re-render with it. `/api/fix` deliberately does not — see §9. The shape a correction touched flashes on the slide, held in state so a background redraw cannot cut it short |
 | §3.2 | Marker has no dismiss | Escape closes the editor, a second Escape or a click on the canvas clears the marker; driven and confirmed |
 | §3.3 | Canvas is a picture; nothing on it can be touched | `tieout_ui/canvas.py` serialises the shape tree; shapes are real elements — click-select, eight rotation-aware handles, drag, double-click to edit text, arrow-key nudge |
 | §3.4 | `select(NaN)` from cards carrying no `data-slide` | Guarded; only a card naming a slide navigates |
@@ -149,7 +150,10 @@ every figure in it with enough identity to compare against another:
 - **the reading** — the existing `NumberReading`, unchanged;
 - **where it is** — slide, shape `uid`, and the address needed to write it back:
   `(row, column)` for a table cell, `(paragraph, run)` for text, `(series, point)`
-  for a chart. The text address is exactly what `retext_fix` already takes;
+  for a chart. Carry the shape's `shape_id` alongside its `uid`: identity and
+  de-duplication key on `uid`, because `cNvPr@id` is not unique in practice, but
+  `retext_fix` writes by `shape_id` and `(paragraph, run)` — which is exactly the
+  address a text figure already has, so a fix needs no new write path;
 - **what it is of** — a folded metric label, from the row and column for a table,
   the surrounding noun phrase for prose, the series and category for a chart;
 - **the period** — FY24, Q1 2026, LTM, parsed from the label or the column header;
@@ -226,9 +230,10 @@ argument**:
   working with no new machinery.
 - **Edit it** — offered where two *stated* figures disagree. Which of them is
   right is a judgement about the deal, not arithmetic, and TieOut does not make
-  it. The button opens the run in the editor built in §5.2 of the previous plan,
-  with the counterpart figure and its slide shown beside it so the person deciding
-  has both numbers in front of them.
+  it. The button opens the run in the in-place text editor on the slide surface —
+  double-click a run, type, Enter to write, Escape to leave it alone — with the
+  counterpart figure and its slide shown beside it, so the person deciding has
+  both numbers in front of them.
 
 **A replacement must be written in the original's own format.** `NumberReading`
 carries decimals, thousands separator, negative style, currency and suffix; a fix
@@ -312,8 +317,10 @@ the same person who wrote the rule.
 Unchanged, because it is what has worked.
 
 **Reproduce against a purpose-built deck before fixing, and check the new test
-fails on the previous code.** Three times now a test has passed for the wrong
-reason; the fourth will be a tie-out rule that agrees with a bug in the index.
+fails on the previous code.** Twice a test has passed for the wrong reason. The
+third will be a tie-out rule that agrees with a bug in the index, which is why
+every rule in §5.4 gets a seeded defect it must catch and a clean deck it must
+stay silent on.
 
 **Drive the app, with intent.** The four defects found after the previous plan
 was finished — text at the wrong scale, text clipped, a title with no size, a
@@ -364,3 +371,9 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
   children into slide space; a rotated group's children are positioned as though
   the group were not rotated. Geometry writes refuse such a group rather than
   guessing, so the two are consistent, but the model is the weaker of the two.
+* The rail's photographic thumbnail re-renders after a move, a resize, a text
+  edit and an undo, but not after `/api/fix`: `_reload()` leaves it alone, on the
+  argument that a LibreOffice conversion should not sit between a click and its
+  result for a recoloured fill. Defensible now that the canvas is drawn from the
+  model and is the thing actually being verified — but it is an inconsistency
+  left standing rather than a decision anyone took after the surface landed.
