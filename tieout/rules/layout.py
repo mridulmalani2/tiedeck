@@ -47,7 +47,7 @@ from tieout.profile.schema import (
     RecurringElement,
     Severity,
 )
-from tieout.rules.base import Finding, Rule, cluster_findings, register, weakest
+from tieout.rules.base import Finding, Rule, cluster_findings, furniture_for, register, weakest
 
 #: Rounding slack for canvas containment. PowerPoint stores EMU, and a shape
 #: dragged flush against the edge routinely lands a fraction of a point outside.
@@ -574,7 +574,7 @@ class NearMissAlignment(Rule):
                 | evenly_spaced.get(shape.ref.uid, frozenset())
                 for shape in shapes
             }
-            plotted = _data_series_axes(shapes, grid.tolerance_pt)
+            plotted = _data_series_axes(shapes, grid.tolerance_pt, canvas)
             for shape in shapes:
                 aligned = settled[shape.ref.uid] | plotted.get(
                     shape.ref.uid, frozenset()
@@ -717,6 +717,23 @@ DATA_SERIES_SUPPORT: Final[int] = 3
 #: a varying length.
 SERIES_THICKNESS_TOLERANCE_PT: Final[float] = 0.5
 
+#: How much of the canvas's own extent on an axis a "thickness" may occupy and
+#: still be a bar rather than a content block.
+#:
+#: Found on a title slide, of all places: a title, a subtitle and a standfirst
+#: share one width -- the deck's own content margin, which nearly everything
+#: on nearly every slide respects -- while their heights differ because their
+#: text does, which satisfies "one thickness, varying length" as readily as
+#: three real bars would. The same thing recurred with a divider rule, a
+#: table and a footnote sharing the same full content width. Both are content
+#: blocks, not a chart: with :data:`DATA_SERIES_SUPPORT` bars laid side by
+#: side across one frame, ordinary spacing leaves no bar close to half that
+#: frame's own extent, so a thickness at or past half the canvas cannot be one
+#: of them. The finding this constant exists to keep true is
+#: ``test_the_plotted_shapes_are_recognised_as_data``'s: a bar 37pt thick on a
+#: 540pt-tall slide clears it with room to spare.
+MAX_SERIES_THICKNESS_SHARE: Final[float] = 0.5
+
 #: How each axis is read: the extent shapes share to be one series, the extent
 #: that carries the value, and the leading edge along the axis.
 _SERIES_AXES: Final[tuple[tuple[str, str, str], ...]] = (
@@ -726,7 +743,7 @@ _SERIES_AXES: Final[tuple[tuple[str, str, str], ...]] = (
 
 
 def _data_series_axes(
-    shapes: Sequence[ShapeModel], tolerance: float
+    shapes: Sequence[ShapeModel], tolerance: float, canvas: tuple[float, float]
 ) -> dict[int, frozenset[str]]:
     """Shape id -> the axes on which it is plotting a value rather than sitting.
 
@@ -765,11 +782,18 @@ def _data_series_axes(
     out: dict[int, set[str]] = {}
     for axis, thickness_attr, value_attr in _SERIES_AXES:
         lead_attr = "left_pt" if axis == "x" else "top_pt"
+        # height_pt is thickness on x (a row of horizontal bars, stacked
+        # vertically) and width_pt is thickness on y (a row of vertical
+        # columns, spread horizontally) -- so the canvas extent a thickness is
+        # measured against is the *other* dimension from the one named.
+        canvas_extent = canvas[1] if thickness_attr == "height_pt" else canvas[0]
         sized = [
             shape for shape in shapes if shape.width_pt > 0 and shape.height_pt > 0
         ]
         thicknesses = [getattr(shape, thickness_attr) for shape in sized]
         for cluster in cluster_values(thicknesses, SERIES_THICKNESS_TOLERANCE_PT):
+            if canvas_extent > 0 and cluster.centre >= canvas_extent * MAX_SERIES_THICKNESS_SHARE:
+                continue
             members = [
                 shape
                 for shape in sized
@@ -789,6 +813,49 @@ def _data_series_axes(
             for shape in candidates:
                 out.setdefault(shape.ref.uid, set()).add(axis)
     return {uid: frozenset(axes) for uid, axes in out.items()}
+
+
+def data_mark_uids(slide: SlideModel, deck: DeckModel, profile: Profile) -> frozenset[int]:
+    """Shape uids on this slide that are plotting a value rather than sitting.
+
+    Public, and built on the same :func:`_data_series_axes` this module's own
+    ``NearMissAlignment`` (LO-003) uses, for one reason: :mod:`tieout_ui`'s
+    editor needs the identical answer to "is this shape's position a
+    measurement", and a second implementation of that test is free to disagree
+    with the first. A shape it disagrees about is exactly the failure the
+    guardrail exists to prevent -- a bar in a football field or a dot in a
+    quadrant that the editor lets someone drag because its own copy of the
+    heuristic missed it.
+
+    Axis-blind on purpose: the caller wants one yes-or-no per shape, not which
+    of x or y is the plotted one, because a shape this reports must not be
+    silently draggable on *either* axis. A bar's length is the value on ``x``,
+    but its ``y`` is which method it names -- move it up two rows and the
+    figure now labels a different line just as surely as stretching it would
+    have restated it.
+
+    Placeholders are excluded from candidacy before the shared heuristic ever
+    sees them, and only here -- LO-003 is untouched. A title, a subtitle and a
+    standfirst on a title slide routinely share one width (the deck's own
+    content margin, which almost everything respects) while differing in
+    height because their text differs, which is exactly what the "bars of one
+    thickness whose length varies" test is built to catch and cannot tell
+    apart from three ordinary paragraphs stacked down a page. LO-003 never
+    noticed, because a title slide's placeholders already sit on the learned
+    grid and are excluded from its report on that ground regardless -- so the
+    false positive was silent there and would not be here, where it is the
+    only reason a title is refused. A hand-drawn bar or a value label is never
+    a placeholder in practice, so nothing this guardrail exists for is lost.
+    """
+    furniture = furniture_for(deck, profile)
+    canvas = _canvas(slide, deck)
+    shapes = [
+        shape
+        for shape in content_shapes(slide, furniture)
+        if not is_decorative_bleed(shape, slide, canvas) and not shape.is_placeholder
+    ]
+    plotted = _data_series_axes(shapes, profile.layout.grid.tolerance_pt, canvas)
+    return frozenset(plotted)
 
 
 def _not_sharing(

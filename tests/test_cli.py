@@ -441,6 +441,20 @@ def test_rules_lists_the_whole_catalogue():
         assert rule_id in result.output
 
 
+def test_naming_an_off_by_default_rule_on_the_command_line_actually_runs_it(workspace):
+    """README's documented opt-in -- ``--rules LO-006`` -- used to compile and do
+    nothing: the learner wrote LO-006 into the freshly learned profile's
+    ``rules.disabled``, which beats a rule named exactly on the command line. No
+    manual profile edit here, which is the point -- this is what a person who
+    only reads the README actually gets."""
+    _learn(workspace)
+    result = _invoke(
+        "check", "decks/reference_dirty.pptx", "--client", "demo", "--rules", "LO-006"
+    )
+    assert "rules not run" not in result.output
+    assert "1 rules across" in result.output
+
+
 def test_rules_for_a_client_shows_what_is_off_and_why(workspace):
     _learn(workspace)
     result = _invoke("rules", "--client", "demo")

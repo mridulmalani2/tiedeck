@@ -19,7 +19,7 @@ from tieout.model.deck import DeckModel, ShapeModel
 from tieout.model.units import pt_to_emu
 from tieout.profile.schema import Profile
 from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding, load_all_rules
-from tieout_fix import action_key, finding_key
+from tieout_fix import action_key, finding_key, group_geometry_refusal
 from tieout_ui.edit import can_clear, editable
 
 __all__ = [
@@ -276,20 +276,20 @@ def find_shape(deck: DeckModel, slide_index: int, shape_id: int) -> ShapeModel |
 def movable(shape: ShapeModel) -> str:
     """Empty when this shape's position can be written, the reason when not.
 
-    One refusal, and it is about coordinate spaces rather than taste. A shape
-    inside a group stores its offset in the group's child space, which the group
-    then translates and scales; the model reports it in slide space, and writing
-    a slide-space number back into a child-space attribute puts the shape
-    somewhere neither the tool nor the person intended. Ungroup it in PowerPoint
-    and TieOut will move it.
+    A shape inside a group stores its offset in the group's child space, which
+    the group then translates and scales; the model reports it in slide space,
+    so writing a slide-space number straight into a child-space attribute would
+    put the shape somewhere neither the tool nor the person intended.
+    ``tieout_fix`` converts into the group's own space instead of refusing
+    outright, so the only shapes actually refused here are ones inside a group
+    that itself rotates or mirrors its children -- a transform the conversion
+    does not attempt -- or with no transform of its own to convert. Both are
+    :func:`tieout_fix.group_geometry_refusal`'s call, kept in that package so
+    this prediction can never disagree with what the write path actually does.
     """
-    if shape.ref.group_path:
-        return (
-            "This shape is inside a group, so its position is stored relative to "
-            "the group rather than to the slide. Ungroup it in PowerPoint to move "
-            "it here."
-        )
-    return ""
+    if not shape.ref.group_path:
+        return ""
+    return group_geometry_refusal(shape.raw_element)
 
 
 def _move_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:

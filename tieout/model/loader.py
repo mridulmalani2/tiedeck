@@ -578,22 +578,39 @@ def _placeholder_aware_geometry(
     house-template slide. Reading it as (0, 0, 0, 0) puts every untouched title
     at the slide origin, which makes LO-002 fire on the entire deck and teaches
     the learning engine that titles live in the top-left corner.
+
+    The offset and the extent fall through separately, the same way a run's
+    font attributes do. Both halves of ``a:xfrm`` are optional, so dragging a
+    placeholder without resizing it leaves an ``a:off`` and no ``a:ext`` --
+    which is what PowerPoint and python-pptx both write, and what the
+    reference deck's own BR-008 defect is. Taking the shape's geometry whole
+    the moment any transform existed read that title as a box of no size at
+    all: invisible on the slide surface, and a degenerate box to every rule
+    that measures where a title sits.
     """
-    if _find_xfrm(element) is not None:
+    own = _find_xfrm(element)
+    has_off = own is not None and own.find("a:off", NS) is not None
+    has_ext = own is not None and own.find("a:ext", NS) is not None
+    if has_off and has_ext:
         return _geometry(element, transform)
     if ph_type is None and ph_idx is None:
         return _geometry(element, transform)
 
+    left, top, width, height = _geometry(element, transform)
     for source in (
         context.layout_placeholder(ph_type, ph_idx),
         context.master_placeholder(ph_type),
     ):
         if source is None:
             continue
-        inherited = _geometry(source, transform)
-        if inherited != (0.0, 0.0, 0.0, 0.0):
-            return inherited
-    return _geometry(element, transform)
+        s_left, s_top, s_width, s_height = _geometry(source, transform)
+        if not has_off and (s_left, s_top) != (0.0, 0.0):
+            left, top, has_off = s_left, s_top, True
+        if not has_ext and (s_width, s_height) != (0.0, 0.0):
+            width, height, has_ext = s_width, s_height, True
+        if has_off and has_ext:
+            break
+    return (left, top, width, height)
 
 
 def _int_attr(element: etree._Element | None, name: str) -> int:

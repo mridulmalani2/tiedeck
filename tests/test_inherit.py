@@ -22,7 +22,12 @@ from pptx import Presentation
 from pptx.util import Emu, Pt
 
 from tieout.model.inherit import NS, ColorMap, SlideContext, Theme
-from tieout.model.loader import _compose_group_transform, _Transform, load_deck
+from tieout.model.loader import (
+    _compose_group_transform,
+    _placeholder_aware_geometry,
+    _Transform,
+    load_deck,
+)
 
 A = NS["a"]
 P = NS["p"]
@@ -773,3 +778,86 @@ def test_theme_variants_match_office_s_documented_outputs():
             f"{name}: got {result.r:02X}{result.g:02X}{result.b:02X}, Office renders "
             f"{expected} (Delta-E {distance:.2f})"
         )
+
+
+# --------------------------------------------------------------------------------------
+# 9. Geometry falls through per attribute, exactly as a run's font does
+# --------------------------------------------------------------------------------------
+
+
+def _slide_placeholder(sppr: str) -> etree._Element:
+    """A title placeholder on a slide, carrying whatever spPr it is given."""
+    return _xml(f"""
+    <p:sp xmlns:p="{P}" xmlns:a="{A}">
+      <p:nvSpPr>
+        <p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/>
+        <p:nvPr><p:ph type="title"/></p:nvPr>
+      </p:nvSpPr>
+      {sppr}
+      <p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>
+    </p:sp>
+    """)
+
+
+def _title_geometry(sppr: str) -> tuple[float, float, float, float]:
+    return _placeholder_aware_geometry(
+        _slide_placeholder(sppr),
+        None,
+        context=_context(),
+        ph_type="title",
+        ph_idx=None,
+    )
+
+
+# The layout's own title sits at 457200,457200 EMU (36pt, 36pt) and measures
+# 11277600 x 609600 EMU (888pt x 48pt) -- see _layout above.
+LAYOUT_BOX = (36.0, 36.0, 888.0, 48.0)
+
+
+def test_a_placeholder_with_no_transform_at_all_takes_the_whole_layout_box():
+    assert _title_geometry("<p:spPr/>") == LAYOUT_BOX
+
+
+def test_a_placeholder_that_states_both_halves_is_taken_at_its_word():
+    assert _title_geometry(
+        '<p:spPr><a:xfrm><a:off x="0" y="0"/>'
+        '<a:ext cx="1270000" cy="635000"/></a:xfrm></p:spPr>'
+    ) == (0.0, 0.0, 100.0, 50.0)
+
+
+def test_a_dragged_placeholder_keeps_its_offset_and_inherits_its_size():
+    """The case the reference deck's own BR-008 defect writes.
+
+    Setting only a position -- which is all PowerPoint or python-pptx records
+    when a placeholder is dragged but never resized -- leaves an ``a:off``
+    with no ``a:ext`` beside it. Reading that as a size of zero made the title
+    a degenerate box: invisible on the slide surface, and unmeasurable by
+    every rule that asks where a title sits.
+    """
+    left, top, width, height = _title_geometry(
+        '<p:spPr><a:xfrm><a:off x="762000" y="0"/></a:xfrm></p:spPr>'
+    )
+    assert (left, top) == (60.0, 0.0)          # the slide's own word on position
+    assert (width, height) == (888.0, 48.0)    # the layout's on size
+
+
+def test_a_resized_placeholder_keeps_its_size_and_inherits_its_position():
+    """The mirror: an ``a:ext`` with no ``a:off`` beside it."""
+    left, top, width, height = _title_geometry(
+        '<p:spPr><a:xfrm><a:ext cx="2540000" cy="635000"/></a:xfrm></p:spPr>'
+    )
+    assert (left, top) == (36.0, 36.0)         # the layout's word on position
+    assert (width, height) == (200.0, 50.0)    # the slide's own on size
+
+
+def test_a_shape_that_is_not_a_placeholder_inherits_nothing():
+    """Only a placeholder has a chain to fall through to; a plain text box
+    with a sparse transform has nowhere to look and must not borrow a title's
+    box from the layout."""
+    assert _placeholder_aware_geometry(
+        _slide_placeholder('<p:spPr><a:xfrm><a:off x="762000" y="0"/></a:xfrm></p:spPr>'),
+        None,
+        context=_context(),
+        ph_type=None,
+        ph_idx=None,
+    ) == (60.0, 0.0, 0.0, 0.0)
