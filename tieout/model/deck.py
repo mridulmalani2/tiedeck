@@ -244,6 +244,23 @@ class TableModel:
 class ChartSeries:
     name: str | None
     point_count: int
+    #: The plotted values, read from the chart's own cache.
+    #:
+    #: Read from ``c:val/c:numRef/c:numCache`` where the series points at a
+    #: range in the embedded workbook, and from ``c:val/c:numLit`` where it
+    #: carries its values literally. ``None`` marks a point the cache has no
+    #: value for -- a gap in the series -- which is not the same as zero and
+    #: must not be compared as though it were.
+    #:
+    #: The cache is read deliberately, rather than the embedded workbook. The
+    #: cache is what PowerPoint draws and therefore what the reader sees; a
+    #: cache that disagrees with the workbook behind it is a different and more
+    #: alarming defect, out of scope here and noted so the two are not confused.
+    #:
+    #: Shorter than :attr:`point_count` where the cache is sparse, and empty
+    #: where there is no cache at all, so a caller must not index it by
+    #: position without checking.
+    values: tuple[float | None, ...] = ()
     #: Whether this series carries data labels of its own. Held per series
     #: because a chart labelling one series and not another is a chart whose
     #: reader cannot compare them.

@@ -404,3 +404,120 @@ def test_the_chart_rules_are_silent_on_the_clean_deck(
     """The burden these carry: a craft standard applied to a deck built in a
     different style is noise with a rule id on it."""
     assert not _run(clean_deck, reference_profile, rule_id)
+
+
+# --------------------------------------------------------------------------------------
+# The values behind the chart
+# --------------------------------------------------------------------------------------
+#
+# Not a rule, but the model these rules and the figure index read. Until this
+# landed, ``ChartModel`` carried point counts, categories and label flags and no
+# numeric values at all, so a chart contradicting the table beside it could not
+# be seen -- PLAN.md section 3's second row.
+
+
+def test_a_series_carries_the_values_it_plots(tmp_path):
+    deck = _slide_with_chart(
+        tmp_path / "values.pptx",
+        caption="Revenue and EBITDA (EUR m)",
+        series=(("Revenue", (160.0, 184.2)), ("EBITDA", (36.0, 41.2))),
+    )
+    chart = next(
+        shape.chart for shape in deck.slides[0].all_shapes() if shape.chart is not None
+    )
+    revenue, ebitda = chart.series
+    assert revenue.values == (160.0, 184.2)
+    assert ebitda.values == (36.0, 41.2)
+
+
+def test_the_values_line_up_with_the_categories(tmp_path):
+    """The whole point of reading them: a value has to be attributable to a
+    period, or it cannot be compared with the table that states the same one."""
+    deck = _slide_with_chart(tmp_path / "aligned.pptx", caption="Revenue (EUR m)")
+    chart = next(
+        shape.chart for shape in deck.slides[0].all_shapes() if shape.chart is not None
+    )
+    assert chart.categories == ("FY24A", "FY25E")
+    assert len(chart.series[0].values) == len(chart.categories)
+
+
+def test_a_gap_in_the_series_reads_as_a_gap_and_not_as_zero(tmp_path):
+    """A sparse cache omits the points it has no value for.
+
+    Reading the ``c:pt`` elements in document order would shift every later
+    point one category to the left, and a tie-out rule built on that would
+    accuse a correct chart of contradicting a correct table. ``idx`` is what
+    keeps them aligned, and the hole comes back as None rather than 0.0 --
+    a missing figure and a figure of zero are different claims.
+    """
+    from lxml import etree
+
+    from tieout.model.loader import _CHART_NS, load_deck
+
+    path = tmp_path / "sparse.pptx"
+    _slide_with_chart(path, caption="Revenue (EUR m)")
+
+    # Reach into the saved package and delete the first point of the series,
+    # which is how a chart whose first period has no data is actually stored.
+    import shutil
+    import zipfile
+
+    unpacked = tmp_path / "unpacked"
+    with zipfile.ZipFile(path) as archive:
+        archive.extractall(unpacked)
+    chart_part = next(unpacked.rglob("charts/chart*.xml"))
+    tree = etree.parse(str(chart_part))
+    cache = tree.find(".//c:ser/c:val/c:numRef/c:numCache", _CHART_NS)
+    first = cache.find("c:pt[@idx='0']", _CHART_NS)
+    cache.remove(first)
+    tree.write(str(chart_part), xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    rebuilt = tmp_path / "sparse-rebuilt.pptx"
+    with zipfile.ZipFile(rebuilt, "w", zipfile.ZIP_DEFLATED) as archive:
+        for item in sorted(unpacked.rglob("*")):
+            if item.is_file():
+                archive.write(item, item.relative_to(unpacked).as_posix())
+    shutil.rmtree(unpacked)
+
+    deck = load_deck(rebuilt)
+    chart = next(
+        shape.chart for shape in deck.slides[0].all_shapes() if shape.chart is not None
+    )
+    assert chart.series[0].values == (None, 184.2), (
+        "the surviving point must stay under its own category"
+    )
+
+
+def test_a_chart_with_no_cache_reports_no_values_rather_than_guessing(tmp_path):
+    """Empty, not zeros. A caller must be able to tell "nothing to compare"
+    from "a series of zeros", because only one of those is a defect."""
+    import shutil
+    import zipfile
+
+    from lxml import etree
+
+    from tieout.model.loader import _CHART_NS, load_deck
+
+    path = tmp_path / "nocache.pptx"
+    _slide_with_chart(path, caption="Revenue (EUR m)")
+    unpacked = tmp_path / "unpacked-nocache"
+    with zipfile.ZipFile(path) as archive:
+        archive.extractall(unpacked)
+    chart_part = next(unpacked.rglob("charts/chart*.xml"))
+    tree = etree.parse(str(chart_part))
+    for cache in tree.findall(".//c:numCache", _CHART_NS):
+        cache.getparent().remove(cache)
+    tree.write(str(chart_part), xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    rebuilt = tmp_path / "nocache-rebuilt.pptx"
+    with zipfile.ZipFile(rebuilt, "w", zipfile.ZIP_DEFLATED) as archive:
+        for item in sorted(unpacked.rglob("*")):
+            if item.is_file():
+                archive.write(item, item.relative_to(unpacked).as_posix())
+    shutil.rmtree(unpacked)
+
+    deck = load_deck(rebuilt)
+    chart = next(
+        shape.chart for shape in deck.slides[0].all_shapes() if shape.chart is not None
+    )
+    assert all(series.values == () for series in chart.series)
