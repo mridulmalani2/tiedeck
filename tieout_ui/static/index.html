@@ -1448,7 +1448,10 @@ function byFix(actions) {
                 ? ` <button class="mv" data-moveinst="${index}:${k}">Move</button>` : ""}
           </div>`).join("")}
       </details>` : "";
-    return `<div class="item${a.rejected ? " turned-down" : ""}">
+    const first = a.instances && a.instances[0];
+    return `<div class="item${a.rejected ? " turned-down" : ""}"${first
+        ? ` data-slide="${first.slide}" data-bbox="${first.bbox_pt
+            ? esc(first.bbox_pt.join(",")) : ""}" data-label="${esc(a.rule_id)}"` : ""}>
       <div class="bar b-${esc(a.severity)}"></div>
       <div class="col">
         <div class="meta">
@@ -1630,10 +1633,16 @@ function wireNote() {
       select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "");
     };
   });
-  $("pane").querySelectorAll(".item").forEach((el) => {
+  // Only a card that names a slide navigates. Unifying the two modes onto one
+  // class put the by-fix cards under this selector, and those carry no
+  // `data-slide` -- so every click ran select(NaN), which blanked the canvas and
+  // asked the server for thumbnail NaN.
+  $("pane").querySelectorAll(".item[data-slide]").forEach((el) => {
     el.onclick = () => {
+      const slide = Number(el.dataset.slide);
+      if (!Number.isFinite(slide)) return;
       const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
-      select(Number(el.dataset.slide), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+      select(slide, bbox.length === 4 ? bbox : null, el.dataset.label || "");
     };
   });
 }
