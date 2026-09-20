@@ -252,8 +252,17 @@ def _four_digit(year: str) -> str:
     return year if len(year) == 4 else f"20{year}"
 
 
+def _without_periods(text: str) -> str:
+    """``text`` with every period token blanked out."""
+    return _scan_periods(text)[1]
+
+
 def _all_periods(text: str) -> list[str]:
-    """Every period a label names, in the order it names them.
+    return _scan_periods(text)[0]
+
+
+def _scan_periods(text: str) -> tuple[list[str], str]:
+    """Every period a label names, in order, and the text with them removed.
 
     Patterns are applied in priority order and each match is blanked out of the
     working string before the next pattern runs. Without that, "Q1 2026" is seen
@@ -262,7 +271,7 @@ def _all_periods(text: str) -> list[str]:
     """
     working = " ".join(text.split()).casefold()
     if not working:
-        return []
+        return [], ""
 
     found: list[tuple[int, str]] = []
 
@@ -307,7 +316,27 @@ def _all_periods(text: str) -> list[str]:
     for _, period in sorted(found):
         if period not in ordered:
             ordered.append(period)
-    return ordered
+    return ordered, working
+
+
+def split_period(text: str) -> tuple[str, str | None]:
+    """A label split into what it measures and when.
+
+    "Revenue CAGR 2023A-2027E" is one label carrying both, and a two-column
+    "Metric | Value" table states it that way as a matter of course. Reading
+    only the other axis for the metric filed every such row under "value",
+    which is generic, so it was never compared with anything -- and CO-006 had
+    nothing to recompute.
+
+    The period is removed from the residue rather than merely identified, so
+    the metric that comes back is the metric: "revenue cagr", not "revenue
+    cagr 2023a-2027e", which would match no other statement of it.
+    """
+    periods = _all_periods(text)
+    if not periods:
+        return normalise_label(text), None
+    residue = normalise_label(_without_periods(text))
+    return residue, parse_period(text)
 
 
 def parse_period(text: str) -> str | None:
@@ -654,6 +683,58 @@ class FigureIndex:
     def of_source(self, source: Source) -> tuple[Figure, ...]:
         return tuple(figure for figure in self.figures if figure.source == source)
 
+    def lookup(
+        self,
+        aliases: Sequence[str],
+        *,
+        scope: str,
+        period: str | None,
+        near: Figure | None = None,
+    ) -> Figure | str:
+        """The one figure naming one of ``aliases`` in this scope and period.
+
+        Returns the figure, or a *reason* string saying why there is not exactly
+        one. The reason is returned rather than swallowed because for a
+        pre-send check "I could not verify this" and "this is fine" must never
+        look the same: a derived rule that finds no denominator has to say so,
+        not fall silent and be counted among the rules that ran.
+
+        ``near`` narrows before it widens. A margin stated in a table is derived
+        from that table's own revenue and EBITDA; only if the table does not
+        carry them is the slide searched, and only then the deck. Searching the
+        deck first means a segment table's margin is checked against the group's
+        revenue, which is arithmetic applied to two unrelated numbers.
+
+        The period must match **exactly**, not merely fail to conflict. A figure
+        with no period may stand in for one that has none, and for nothing else:
+        recomputing a margin needs the inputs for that year, and "close enough"
+        is how a rule ends up dividing FY24 EBITDA by FY25 revenue and reporting
+        the answer as a defect.
+        """
+        wanted = {alias.casefold() for alias in aliases}
+        candidates = [
+            figure
+            for figure in self.figures
+            if figure.metric in wanted
+            and figure.scope == scope
+            and figure.period == period
+            and figure.unit.quantity is None
+        ]
+        if not candidates:
+            return f"no figure labelled {' or '.join(sorted(wanted))} for this period"
+
+        for tier in _tiers(candidates, near):
+            if not tier:
+                continue
+            values = {round(figure.reading.value, 6) for figure in tier}
+            if len(values) > 1:
+                return (
+                    f"{' or '.join(sorted(wanted))} is stated more than one way for "
+                    f"this period, so there is no single figure to compute from"
+                )
+            return tier[0]
+        return f"no figure labelled {' or '.join(sorted(wanted))} for this period"
+
     def grouped(self) -> dict[tuple[str, str, str | None], list[Figure]]:
         """Figures gathered by what they claim to measure.
 
@@ -668,6 +749,19 @@ class FigureIndex:
         for group in out.values():
             group.sort(key=lambda f: (f.slide_index, f.uid, f.address))
         return out
+
+
+def _tiers(
+    candidates: Sequence[Figure], near: Figure | None
+) -> tuple[list[Figure], list[Figure], list[Figure]]:
+    """``candidates`` split into same shape, same slide, and anywhere."""
+    if near is None:
+        return ([], [], list(candidates))
+    return (
+        [f for f in candidates if f.place == near.place],
+        [f for f in candidates if f.slide_index == near.slide_index],
+        list(candidates),
+    )
 
 
 def build_index(deck: DeckModel) -> FigureIndex:
@@ -757,7 +851,7 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
         row_label = normalise_label(label_cell.text)
         if not row_label:
             continue
-        row_period = parse_period(row_label)
+        row_metric, row_period = split_period(label_cell.text)
 
         for column in range(1, table.column_count):
             cell = table.cell(row, column)
@@ -771,20 +865,30 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                 continue
 
             column_label = headers.get(column, "")
-            column_period = parse_period(column_label)
+            column_metric, column_period = split_period(column_label)
 
             # Whichever axis names a period is the period; the other names the
             # metric. Where neither does, the row is the scope and the column is
             # the metric, which is how a comparables table reads.
+            #
+            # The metric is taken from the *other* axis only while that axis has
+            # something specific to say. A "Metric | Value" summary table puts
+            # the whole of "Revenue CAGR 2023A-2027E" in the row label and the
+            # word "Value" in the header, and reading the header filed every such
+            # row under a generic label where nothing could ever match it. Where
+            # the other axis is generic, the naming axis keeps what is left of
+            # itself once the period is taken out.
             if row_period is not None and column_period is None:
-                metric, scope, period = column_label, "", row_period
+                metric = column_metric if is_specific(column_metric) else row_metric
+                scope, period = "", row_period
             elif column_period is not None and row_period is None:
-                metric, scope, period = row_label, "", column_period
+                metric = row_metric if is_specific(row_metric) else column_metric
+                scope, period = "", column_period
             elif row_period is not None and column_period is not None:
                 # Both. The row wins as the period and the column keeps its own,
                 # which is a sub-period of it; comparing across them needs both,
                 # so the scope carries the column's.
-                metric, scope, period = column_label, column_period, row_period
+                metric, scope, period = column_metric, column_period, row_period
             else:
                 metric, scope, period = column_label, row_label, None
 

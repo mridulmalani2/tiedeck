@@ -511,7 +511,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-46 rules across six categories. Each one is an independent class — rules never
+52 rules across six categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -608,25 +608,55 @@ switched off.
 | **CH-004** | major | on | A multi-series chart gives no way to tell the series apart | the craft |
 | **CH-005** | minor | on | Series in one chart label their values to different precision | the craft |
 
-### Consistency (3 rules)
+### Consistency (9 rules)
 
 The one category that reads the deck's *content* rather than its form, and it
-does so arithmetically: every finding is a comparison between two numbers the
-deck itself states. No profile input, no key, no network. These are the mistakes
-that survive four turns of a deck because each page is internally correct.
+does so arithmetically: every finding is a comparison between numbers the deck
+itself states. No profile input, no key, no network. These are the mistakes that
+survive four turns of a deck because each page is internally correct.
 
 | Rule | Severity | Default | What it measures | Expectation derived from |
 |---|---|---|---|---|
-| **CO-001** | major | on | The same labelled figure differs between tables | not learned; fixed behaviour |
+| **CO-001** | major | on | The same labelled figure differs between two statements of it | not learned; fixed behaviour |
 | **CO-002** | major | on | The same figure appears in two different scales | not learned; fixed behaviour |
 | **CO-003** | major | on | A row labelled as a total does not sum its column | not learned; fixed behaviour |
+| **CO-004** | major | on | A stated margin does not equal its own inputs | not learned; fixed behaviour |
+| **CO-005** | major | on | A stated multiple does not equal its own inputs | not learned; fixed behaviour |
+| **CO-006** | major | on | A stated growth rate does not match the series it describes | not learned; fixed behaviour |
+| **CO-007** | major | on | A bridge's steps do not carry its opening to its closing | not learned; fixed behaviour |
+| **CO-008** | minor | on | The same figure is stated in two different units | not learned; fixed behaviour |
+| **CO-009** | minor | on | Two as-of dates govern the same figures | not learned; fixed behaviour |
 
-Each one keys a number on the pair (row label, column header) so the column
-disambiguates the scope, ignores labels too generic to identify a metric
-(`total`, `value`, `other`), and treats a label bearing a footnote marker as the
-same label without it. CO-003 reads a total row four ways — the block since the
-previous total, everything above it, all line items, the subtotals above it —
-and only reports when no reading sums.
+All nine read one **figure index** (`tieout/figures.py`), which walks the deck
+once and records every number in it — table cell, chart point, figure in a
+sentence — with a metric, a period, a unit and an address precise enough to
+write a correction back. One module answers "are these two numbers statements of
+the same fact?", so the rule that catches a contradiction between two tables is
+the same rule that catches it between a table and the headline above it.
+
+**CO-001 to CO-003** compare a figure with another statement of the same figure.
+The index keys on the metric, the scope and the period, ignores labels too
+generic to identify anything (`total`, `value`, `other`), and treats a label
+bearing a footnote marker as the same label without it. CO-003 reads a total row
+four ways — the block since the previous total, everything above it, all line
+items, the subtotals above it — and only reports when no reading sums.
+
+**CO-004 to CO-007** recompute a figure the deck derives from figures it also
+shows, so every finding is arithmetic and states its working: *"24.0% stated,
+18.4% from EBITDA 351 (slide 6) over revenue 1,908 (slide 6)"*. Where an input
+is missing, stated more than one way, or in a scale that cannot be reconciled,
+the check is **refused and recorded as unchecked** rather than guessed at —
+because for a pre-send tool "I could not verify this" and "this is fine" must
+never look the same. Tolerances are derived from the displayed precision of
+every figure involved, so a correctly-rounded margin is not a defect.
+
+**CO-008 and CO-009** are about how a figure is told rather than what it says:
+the same figure in millions on one page and billions on another, or two as-of
+dates governing the same numbers. Both are `minor`, because both are ordinary
+practice in some decks and a drafting observation rather than an accusation.
+
+Never: inventing a figure where nothing in the deck determines it. A correction
+is offered only where the answer is arithmetic.
 
 ### Turning a rule on or off
 
@@ -692,11 +722,16 @@ is a separate package and a separate command.
 
 ### Why it exists at all
 
-TieOut's own consistency rules compare labelled figures between tables
-arithmetically: `CO-001` catches the same figure stated two ways, `CO-002` a
-factor-of-a-thousand unit error, `CO-003` a total that does not sum. What they
-cannot do is read. A headline claiming 20% growth over a table showing 8% is a
-sentence, not a sum, and no amount of parsing gets there.
+TieOut's own consistency rules compare figures arithmetically: `CO-001` catches
+the same figure stated two ways — including a headline contradicting the table
+it sits over — `CO-002` a factor-of-a-thousand unit error, `CO-003` a total that
+does not sum, and `CO-004` to `CO-007` a margin, multiple, growth rate or bridge
+that does not equal the inputs the deck gives for it.
+
+What they cannot do is read. A claim with no figure anywhere to check it
+against, an enumeration that does not match its own count, a measure defined one
+way and used another — those need reading rather than counting, and no amount of
+parsing gets there.
 
 So the deterministic layer was built first, and deliberately. Every question it
 can answer is one the model never needs to see, which is the cheapest possible
@@ -1976,13 +2011,14 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **46 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **52 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
-   tested. A fifth category, **consistency** (3 rules), is then added beyond the
-   specification: the deck's own tables are enough to catch a figure that
-   disagrees with itself, which is the defect a banker most wants caught and the
-   one no amount of formatting discipline surfaces.
+   tested. A fifth category, **consistency** (9 rules), is then added beyond the
+   specification: the deck's own figures are enough to catch a number that
+   disagrees with itself or with the arithmetic it claims, which is the defect a
+   banker most wants caught and the one no amount of formatting discipline
+   surfaces.
 2. **An optional semantic layer the specification does not mention.** Section 2
    forbids LLM calls and network access, and `tieout` still honours that
    absolutely. `tieout_review` is additive: a separate package, a separate

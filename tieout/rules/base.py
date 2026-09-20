@@ -303,6 +303,7 @@ def load_all_rules() -> dict[str, type[Rule]]:
         brand,
         chart,
         consistency,
+        derived,
         hygiene,
         layout,
         typography,

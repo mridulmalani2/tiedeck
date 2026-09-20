@@ -34,7 +34,7 @@ EXPECTED_PER_CATEGORY = {
     "layout": 9,
     "typography": 9,
     "hygiene": 9,
-    "consistency": 3,
+    "consistency": 9,
     "chart": 5,
 }
 EXPECTED_RULE_COUNT = sum(EXPECTED_PER_CATEGORY.values())

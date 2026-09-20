@@ -811,8 +811,13 @@ def test_a_figure_stated_in_two_scales_that_agree_is_not_a_contradiction(
     tmp_path, reference_profile
 ):
     """One table in millions and one in billions, both saying the same thing.
-    Comparing the digits alone reports a factor of a thousand; comparing the
-    figures reports nothing, which is correct."""
+
+    Two rules have something to say about this and they must say different
+    things. Comparing the digits alone reports a factor of a thousand, which
+    would be wrong: the figures agree. So CO-001 and CO-002 are silent, and
+    CO-008 -- whose whole subject is a figure told in two units -- reports it
+    as the drafting observation it is.
+    """
     presentation = Presentation()
     presentation.slide_width = Emu(960 * 12700)
     presentation.slide_height = Emu(540 * 12700)
@@ -828,5 +833,9 @@ def test_a_figure_stated_in_two_scales_that_agree_is_not_a_contradiction(
     presentation.save(str(path))
     deck = load_deck(path)
 
-    result = run_rules(deck, reference_profile, include=["CO-*"])
-    assert result.findings == [], [f.message for f in result.findings]
+    contradictions = run_rules(deck, reference_profile, include=["CO-001", "CO-002"])
+    assert contradictions.findings == [], [f.message for f in contradictions.findings]
+
+    drift = findings_for(_run(deck, reference_profile, "CO-008"), "CO-008")
+    assert drift, "the same figure in millions and in billions is CO-008's subject"
+    assert "millions" in drift[0].message and "billions" in drift[0].message
