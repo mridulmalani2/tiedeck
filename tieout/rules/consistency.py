@@ -194,7 +194,16 @@ def _disagreements(
     """
     index = build_index(deck)
     out: list[tuple[Figure, Figure, str]] = []
-    for _, figures in sorted(index.grouped().items()):
+    # Sorted on a key whose third element is ``str | None``. Sorting the raw
+    # keys compared None with 'x' the moment a deck stated one metric in two
+    # quantities -- "EBITDA of $480m" and "8.7x LTM EBITDA" on one page, which
+    # is every deck -- and CO-001 and CO-002 both raised TypeError and checked
+    # nothing. The generated decks never state a metric two ways, so 1,651
+    # tests passed over it.
+    for _, figures in sorted(
+        index.grouped().items(),
+        key=lambda item: (item[0][0], item[0][1], item[0][2] or ""),
+    ):
         if not _spans_two_places(figures):
             continue
         ordered = sorted(figures, key=lambda f: (f.place, f.address))

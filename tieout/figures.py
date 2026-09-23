@@ -98,7 +98,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
@@ -181,6 +181,43 @@ def read_cell_value(text: str) -> NumberReading | None:
     return parse_number(stripped) if stripped != text.strip() else None
 
 
+def _unit_only(text: str) -> bool:
+    """Whether ``text`` says what the figures are measured in and nothing else.
+
+    "US$ millions" and "$m" do; "restated" and "margin" do not, because
+    :func:`stated_unit` finds no scale or currency in them; "EBITDA ($m)" does
+    not, because the residue left once the unit is taken out is not empty.
+    """
+    if stated_unit(text) == Unit():
+        return False
+    residue = _CURRENCY_WORD.sub(" ", text)
+    residue = _STATED_SCALE.sub(" ", residue)
+    return not re.sub(r"[\W_]+", " ", residue).strip()
+
+
+def strip_unit_qualifier(text: str) -> str:
+    """``text`` without the unit it states, which is not part of its metric.
+
+    A comparables table heads its columns "EV ($m)" and "LTM EBITDA ($m)", which
+    is how every comparables table is headed. Folded whole, those became the
+    labels ``ev $m`` and ``ltm ebitda $m``, and CO-005's aliases -- ``ev``,
+    ``enterprise value``, ``tev`` -- matched neither. The multiple check
+    therefore recomputed **nothing at all** on the one table shape it exists
+    for, and said so as a refusal per row rather than as a finding, so the
+    silence read as "checked, and fine".
+
+    A cell that is *all* unit, which is what "$ in millions" in a corner cell
+    is, folds to nothing: it labels the table's scale, not its subject.
+    """
+    stripped = text.strip()
+    trailing = re.search(r"\(([^()]*)\)\s*$", stripped)
+    if trailing is not None and _unit_only(trailing.group(1)):
+        return stripped[: trailing.start()].strip()
+    if stripped and _unit_only(stripped):
+        return ""
+    return stripped
+
+
 def normalise_label(text: str) -> str:
     """Fold a row or column label to a comparable key.
 
@@ -190,7 +227,7 @@ def normalise_label(text: str) -> str:
 
     It does not strip a bare trailing number: see :data:`_FOOTNOTE_MARKER`.
     """
-    folded = " ".join(text.split()).casefold()
+    folded = " ".join(strip_unit_qualifier(text).split()).casefold()
     folded = folded.split("\n", 1)[0]
     folded = re.sub(r"\((?:[1-9]|1[0-9]|[a-e])\)\s*$", "", folded)
     folded = _FOOTNOTE_MARKER.sub("", folded)
@@ -261,7 +298,39 @@ def _all_periods(text: str) -> list[str]:
     return _scan_periods(text)[0]
 
 
-def _scan_periods(text: str) -> tuple[list[str], str]:
+def _period_spans(text: str) -> list[tuple[int, int, str]]:
+    """Where each period sits in ``text``, for prose that names more than one.
+
+    A sentence saying "revenue of $1,935m in FY25A, up from $1,352m in FY23A"
+    names two periods, and :func:`parse_period` folds those into the range
+    ``FY2025A..FY2023A`` -- correct for a label, and wrong for either figure in
+    it. A range agrees with no single period, so both figures were indexed
+    against nothing and every comparison sentence in the deck fell silently out
+    of every rule. Spans let each figure take the period next to it instead.
+
+    Two spans joined by nothing but a range word are **one** period, not the
+    nearer of two. "Revenue grew at a 19.6% CAGR between FY23A and FY25A" states
+    a rate for the span, and CO-006 recomputes it from the span's endpoints;
+    handed FY2023A alone it looked for a growth rate stated for a single year
+    and found nothing to check. It is the same merge :func:`parse_period`
+    performs on a label reading "Revenue CAGR FY23A-FY25A", which is how the
+    same claim is written in a table, and the two must agree.
+
+    Offsets are into ``" ".join(text.split()).casefold()``, which is what
+    :func:`_scan_periods` works on.
+    """
+    spans = sorted(_scan_periods(text)[2])
+    merged: list[tuple[int, int, str]] = []
+    for span in spans:
+        if merged and _RANGE_JOIN.match(text[merged[-1][1] : span[0]]):
+            start, _, first = merged[-1]
+            merged[-1] = (start, span[1], f"{first.split('..')[0]}..{span[2]}")
+            continue
+        merged.append(span)
+    return merged
+
+
+def _scan_periods(text: str) -> tuple[list[str], str, list[tuple[int, int, str]]]:
     """Every period a label names, in order, and the text with them removed.
 
     Patterns are applied in priority order and each match is blanked out of the
@@ -271,9 +340,9 @@ def _scan_periods(text: str) -> tuple[list[str], str]:
     """
     working = " ".join(text.split()).casefold()
     if not working:
-        return [], ""
+        return [], "", []
 
-    found: list[tuple[int, str]] = []
+    found: list[tuple[int, int, str]] = []
 
     def take(pattern: re.Pattern[str], render: object) -> None:
         nonlocal working
@@ -281,7 +350,9 @@ def _scan_periods(text: str) -> tuple[list[str], str]:
             match = pattern.search(working)
             if match is None:
                 return
-            found.append((match.start(), render(match)))  # type: ignore[operator]
+            found.append(
+                (match.start(), match.end(), render(match))  # type: ignore[operator]
+            )
             working = (
                 working[: match.start()]
                 + " " * (match.end() - match.start())
@@ -313,10 +384,10 @@ def _scan_periods(text: str) -> tuple[list[str], str]:
     )
 
     ordered: list[str] = []
-    for _, period in sorted(found):
+    for _, _, period in sorted(found):
         if period not in ordered:
             ordered.append(period)
-    return ordered, working
+    return ordered, working, found
 
 
 def split_period(text: str) -> tuple[str, str | None]:
@@ -640,6 +711,18 @@ def comparable(one: Figure, other: Figure) -> str | None:
         return None
     if not periods_agree(one.period, other.period):
         return None
+    if (
+        one.unit.currency is not None
+        and other.unit.currency is not None
+        and one.unit.currency != other.unit.currency
+    ):
+        # Two currencies are not two values of one figure. The key deliberately
+        # leaves currency out, so that a deck stating a figure in $m on one page
+        # and £m on the next is *noticed* -- but noticing it is CO-008's job and
+        # it reports the units. Comparing the digits, which is what happened
+        # here, read "GBP 1,510m (US$1,935m)" as revenue disagreeing with itself
+        # by 425 and reported the deck's own conversion as a contradiction.
+        return None
 
     sources = {one.source, other.source}
     if "text" in sources:
@@ -673,6 +756,22 @@ class FigureIndex:
     #: Metric labels the deck's tables and charts use, longest first. What prose
     #: is grounded in; see the module docstring for why it is not free text.
     vocabulary: tuple[str, ...]
+    #: Every conversion the deck states in one breath -- "GBP 1,510m
+    #: (US$1,935m)". A fact told in two units is CO-008's subject; a fact the
+    #: deck itself reconciles is not drift, and reporting it told the drafter
+    #: off for doing the very thing the rule asks for.
+    conversions: frozenset[Conversion] = frozenset()
+
+    def reconciles(self, one: Figure, other: Figure) -> bool:
+        """Whether the deck states the conversion between these two units."""
+        units = {one.unit.currency, other.unit.currency}
+        if len(units - {None}) < 2:
+            return False
+        wanted = frozenset(str(name) for name in units)
+        return any(
+            metric == one.metric and scope == one.scope and units_stated == wanted
+            for metric, scope, _, units_stated in self.conversions
+        )
 
     def __iter__(self) -> Iterator[Figure]:
         return iter(self.figures)
@@ -690,6 +789,7 @@ class FigureIndex:
         scope: str,
         period: str | None,
         near: Figure | None = None,
+        period_optional: bool = False,
     ) -> Figure | str:
         """The one figure naming one of ``aliases`` in this scope and period.
 
@@ -712,14 +812,26 @@ class FigureIndex:
         the answer as a defect.
         """
         wanted = {alias.casefold() for alias in aliases}
-        candidates = [
+        matching = [
             figure
             for figure in self.figures
             if figure.metric in wanted
             and figure.scope == scope
-            and figure.period == period
             and figure.unit.quantity is None
         ]
+        candidates = _one_currency(
+            [figure for figure in matching if figure.period == period]
+        )
+        if not candidates and period_optional and scope:
+            # A comparables row states an undated EV and an LTM EBITDA, and the
+            # multiple it prints is dated by neither. Demanding all three agree
+            # on a period found nothing to compute from in the one table shape
+            # where a multiple is always printed. The scope carries the safety
+            # here: it names one company, so there is one EBITDA to find, and
+            # the finding states the period it used.
+            candidates = _one_currency(matching)
+            if len({round(f.reading.value, 6) for f in candidates}) > 1:
+                candidates = []
         if not candidates:
             return f"no figure labelled {' or '.join(sorted(wanted))} for this period"
 
@@ -751,6 +863,35 @@ class FigureIndex:
         return out
 
 
+def _one_currency(candidates: Sequence[Figure]) -> list[Figure]:
+    """``candidates`` narrowed to the currency the deck states this figure in.
+
+    A deck that reports in dollars and restates one figure in sterling --
+    "FY25A revenue was GBP 1,510m (US$1,935m)" -- offers two values for one
+    period, and :meth:`FigureIndex.lookup` refused: "revenue is stated more than
+    one way for this period, so there is no single figure to compute from". It
+    is stated one way, twice, in two currencies, and refusing it cost **every
+    CAGR in the deck**.
+
+    The modal stated currency wins and figures stating none join it, because a
+    cell under a caption the deck forgot to write is in the deck's own currency
+    and not in the one appearing once on slide 11.
+    """
+    stated = [figure.unit.currency for figure in candidates if figure.unit.currency]
+    if len(set(stated)) < 2:
+        return list(candidates)
+    # Sorted before the max so a tie breaks the same way every run: set
+    # iteration order follows string hashing, which is randomised per process,
+    # and a tie-out whose findings move between runs is not one anybody can act
+    # on.
+    modal = max(sorted(set(stated)), key=stated.count)
+    return [
+        figure
+        for figure in candidates
+        if figure.unit.currency in (None, modal)
+    ]
+
+
 def _tiers(
     candidates: Sequence[Figure], near: Figure | None
 ) -> tuple[list[Figure], list[Figure], list[Figure]]:
@@ -772,28 +913,91 @@ def build_index(deck: DeckModel) -> FigureIndex:
     """
     table_figures: list[Figure] = []
     chart_figures: list[Figure] = []
+    corners: dict[tuple[int, int], str] = {}
     for slide in deck.slides:
         for shape in slide.tables:
-            table_figures.extend(_table_figures(slide, shape))
+            figures, corner = _table_figures(slide, shape)
+            table_figures.extend(figures)
+            if corner:
+                corners[(slide.index, shape.ref.uid)] = corner
         for shape in slide.charts:
             chart_figures.extend(_chart_figures(slide, shape))
 
     vocabulary = _vocabulary(table_figures, chart_figures)
+    table_figures = _scoped_by_corner(table_figures, corners, vocabulary)
 
     text_figures: list[Figure] = []
+    conversions: list[Conversion] = []
     for slide in deck.slides:
         for shape in slide.leaf_shapes():
             if shape.table is not None or shape.chart is not None:
                 continue
-            text_figures.extend(_text_figures(slide, shape, vocabulary))
+            figures, stated = _text_figures(slide, shape, vocabulary)
+            text_figures.extend(figures)
+            conversions.extend(stated)
 
-    figures = tuple(
+    ordered = tuple(
         sorted(
             [*table_figures, *chart_figures, *text_figures],
             key=lambda f: (f.slide_index, f.uid, f.source, f.address),
         )
     )
-    return FigureIndex(figures=figures, vocabulary=vocabulary)
+    return FigureIndex(
+        figures=ordered,
+        vocabulary=vocabulary,
+        conversions=frozenset(conversions),
+    )
+
+
+def _scoped_by_corner(
+    figures: list[Figure],
+    corners: dict[tuple[int, int], str],
+    vocabulary: Sequence[str],
+) -> list[Figure]:
+    """Give a table's figures the scope its corner cell names, where it names one.
+
+    CO-001's own docstring has always declared this false-positive mode and
+    prescribed its remedy: "two tables can use one label for different scopes --
+    'Revenue / FY24' in a group table and in a segment table are different
+    numbers, both right... The fix in that case is to label the tables' scopes."
+    A real deck **does** label them -- the segment table's corner cell reads
+    "Analytics ($m)" and the group table's reads "$ in millions" -- and nothing
+    here read the label. So the tool prescribed a remedy it then ignored, and
+    reported every segment table against its own group table.
+
+    Worse than the false positive, and quieter: with two revenues answering to
+    one period, :meth:`FigureIndex.lookup` found no single figure to compute
+    from and CO-006 **refused every CAGR in the deck**.
+
+    The corner cell is honoured only where it names something the deck's own
+    tables and charts already use as a metric -- "Analytics" is a row of the
+    segment table, so the deck itself treats it as a thing that has revenue.
+    Any non-empty corner cell would have done the job here and is the reason
+    this is not that: a fiscal-year table headed "Fiscal year" would take that
+    as its scope, and a headline restating its revenue -- prose, which has no
+    corner cell and so no scope -- would stop matching it. That is the tie
+    :mod:`tieout.figures` exists to make, and it must not be bought with a
+    heuristic.
+
+    The slide headline is deliberately **not** consulted. "Revenue by Segment"
+    names a metric the deck uses and means nothing of the sort, and a scope read
+    off a headline is a scope read off a sentence.
+    """
+    known = set(vocabulary)
+    if not known:
+        return figures
+    return [
+        (
+            replace(figure, scope=corner)
+            if (
+                not figure.scope
+                and (corner := corners.get(figure.place, "")) in known
+                and corner != figure.metric
+            )
+            else figure
+        )
+        for figure in figures
+    ]
 
 
 def _vocabulary(*groups: Sequence[Figure]) -> tuple[str, ...]:
@@ -815,8 +1019,13 @@ def _vocabulary(*groups: Sequence[Figure]) -> tuple[str, ...]:
 # -- tables -----------------------------------------------------------------------------
 
 
-def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
-    """Every numeric cell in one table, labelled by its row and column.
+def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], str]:
+    """Every numeric cell in one table, labelled by its row and column, and the
+    scope its corner cell names.
+
+    The corner cell is returned rather than applied because whether it names a
+    scope is a question about the *deck*, not about this table: see
+    :func:`build_index`.
 
     Row labels come from the first column and column labels from the header row,
     which is how every banking table is built. A table with neither is skipped
@@ -829,19 +1038,48 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
     """
     table = shape.table
     if table is None or table.row_count < 2 or table.column_count < 2:
-        return []
+        return [], ""
+
+    corner_cell = table.cell(0, 0)
+    corner = normalise_label(corner_cell.text) if corner_cell is not None else ""
 
     headers = {
         column: normalise_label(cell.text)
         for column in range(table.column_count)
         if (cell := table.cell(0, column)) is not None
     }
+    # Whether the columns are the period axis, or merely include a column whose
+    # heading carries one. A trading-comparables table heads its columns
+    # "EV ($m) | LTM EBITDA ($m) | EV/EBITDA": one of the three names a period,
+    # and reading that as "the columns are the periods" turned the EBITDA column
+    # on its head -- filed under the *company* as its metric, with no scope --
+    # while the two columns either side of it were filed the other way up, under
+    # the company as their scope. No row of a comparables table could then find
+    # its own EBITDA, and CO-005 refused every multiple in the deck: not a
+    # finding, four refusals, and a silence that reads exactly like agreement.
+    #
+    # An ordinary fiscal-year table dates *every* value column, which is what
+    # makes it the period axis. Where only some are dated, the date qualifies
+    # that column and nothing else.
+    dated = [
+        parse_period(headers.get(column, "")) is not None
+        for column in range(1, table.column_count)
+    ]
+    columns_are_the_period_axis = bool(dated) and all(dated)
     header_units = {
         column: stated_unit(cell.text)
         for column in range(table.column_count)
         if (cell := table.cell(0, column)) is not None
     }
-    caption = _inherited_unit(slide, shape)
+    # The corner cell is inside the table and so is nearer than any caption
+    # outside it. "$ in millions" sitting there is the most ordinary way a
+    # banking table states its unit, and reading only the shapes around the
+    # table missed it: the group P&L's cells carried no currency at all, so a
+    # figure restated in GBP compared against them as a bare number and CO-001
+    # reported 1,510 disagreeing with 1,935.
+    caption = (
+        stated_unit(corner_cell.text) if corner_cell is not None else Unit()
+    ).with_inherited(_inherited_unit(slide, shape))
 
     out: list[Figure] = []
     for row in range(1, table.row_count):
@@ -882,8 +1120,11 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                 metric = column_metric if is_specific(column_metric) else row_metric
                 scope, period = "", row_period
             elif column_period is not None and row_period is None:
-                metric = row_metric if is_specific(row_metric) else column_metric
-                scope, period = "", column_period
+                if columns_are_the_period_axis:
+                    metric = row_metric if is_specific(row_metric) else column_metric
+                    scope, period = "", column_period
+                else:
+                    metric, scope, period = column_metric, row_label, column_period
             elif row_period is not None and column_period is not None:
                 # Both. The row wins as the period and the column keeps its own,
                 # which is a sub-period of it; comparing across them needs both,
@@ -915,7 +1156,7 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                     raw=text.strip(),
                 )
             )
-    return out
+    return out, corner
 
 
 def _inherited_unit(slide: SlideModel, shape: ShapeModel) -> Unit:
@@ -1096,36 +1337,225 @@ def _is_a_year(reading: NumberReading) -> bool:
     )
 
 
+#: A footnote marker riding on a figure in prose -- "$480m(1)", "EBITDA(a)".
+#: The lookbehind is what keeps "(31)" a parenthesised negative: a marker is
+#: only a marker when it is attached to something. Held to one or two digits or
+#: a single letter, so "(1,234)" is never mistaken for one.
+#:
+#: Table cells have had this since the beginning, through
+#: :func:`strip_value_footnote`. Prose did not, so "Group EBITDA of $480m(1)"
+#: put a figure of **1** into the index, labelled ``ebitda`` and dated to the
+#: sentence's own period -- a fact nobody wrote. It cost no finding here only
+#: because no real EBITDA is 1; what it cost was :meth:`FigureIndex.lookup`,
+#: which then saw EBITDA stated two ways for the period and refused to compute.
+_PROSE_FOOTNOTE: Final[re.Pattern[str]] = re.compile(
+    r"(?<=[\w%])[(\[](?:\d{1,2}|[a-e])[)\]]", re.IGNORECASE
+)
+
+#: A figure in brackets straight after another figure restates it: "GBP 1,510m
+#: (US$1,935m)". Prose reads a balanced bracket as a negative -- correctly, for
+#: "a working capital movement of (31)" -- and that reading turned the deck's
+#: own conversion into revenue of *minus* 1,935, which then contradicted every
+#: other statement of it. A restatement is read positive, and the pair is
+#: recorded so CO-008 knows the deck reconciled the two units rather than
+#: drifting between them.
+_RESTATES: Final[re.Pattern[str]] = re.compile(r"^\s*$")
+
+#: Two figures joined by a dash or "to" are the ends of a range, not two claims.
+#: PLAN.md §6: ranges are "read, and excluded from comparison rather than
+#: coerced". "Comparable companies trade at 8.0x - 9.5x LTM EBITDA" is one
+#: statement about a spread; indexed as two multiples it reported itself against
+#: the 8.7x the deck actually proposes, and against its own other end.
+_RANGE_JOIN: Final[re.Pattern[str]] = re.compile(
+    r"^\s*(?:-|–|—|to|through|and)\s*$", re.IGNORECASE
+)
+
+#: What may sit between a metric and the figure it measures without breaking the
+#: link: "revenue of $1,935m", "EBITDA was 480", "8.7x LTM EBITDA". Periods are
+#: blanked out of the gap before it is tested, so "revenue in FY25A of $1,935m"
+#: reads as one phrase. Anything else between them -- another figure above all --
+#: means the number measures something this sentence has not named.
+_CONNECTIVE: Final[re.Pattern[str]] = re.compile(
+    r"""^[\s,:=()]*
+    (?:(?:of|was|were|is|are|at|to|the|a|an|in|for|from|on|by|
+        up|down|reached|grew|rose|fell|stood|totalled|totaled|
+        amounted|approximately|circa|c\.|about|around|some|broadly)
+       [\s,:=()]*)*$""",
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _fold_sentence(text: str) -> tuple[str, list[int]]:
+    """``" ".join(text.split()).casefold()`` and a map back to ``text``.
+
+    Everything below matches on the folded string, because that is what the
+    vocabulary and :func:`_scan_periods` are folded to. The map is what lets a
+    figure still address back to the run holding its digits, which is what a fix
+    needs and what makes the index writable rather than merely readable.
+    """
+    out: list[str] = []
+    mapping: list[int] = []
+    pending_space = False
+    for index, char in enumerate(text):
+        if char.isspace():
+            if out:
+                pending_space = True
+            continue
+        if pending_space:
+            out.append(" ")
+            mapping.append(index)
+            pending_space = False
+        lowered = char.lower()
+        out.append(lowered if len(lowered) == 1 else char)
+        mapping.append(index)
+    return "".join(out), mapping
+
+
+def _mentions(folded: str, vocabulary: Sequence[str]) -> list[tuple[int, int, str]]:
+    """Where this sentence names each of the deck's own metrics.
+
+    Longest first and non-overlapping, for the reason :func:`_vocabulary` orders
+    them that way: "free cash flow" must win over "cash flow".
+    """
+    taken: list[tuple[int, int, str]] = []
+    for label in vocabulary:
+        for match in re.finditer(rf"(?<!\w){re.escape(label)}(?!\w)", folded):
+            if any(
+                match.start() < end and start < match.end()
+                for start, end, _ in taken
+            ):
+                continue
+            taken.append((match.start(), match.end(), label))
+    return sorted(taken)
+
+
+def _links(gap: str, periods: Sequence[tuple[int, int, str]], offset: int) -> bool:
+    """Whether ``gap`` joins a metric to a figure rather than separating them."""
+    blanked = list(gap)
+    for start, end, _ in periods:
+        for position in range(max(start - offset, 0), min(end - offset, len(blanked))):
+            blanked[position] = " "
+    text = "".join(blanked)
+    return not any(char.isdigit() for char in text) and bool(_CONNECTIVE.match(text))
+
+
+#: ``(metric, scope, period)`` and the two units the deck states it in, in one
+#: breath. CO-008's whole subject is a figure told in two units; §5.4 exempts it
+#: "with no stated conversion", and nothing read the conversion when the deck
+#: stated one.
+Conversion = tuple[str, str, str | None, frozenset[str]]
+
+
 def _text_figures(
     slide: SlideModel, shape: ShapeModel, vocabulary: Sequence[str]
-) -> list[Figure]:
+) -> tuple[list[Figure], list[Conversion]]:
     """Figures stated in prose, grounded in the deck's own metric vocabulary.
 
     A number is indexed only where the sentence around it names a metric the
     deck's tables or charts already use. See the module docstring: the
     alternative invents vocabulary, and a rule keyed on invented vocabulary
     reports the deck for things nobody wrote.
+
+    **Which** metric, and **which** period, are the whole of the difficulty, and
+    taking one of each for the sentence as a whole -- what this did until a real
+    deck was put through it -- gets both wrong on the sentences a deck is
+    actually written in:
+
+        "An enterprise value of $4,180m implies 8.7x LTM EBITDA."
+
+    One metric is named, so ``$4,180m`` was indexed as EBITDA. The deck then
+    contradicted itself: EBITDA was $4,180m on slide 2 and $480m on slide 7,
+    reported at ``major``, out of a sentence that is correct in every respect.
+
+        "Revenue of $1,935m in FY25A, up from $1,352m in FY23A."
+
+    Two periods are named, so :func:`parse_period` folded them into the range
+    ``FY2025A..FY2023A`` and gave it to both figures. A range agrees with no
+    single period, so neither figure was ever compared with anything -- silently,
+    and every comparison sentence in the deck went the same way.
+
+    So each figure takes the metric and the period **next to it**:
+
+    * **bound** -- a metric sits immediately before the figure, or immediately
+      after it, with only connectives and period words in between. "Revenue of
+      $1,935m" and "8.7x LTM EBITDA" are both bound; a gap containing another
+      figure is not a gap.
+    * **carried** -- no metric is adjacent, but an earlier figure in the same
+      sentence is bound, and this one is the same kind of quantity at the same
+      scale. That is "up from $1,352m", which continues the claim before it.
+      A different quantity or scale is a different claim: it is what separates
+      "up from $1,352m" from the "1.28" in "at an average rate of 1.28".
+    * **neither** -- not indexed. Refusing here costs a tie the deck may really
+      be making; indexing it invents a fact, and an invented fact in a pre-send
+      check is reported to a client.
     """
     if not shape.has_text or not vocabulary:
-        return []
+        return [], []
 
     out: list[Figure] = []
+    conversions: list[Conversion] = []
     for paragraph_index, paragraph in enumerate(shape.text_frame_paragraphs):
         text = paragraph.text
         if not text.strip():
             continue
         for sentence, start in _sentences(text):
-            metric = _metric_in(sentence, vocabulary)
-            if metric is None:
+            folded, mapping = _fold_sentence(sentence)
+            if not folded:
                 continue
-            period = parse_period(sentence)
-            for match in _IN_PROSE.finditer(sentence):
-                reading = _reading_from(match)
-                if reading is None or _is_a_year(reading):
+            scanning = _PROSE_FOOTNOTE.sub(lambda m: " " * len(m.group(0)), folded)
+            mentions = _mentions(scanning, vocabulary)
+            if not mentions:
+                continue
+            periods = _period_spans(folded)
+
+            found = [
+                (match, reading)
+                for match in _IN_PROSE.finditer(scanning)
+                if (reading := _reading_from(match)) is not None
+                and not _is_a_year(reading)
+            ]
+            ranged = _range_endpoints(scanning, found)
+
+            bound: list[tuple[int, Unit, str, str]] = []
+            previous: tuple[re.Match[str], Unit] | None = None
+            for position, (match, reading) in enumerate(found):
+                if position in ranged:
                     continue
-                run_index = _run_holding(paragraph.runs, start + match.start("int"))
+                unit = _unit_of(reading)
+                attributed = _attribute(
+                    match, mentions, periods, scanning, unit, bound
+                )
+                if attributed is None:
+                    continue
+                metric, scope = attributed
+                bound.append((match.start(), unit, metric, scope))
+
+                if (
+                    previous is not None
+                    and match.group("open")
+                    and match.group("close")
+                    and _RESTATES.match(scanning[previous[0].end() : match.start()])
+                ):
+                    reading = replace(
+                        reading, value=abs(reading.value), negative_style=None
+                    )
+                    units = {unit.currency, previous[1].currency}
+                    if len(units - {None}) == 2:
+                        conversions.append(
+                            (
+                                metric,
+                                scope,
+                                _nearest_period(match, periods),
+                                frozenset(str(name) for name in units),
+                            )
+                        )
+                previous = (match, unit)
+
+                origin = start + mapping[match.start("int")]
+                run_index = _run_holding(paragraph.runs, origin)
                 if run_index is None:
                     continue
+                raw = sentence[mapping[match.start()] : mapping[match.end() - 1] + 1]
                 out.append(
                     Figure(
                         reading=reading,
@@ -1136,12 +1566,87 @@ def _text_figures(
                         address=(paragraph_index, run_index),
                         metric=metric,
                         metric_from=f"the sentence {_ellipsis(sentence)!r}",
-                        period=period,
-                        unit=_unit_of(reading),
-                        raw=match.group(0).strip(),
+                        period=_nearest_period(match, periods),
+                        unit=unit,
+                        scope=scope,
+                        raw=raw.strip(),
                     )
                 )
-    return out
+    return out, conversions
+
+
+def _range_endpoints(
+    folded: str, found: Sequence[tuple[re.Match[str], NumberReading]]
+) -> set[int]:
+    """Which of ``found`` are the ends of a range rather than claims of their own."""
+    ends: set[int] = set()
+    for position in range(len(found) - 1):
+        left, right = found[position][0], found[position + 1][0]
+        if _RANGE_JOIN.match(folded[left.end() : right.start()]):
+            ends.update({position, position + 1})
+    return ends
+
+
+def _attribute(
+    match: re.Match[str],
+    mentions: Sequence[tuple[int, int, str]],
+    periods: Sequence[tuple[int, int, str]],
+    folded: str,
+    unit: Unit,
+    bound: Sequence[tuple[int, Unit, str, str]],
+) -> tuple[str, str] | None:
+    """The metric and scope this figure measures, or None where the sentence
+    does not say.
+
+    Two of the deck's own labels running together are a metric and the thing it
+    is a metric *of*: "Analytics revenue reached $1,196m" is revenue for
+    Analytics, and read as plain revenue it contradicted the group's $1,935m on
+    the slide above -- correctly, by its own lights, and wrongly by the deck's.
+    The nearer label is the metric and the further one is the scope, which is
+    the same reading :func:`_scoped_by_corner` gives a table's corner cell.
+    """
+    for start, end, label in mentions:
+        if end <= match.start() and _links(folded[end : match.start()], periods, end):
+            return label, _qualifier(start, mentions, periods, folded)
+    for start, _end, label in mentions:
+        if start >= match.end() and _links(
+            folded[match.end() : start], periods, match.end()
+        ):
+            return label, _qualifier(start, mentions, periods, folded)
+    for position, earlier, label, scope in reversed(bound):
+        if position < match.start() and (earlier.quantity, earlier.scale) == (
+            unit.quantity,
+            unit.scale,
+        ):
+            return label, scope
+    return None
+
+
+def _qualifier(
+    start: int,
+    mentions: Sequence[tuple[int, int, str]],
+    periods: Sequence[tuple[int, int, str]],
+    folded: str,
+) -> str:
+    """The label immediately before the one at ``start``, where there is one."""
+    for _other_start, other_end, label in mentions:
+        if other_end <= start and _links(folded[other_end:start], periods, other_end):
+            return label
+    return ""
+
+
+def _nearest_period(
+    match: re.Match[str], periods: Sequence[tuple[int, int, str]]
+) -> str | None:
+    """The period nearest this figure, which is the one it is stated for."""
+    if not periods:
+        return None
+    return min(
+        periods,
+        key=lambda span: min(
+            abs(span[0] - match.end()), abs(match.start() - span[1])
+        ),
+    )[2]
 
 
 def _sentences(text: str) -> list[tuple[str, int]]:
