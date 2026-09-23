@@ -24,10 +24,26 @@ judgement about what the slide is for. So LO-*, the logo rules and BR-008 state
 the measurement and stop, and no builder below produces a correction for them.
 
 Nor is anything fixed where the tool can see a problem but not the answer. Two
-figures that disagree, a total that does not sum, a placeholder that needs real
+figures that each *state* something and disagree, a placeholder that needs real
 words, a word the dictionary does not know, text that overflows its box: the
 tool knows something is wrong and has no way to know what is right. Inventing a
 value there would be worse than silence, because it would be wrong invisibly.
+
+**A derived figure is the exception, and it is not an inventing one.** A margin
+is EBITDA over revenue, a multiple is EV over EBITDA, a column total is the sum
+of its column, a bridge's close is its opening plus its steps. Where the deck
+prints the inputs, the answer is arithmetic on the deck's own numbers, and the
+convention -- in this tool and in the modelling it audits -- is that the derived
+figure yields to its inputs, because the inputs are the primary facts and the
+derived figure is computed from them. So CO-003 to CO-007 get a correction and
+CO-001 and CO-002 do not: there neither figure is derived from the other, and
+which is right is a judgement about the deal.
+
+CO-003 sat on the wrong side of that line until the derived checks landed, on
+the argument that a total which does not sum might be a wrong total or a wrong
+row. It might; the convention settles it, the finding states both numbers, and
+undo is one click. The distinction that matters is not "could the other side be
+wrong" -- it always could -- but whether the deck itself determines an answer.
 
 **The one exception, and why it is not one.** :func:`move_fix` writes geometry.
 It is not a correction TieOut decided on: there is no builder for it, no rule
@@ -65,6 +81,7 @@ from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding
 __all__ = [
     "MOVE_KIND",
     "MOVE_RULE_ID",
+    "RECELL_KIND",
     "RESIZE_KIND",
     "RESIZE_RULE_ID",
     "RETEXT_KIND",
@@ -82,6 +99,8 @@ __all__ = [
     "move_fix",
     "move_key",
     "plan_fixes",
+    "recell_fix",
+    "recell_key",
     "resize_fix",
     "resize_key",
     "retext_fix",
@@ -455,6 +474,63 @@ def _quotes(finding: Finding, profile: Profile) -> tuple[str, dict[str, Any], st
     return "quotes", {"style": convention}, f"Convert quotes and apostrophes to {convention}"
 
 
+def _derived_figure(
+    finding: Finding, profile: Profile
+) -> tuple[str, dict[str, Any], str] | None:
+    """A tie-out correction, where the rule computed one and it can be written.
+
+    The whole of the decision is already on the finding: PLAN.md §5.5 draws the
+    line between a *derived* figure, which has one right answer, and two
+    *stated* figures that disagree, where which is right is a judgement about
+    the deal. :class:`tieout.rules.base.Correction` carries which of the two
+    this is, so nothing here re-derives it -- a second implementation of every
+    rule's arithmetic is exactly how a tool ends up writing a number no test
+    covered.
+
+    Four things stop a fix being offered, and each is a deliberate refusal:
+    a correction the rule did not attach; an ``edit`` rather than a ``fix``;
+    a figure the write path cannot reach (``refused``, which the page shows as
+    a sentence rather than a dead button); and a replacement identical to what
+    is already there.
+    """
+    correction = finding.correction
+    if correction is None or correction.kind != "fix":
+        return None
+    if not correction.writable or not correction.replacement:
+        return None
+    if correction.replacement == correction.current:
+        return None  # pragma: no cover - a fix that changes nothing is not reported
+    if correction.source != "table":
+        # Prose figures reach `retext_fix`; nothing else is written at all.
+        if correction.source != "text":
+            return None
+        return (
+            RETEXT_KIND,
+            {
+                "slide": finding.slide_index,
+                "shape_id": correction.shape_id,
+                "paragraph": correction.address[0],
+                "run": correction.address[1],
+                "text": correction.replacement,
+            },
+            f"Set {correction.current} to {correction.replacement}",
+        )
+    row, column = correction.address
+    return (
+        RECELL_KIND,
+        {
+            "slide": finding.slide_index,
+            "shape_id": correction.shape_id,
+            "row": row,
+            "column": column,
+            "paragraph": correction.cell_paragraph,
+            "run": correction.cell_run,
+            "text": correction.replacement,
+        },
+        f"Set {correction.current} to {correction.replacement}",
+    )
+
+
 #: rule id -> the builder that turns one of its findings into a fix, or None
 #: where that particular finding cannot be corrected exactly.
 _BUILDERS: Final[dict[str, Any]] = {
@@ -467,6 +543,15 @@ _BUILDERS: Final[dict[str, Any]] = {
     "TY-001": _quotes,
     "TY-002": _whitespace,
     "TY-005": _canon,
+    # The derived tie-out rules. Each recomputes a figure the deck's own
+    # numbers determine, so the correction is arithmetic; CO-001, CO-002,
+    # CO-008 and CO-009 are deliberately absent, because there the deck states
+    # two figures and choosing between them is not TieOut's to do.
+    "CO-003": _derived_figure,
+    "CO-004": _derived_figure,
+    "CO-005": _derived_figure,
+    "CO-006": _derived_figure,
+    "CO-007": _derived_figure,
 }
 
 
@@ -653,6 +738,71 @@ def retext_key(slide_index: int, shape_id: int, paragraph: int, run: int) -> str
     two corrections, not one applied twice.
     """
     return f"{RETEXT_RULE_ID}|{slide_index}|{shape_id}|{paragraph}|{run}"
+
+
+#: Rewriting one figure inside a table cell.
+#:
+#: A separate kind from ``retext`` because the XML path is different and the
+#: difference is not cosmetic: a table's text lives in
+#: ``a:tbl/a:tr/a:tc/a:txBody``, reached through a ``graphicFrame``, and the
+#: ``p:txBody`` :func:`_apply_retext` looks for is simply not there. Before this
+#: existed, every correction the tie-out rules could compute landed on a cell,
+#: and every one of them would have raised "that shape has no text frame" --
+#: which is why PLAN.md §6 listed the table-cell write path as the thing that
+#: "must refuse, visibly, rather than appearing to work". It no longer has to
+#: refuse.
+RECELL_KIND: Final[str] = "recell"
+
+
+def recell_key(
+    slide_index: int, shape_id: int, row: int, column: int, paragraph: int, run: int
+) -> str:
+    """The identity of one figure, in one cell, of one table, on one slide.
+
+    As fine-grained as :func:`retext_key` and for the same reason: a table
+    holds many figures and two corrections to two cells are two decisions.
+    """
+    return f"RECELL|{slide_index}|{shape_id}|{row}|{column}|{paragraph}|{run}"
+
+
+def recell_fix(
+    *,
+    slide_index: int,
+    shape_id: int,
+    shape_name: str,
+    row: int,
+    column: int,
+    paragraph: int,
+    run: int,
+    text: str,
+) -> Fix:
+    """A fix that sets one run of one table cell to ``text``.
+
+    Positional throughout, like :func:`retext_fix`: row, column, paragraph and
+    run, because the same digits legitimately appear in other cells that were
+    never wrong. Nothing but the run's ``<a:t>`` is touched, so the cell keeps
+    its font, its fill, its alignment and any footnote marker sitting in the
+    run beside it.
+    """
+    return Fix(
+        key=recell_key(slide_index, shape_id, row, column, paragraph, run),
+        rule_id=RETEXT_RULE_ID,
+        summary=(
+            f"Set row {row + 1}, column {column + 1} of "
+            f"{shape_name or f'shape {shape_id}'} on slide {slide_index} to {text}"
+        ),
+        slides=(slide_index,),
+        kind=RECELL_KIND,
+        payload={
+            "slide": slide_index,
+            "shape_id": shape_id,
+            "row": int(row),
+            "column": int(column),
+            "paragraph": int(paragraph),
+            "run": int(run),
+            "text": text,
+        },
+    )
 
 
 def retext_fix(
@@ -1435,10 +1585,92 @@ def _apply_retext(path: Path, fix: Fix) -> int:
     return 1
 
 
+def _apply_recell(path: Path, fix: Fix) -> int:
+    """Replace one run of one table cell, addressed by its exact position.
+
+    The same discipline as :func:`_apply_retext` -- positional, never a
+    substring match -- down a different path. A table's text is not in the
+    shape's ``p:txBody``; it is in
+    ``a:graphic/a:graphicData/a:tbl/a:tr[row]/a:tc[column]/a:txBody``, and a
+    ``graphicFrame`` has no ``p:txBody`` at all. That is the whole reason this
+    function exists rather than a flag on the other one.
+
+    Rows and columns are counted as the loader counts them, so an index taken
+    from :mod:`tieout.figures` names the same cell here. A merged cell still
+    occupies its grid position in the XML, so indexing ``a:tc`` within
+    ``a:tr`` stays aligned with the model's view of the grid.
+    """
+    payload = fix.payload
+    with zipfile.ZipFile(path) as archive:
+        items = {name: archive.read(name) for name in archive.namelist()}
+
+    parts = _slide_parts(items)
+    index = int(payload["slide"])
+    if not 1 <= index <= len(parts):
+        raise MoveFailed(f"this deck has no slide {index}")
+    part = parts[index - 1]
+    if part not in items:
+        raise MoveFailed(f"slide {index} points at {part}, which is not in the package")
+
+    root = etree.fromstring(items[part])
+    tree = root.find("p:cSld/p:spTree", _NS)
+    if tree is None:
+        raise MoveFailed(f"slide {index} has no shape tree")
+
+    element = _shape_element_anywhere(tree, int(payload["shape_id"]))
+    table = element.find(".//a:tbl", _NS)
+    if table is None:
+        raise MoveFailed("that shape is not a table")
+
+    rows = table.findall("a:tr", _NS)
+    row_index = int(payload["row"])
+    if not 0 <= row_index < len(rows):
+        raise MoveFailed(f"row {row_index} does not exist in that table")
+    cells = rows[row_index].findall("a:tc", _NS)
+    column_index = int(payload["column"])
+    if not 0 <= column_index < len(cells):
+        raise MoveFailed(f"column {column_index} does not exist in that row")
+
+    body = cells[column_index].find("a:txBody", _NS)
+    if body is None:
+        raise MoveFailed("that cell has no text")
+
+    paragraphs = body.findall("a:p", _NS)
+    p_index = int(payload["paragraph"])
+    if not 0 <= p_index < len(paragraphs):
+        raise MoveFailed(f"paragraph {p_index} does not exist in that cell")
+
+    runs = [
+        child
+        for child in paragraphs[p_index]
+        if etree.QName(child).localname in ("r", "br", "fld")
+    ]
+    r_index = int(payload["run"])
+    if not 0 <= r_index < len(runs):
+        raise MoveFailed(f"run {r_index} does not exist in that cell")
+    run = runs[r_index]
+    if etree.QName(run).localname != "r":
+        raise MoveFailed(
+            "that is a line break or an auto-updating field, not editable text"
+        )
+
+    text_el = run.find("a:t", _NS)
+    if text_el is None:
+        text_el = etree.SubElement(run, f"{{{_A}}}t")
+    new_text = str(payload["text"])
+    text_el.text = new_text
+    if new_text != new_text.strip():
+        text_el.set(_XML_SPACE, "preserve")
+
+    _write_part(path, items, part, root)
+    return 1
+
+
 _APPLIERS: Final[dict[str, Any]] = {
     MOVE_KIND: _apply_move,
     RESIZE_KIND: _apply_resize,
     RETEXT_KIND: _apply_retext,
+    RECELL_KIND: _apply_recell,
     "colour": _apply_colour,
     "typeface": _apply_typeface,
     "metadata": _apply_metadata,

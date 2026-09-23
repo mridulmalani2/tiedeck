@@ -511,7 +511,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-46 rules across six categories. Each one is an independent class — rules never
+52 rules across six categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -608,25 +608,84 @@ switched off.
 | **CH-004** | major | on | A multi-series chart gives no way to tell the series apart | the craft |
 | **CH-005** | minor | on | Series in one chart label their values to different precision | the craft |
 
-### Consistency (3 rules)
+### Consistency (9 rules)
 
 The one category that reads the deck's *content* rather than its form, and it
-does so arithmetically: every finding is a comparison between two numbers the
-deck itself states. No profile input, no key, no network. These are the mistakes
-that survive four turns of a deck because each page is internally correct.
+does so arithmetically: every finding is a comparison between numbers the deck
+itself states. No profile input, no key, no network. These are the mistakes that
+survive four turns of a deck because each page is internally correct.
 
 | Rule | Severity | Default | What it measures | Expectation derived from |
 |---|---|---|---|---|
-| **CO-001** | major | on | The same labelled figure differs between tables | not learned; fixed behaviour |
+| **CO-001** | major | on | The same labelled figure differs between two statements of it | not learned; fixed behaviour |
 | **CO-002** | major | on | The same figure appears in two different scales | not learned; fixed behaviour |
 | **CO-003** | major | on | A row labelled as a total does not sum its column | not learned; fixed behaviour |
+| **CO-004** | major | on | A stated margin does not equal its own inputs | not learned; fixed behaviour |
+| **CO-005** | major | on | A stated multiple does not equal its own inputs | not learned; fixed behaviour |
+| **CO-006** | major | on | A stated growth rate does not match the series it describes | not learned; fixed behaviour |
+| **CO-007** | major | on | A bridge's steps do not carry its opening to its closing | not learned; fixed behaviour |
+| **CO-008** | minor | on | The same figure is stated in two different units | not learned; fixed behaviour |
+| **CO-009** | minor | on | Two as-of dates govern the same figures | not learned; fixed behaviour |
 
-Each one keys a number on the pair (row label, column header) so the column
-disambiguates the scope, ignores labels too generic to identify a metric
-(`total`, `value`, `other`), and treats a label bearing a footnote marker as the
-same label without it. CO-003 reads a total row four ways — the block since the
-previous total, everything above it, all line items, the subtotals above it —
-and only reports when no reading sums.
+All nine read one **figure index** (`tieout/figures.py`), which walks the deck
+once and records every number in it — table cell, chart point, figure in a
+sentence — with a metric, a period, a unit and an address precise enough to
+write a correction back. One module answers "are these two numbers statements of
+the same fact?", so the rule that catches a contradiction between two tables is
+the same rule that catches it between a table and the headline above it.
+
+**CO-001 to CO-003** compare a figure with another statement of the same figure.
+The index keys on the metric, the scope and the period, ignores labels too
+generic to identify anything (`total`, `value`, `other`), and treats a label
+bearing a footnote marker as the same label without it. CO-003 reads a total row
+four ways — the block since the previous total, everything above it, all line
+items, the subtotals above it — and only reports when no reading sums.
+
+**CO-004 to CO-007** recompute a figure the deck derives from figures it also
+shows, so every finding is arithmetic and states its working: *"24.0% stated,
+18.4% from EBITDA 351 (slide 6) over revenue 1,908 (slide 6)"*. Where an input
+is missing, stated more than one way, or in a scale that cannot be reconciled,
+the check is **refused and recorded as unchecked** rather than guessed at —
+because for a pre-send tool "I could not verify this" and "this is fine" must
+never look the same. Tolerances are derived from the displayed precision of
+every figure involved, so a correctly-rounded margin is not a defect.
+
+**CO-008 and CO-009** are about how a figure is told rather than what it says:
+the same figure in millions on one page and billions on another, or two as-of
+dates governing the same numbers. Both are `minor`, because both are ordinary
+practice in some decks and a drafting observation rather than an accusation.
+
+Never: inventing a figure where nothing in the deck determines it. A correction
+is offered only where the answer is arithmetic.
+
+### Acting on a tie-out finding
+
+Two buttons, and the split between them is the whole argument.
+
+**Fix it** is offered only where the figure is *derived* and therefore has one
+right answer: a margin that must equal its inputs, a multiple that must equal
+its inputs, a total that must equal its column, a bridge's closing figure. The
+correction is arithmetic on figures the deck already prints, so TieOut is not
+choosing anything. The convention — here and in the modelling this audits — is
+that the derived figure yields to its inputs, because the inputs are the primary
+facts. It is one click to undo if you disagree.
+
+**Edit it** is offered where two figures are each *stated* and disagree. Which
+of them is right is a judgement about the deal, not arithmetic, so TieOut writes
+nothing. The button opens the run in the in-place editor on the slide, with the
+counterpart figure and its slide floated beside it, so the person deciding has
+both numbers in front of them. Type, Enter to write, Escape to leave it alone.
+
+**A replacement is written in the original's own format.** `NumberReading`
+carries the decimals, the thousands separator and which one it is, the negative
+style, the currency and the suffix, and a correction keeps all of them: 24.0%
+becomes 18.4%, not 18.39622641. A fix that corrected the arithmetic and dropped
+a per-cent sign would trade one finding for a typography one, on a slide TieOut
+had just edited.
+
+**A refusal is visible.** A chart's values live in a cached copy and in an
+embedded workbook, and TieOut writes neither — so a finding anchored on a chart
+point says that in a sentence rather than offering a button that does nothing.
 
 ### Turning a rule on or off
 
@@ -692,11 +751,16 @@ is a separate package and a separate command.
 
 ### Why it exists at all
 
-TieOut's own consistency rules compare labelled figures between tables
-arithmetically: `CO-001` catches the same figure stated two ways, `CO-002` a
-factor-of-a-thousand unit error, `CO-003` a total that does not sum. What they
-cannot do is read. A headline claiming 20% growth over a table showing 8% is a
-sentence, not a sum, and no amount of parsing gets there.
+TieOut's own consistency rules compare figures arithmetically: `CO-001` catches
+the same figure stated two ways — including a headline contradicting the table
+it sits over — `CO-002` a factor-of-a-thousand unit error, `CO-003` a total that
+does not sum, and `CO-004` to `CO-007` a margin, multiple, growth rate or bridge
+that does not equal the inputs the deck gives for it.
+
+What they cannot do is read. A claim with no figure anywhere to check it
+against, an enumeration that does not match its own count, a measure defined one
+way and used another — those need reading rather than counting, and no amount of
+parsing gets there.
 
 So the deterministic layer was built first, and deliberately. Every question it
 can answer is one the model never needs to see, which is the cheapest possible
@@ -788,9 +852,9 @@ convention. There is no function that takes a deck and returns findings, because
 such a function would have to decide on its own that a payload was safe:
 
 ```python
-prepared = prepare(deck, profile, forbidden=[...])   # offline, no key
-prepared.plan.is_clear                               # or read the residuals
-outcome = send(prepared.approve(), client)           # refuses otherwise
+prepared = prepare(deck, profile, forbidden=[...])      # offline, no key
+prepared.plan.is_clear                                  # or read the residuals
+outcome = send(prepared.approve(digest), client)        # refuses otherwise
 ```
 
 `send` refuses a payload with residuals outstanding, and then independently
@@ -803,6 +867,50 @@ report rather than a user error, and nothing is sent.
 Residuals are deliberately over-eager. Clearing one is a judgement, so it
 persists: pass it to `--forbid` if it identifies someone, or to the profile's
 allowlist if it does not.
+
+### The approval names what it approves
+
+`approve` takes a digest rather than being a bare `True`, because "approved" on
+its own does not say *approved what*. In the CLI that distinction is academic —
+`prepare` and `send` are two lines apart. In the browser they are two HTTP
+requests, and between them the deck can be replaced, the forbidden-words box
+edited or the blocklist changed, and a stale approval would then apply to a
+payload nobody had read.
+
+The digest is a SHA-256 over the residual list **and** the payload text
+together. Both halves are needed: over the residual list alone, "nothing
+outstanding" would hash to one constant for every deck that redacts cleanly, and
+an approval granted for one clean deck would validate a send of any other.
+
+`redact` prints it, and `check --approve DIGEST` refuses if anything has moved
+since:
+
+```
+$ tieout-review redact deck.pptx --client acme --forbid "Meridian Capital"
+...
+approval digest 9f2c4e...c1a0
+
+$ tieout-review check deck.pptx --client acme --forbid "Meridian Capital" \
+    --approve 9f2c4e...c1a0
+```
+
+It is not a signature and is not meant to be. It defends against drift, which
+happens by accident and leaves no trace; it does not defend against someone who
+can already post to the loopback API, which is the session token's job.
+
+### What left, and when
+
+Every transmission appends one line to `profiles/outbound.jsonl` — timestamp,
+deck filename, model, character count, redaction count, residual count, the
+approved digest, and a SHA-256 of the transmitted text. **Never the text.** A
+log that quotes the payload is a second copy of the thing being protected,
+sitting in plaintext somewhere nobody is thinking about.
+
+The line is written *before* the payload is handed to the transport, so a send
+that dies mid-flight still leaves evidence that it happened. A transmission that
+cannot be recorded does not happen: if the log cannot be written, the review is
+refused rather than sent unlogged. Set `TIEOUT_OUTBOUND_LOG` to put it
+somewhere else — a share the analyst cannot edit, for instance.
 
 ### The questions it asks
 
@@ -1196,11 +1304,15 @@ when the server stops.
 4. **Content review** (optional, off by default). A key field and a forbidden
    words box, then **Show me what would be sent**: the redaction table, the
    residual list, and the payload verbatim. Nothing is sent until you have read
-   the residuals and said so.
+   the residuals and said so — and that agreement is bound to the payload you
+   were shown, so editing the forbidden words, or correcting the deck, after
+   agreeing means the preview is asked for again rather than a stale approval
+   being applied to text nobody read.
 5. **Run.**
 6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
    can correct exactly, **Move it** where the answer is a position rather than a
-   substitution, and **Export deck** when you are done. Each correction reports
+   substitution, **Edit it** where two stated figures disagree and only you know
+   which is right, and **Export deck** when you are done. Each correction reports
    what it fixed, what is left and what it exposed — see
    [What each correction changed](#what-each-correction-changed). **Copy note** puts the same thing on
    the clipboard as plain text, and the self-contained HTML report is the one
@@ -1489,15 +1601,20 @@ tieout-review redact DECK [--client NAME] [--profile PATH]
                           [--include-notes] [--show-payload]
 
 tieout-review check  DECK [--client NAME] [--profile PATH]
-                          [--forbid "a,b,c"] [--forbid-file PATH] [--yes]
+                          [--forbid "a,b,c"] [--forbid-file PATH]
+                          [--yes | --approve DIGEST]
                           [--include-notes] [--model NAME]
                           [--format table|json|html] [--out PATH]
                           [--fail-on SEVERITY] [--fail-on-semantic] [--quiet]
 ```
 
 `redact` exits `1` when something could not be cleared, so it scripts as a
-pre-flight check. `check` refuses to send in that case unless `--yes` is passed,
-and exits `2` rather than proceeding. Its diagnostic summary goes to stderr, so
+pre-flight check, and prints the approval digest that `check --approve` binds
+to. `check` refuses to send while anything is outstanding unless `--yes` or
+`--approve` is passed, and exits `2` rather than proceeding. `--approve DIGEST`
+is the stronger of the two: it names the residual list that was read, and
+refuses if the deck or the term list has moved since. `--yes` accepts whatever
+the list says at that moment. Its diagnostic summary goes to stderr, so
 `--format json` on stdout stays parseable.
 
 Speaker notes are excluded from the payload unless `--include-notes` is passed.
@@ -1924,13 +2041,14 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **46 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **52 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
-   tested. A fifth category, **consistency** (3 rules), is then added beyond the
-   specification: the deck's own tables are enough to catch a figure that
-   disagrees with itself, which is the defect a banker most wants caught and the
-   one no amount of formatting discipline surfaces.
+   tested. A fifth category, **consistency** (9 rules), is then added beyond the
+   specification: the deck's own figures are enough to catch a number that
+   disagrees with itself or with the arithmetic it claims, which is the defect a
+   banker most wants caught and the one no amount of formatting discipline
+   surfaces.
 2. **An optional semantic layer the specification does not mention.** Section 2
    forbids LLM calls and network access, and `tieout` still honours that
    absolutely. `tieout_review` is additive: a separate package, a separate

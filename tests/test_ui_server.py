@@ -511,7 +511,7 @@ def test_an_unapproved_residual_list_stops_the_send(client, onboarded, dirty_pat
             "deck_id": upload["deck_id"],
             "client": "demo",
             "semantic": True,
-            "approved": False,
+            "approved_digest": None,
         },
     )
     assert response.status_code == 200
@@ -519,6 +519,146 @@ def test_an_unapproved_residual_list_stops_the_send(client, onboarded, dirty_pat
     assert review["held"] is True
     assert calls == [], "the transport must not have been reached"
     assert "Nothing has been sent" in review["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# The approval binding
+# --------------------------------------------------------------------------- #
+#
+# The gap this closes, in the words of PLAN.md §4: "``approved`` is an unbound
+# assertion. The browser posts ``approved: true``; the server cannot tell
+# whether that approval corresponds to the residual list it displayed, or to any
+# list at all." Over HTTP the display and the send are two requests, and
+# anything can happen between them. These are the tests that the second request
+# has to name what the first one showed.
+
+
+class _Recording:
+    """A transport that remembers whether it was reached at all."""
+
+    model = "stub-model"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, system, user, schema):
+        self.calls.append((system, user))
+        return json.dumps({"findings": []}), {"input_tokens": 1, "output_tokens": 1}
+
+
+def _transport(monkeypatch) -> _Recording:
+    import tieout_ui.server as server_module
+
+    recording = _Recording()
+    monkeypatch.setattr(server_module, "_build_review_client", lambda *a, **k: recording)
+    return recording
+
+
+def _preview(client, deck_id, **extra: object):
+    body = {"deck_id": deck_id, "client": "demo"}
+    body.update(extra)
+    return client.post("/api/redact", json=body).json()
+
+
+def test_the_redaction_plan_carries_a_digest(client, onboarded, uploaded):
+    plan = _preview(client, uploaded["deck_id"])
+    assert len(plan["digest"]) == 64
+    assert plan["digest"] == _preview(client, uploaded["deck_id"])["digest"], (
+        "the same deck and the same terms must produce the same digest, or the "
+        "binding would refuse every honest approval"
+    )
+
+
+def test_a_digest_from_a_different_term_list_is_refused(
+    client, onboarded, dirty_path, monkeypatch
+):
+    """The realistic drift: the forbidden-terms box is edited after previewing.
+
+    Two requests, and between them the payload changed. The approval still names
+    the old one, and the old one is not what would be sent.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    transport = _transport(monkeypatch)
+    upload = client.post(
+        "/api/decks", files={"file": (dirty_path.name, dirty_path.read_bytes(), _MIME)}
+    ).json()
+
+    preview = _preview(client, upload["deck_id"], forbidden="Ashcombe Partners")
+    assert preview["residuals"], "the dirty fixture is expected to leave a residual"
+
+    review = client.post(
+        "/api/check",
+        json={
+            "deck_id": upload["deck_id"],
+            "client": "demo",
+            "semantic": True,
+            # The approval is honest; the term list underneath it is not the one
+            # it was granted for.
+            "forbidden": "",
+            "approved_digest": preview["digest"],
+        },
+    ).json()["review"]
+
+    assert review["held"] is True
+    assert "the deck changed since you approved this" in review["detail"]
+    assert transport.calls == [], "a refused approval must not have reached the transport"
+
+
+def test_a_digest_that_matches_sends(client, onboarded, dirty_path, monkeypatch):
+    """The other half. A binding that refused everything would also pass the
+    test above, and would be useless."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    transport = _transport(monkeypatch)
+    upload = client.post(
+        "/api/decks", files={"file": (dirty_path.name, dirty_path.read_bytes(), _MIME)}
+    ).json()
+
+    preview = _preview(client, upload["deck_id"], forbidden="Ashcombe Partners")
+    review = client.post(
+        "/api/check",
+        json={
+            "deck_id": upload["deck_id"],
+            "client": "demo",
+            "semantic": True,
+            "forbidden": "Ashcombe Partners",
+            "approved_digest": preview["digest"],
+        },
+    ).json()["review"]
+
+    assert review["held"] is False, review.get("detail")
+    assert len(transport.calls) == 1
+
+
+def test_a_bare_true_is_no_longer_an_approval(client, onboarded, dirty_path, monkeypatch):
+    """The field that used to carry the claim is gone, and a client still
+    sending it is refused rather than quietly believed."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    transport = _transport(monkeypatch)
+    upload = client.post(
+        "/api/decks", files={"file": (dirty_path.name, dirty_path.read_bytes(), _MIME)}
+    ).json()
+    assert _preview(client, upload["deck_id"])["residuals"]
+
+    review = client.post(
+        "/api/check",
+        json={
+            "deck_id": upload["deck_id"],
+            "client": "demo",
+            "semantic": True,
+            "approved": True,
+        },
+    ).json()["review"]
+
+    assert review["held"] is True
+    assert transport.calls == []
+
+
+def test_the_page_echoes_the_digest_rather_than_a_boolean(client):
+    """Asserted on the served page, because a server that binds and a page that
+    never sends the binding is a hold nobody can satisfy."""
+    page = client.get("/").text
+    assert "approved_digest" in page
+    assert "S.digest = plan.digest" in page
 
 
 def test_a_semantic_finding_is_labelled_and_reaches_the_slide(
@@ -550,7 +690,6 @@ def test_a_semantic_finding_is_labelled_and_reaches_the_slide(
             "deck_id": uploaded["deck_id"],
             "client": "demo",
             "semantic": True,
-            "approved": True,
         },
     ).json()
     review = body["review"]
@@ -568,7 +707,6 @@ def test_a_missing_key_is_reported_rather_than_raised(client, onboarded, uploade
             "deck_id": uploaded["deck_id"],
             "client": "demo",
             "semantic": True,
-            "approved": True,
         },
     )
     assert response.status_code == 200
@@ -598,7 +736,6 @@ def test_the_key_is_never_echoed_back(client, onboarded, uploaded, monkeypatch):
             "deck_id": uploaded["deck_id"],
             "client": "demo",
             "semantic": True,
-            "approved": True,
             "api_key": "sk-ant-do-not-echo-me",
         },
     )
@@ -615,7 +752,6 @@ def test_the_key_is_not_written_anywhere_under_the_session(
             "deck_id": uploaded["deck_id"],
             "client": "demo",
             "semantic": True,
-            "approved": True,
             "api_key": "sk-ant-do-not-persist-me",
         },
     )

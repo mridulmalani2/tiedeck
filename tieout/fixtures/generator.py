@@ -70,6 +70,14 @@ P: Final[str] = NS["p"]
 _PLAIN_TABLE_STYLE: Final[str] = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
 
 #: Layout indices in the stock python-pptx template that the generator repurposes.
+#: Where a recap table sits: bottom right of a content slide, clear of the two
+#: body columns and above the footnote rule. Every seeded tie-out defect that
+#: needs a table of its own goes here, so none of them collides with the body
+#: text the layout rules are measured against.
+_RECAP_LEFT_PT: Final[int] = 492
+_RECAP_TOP_PT: Final[int] = 384
+_RECAP_WIDTH_PT: Final[int] = 432
+
 _LAYOUT_TITLE: Final[int] = 0
 _LAYOUT_SECTION: Final[int] = 2
 _LAYOUT_TITLE_ONLY: Final[int] = 5
@@ -725,6 +733,71 @@ class _DeckBuilder:
         if self.defect_on("CO-002", slide_spec.index):
             self._recap_table(slide, "1,908", "1,908,000", metric="Revenue")
 
+        # -- the derived checks ----------------------------------------------
+        #
+        # Every one of these is placed against a period or a label that the
+        # projections table on slide 6 does not carry. That is not fussiness:
+        # a wrong margin stated for 2025A is *also* a CO-001 contradiction with
+        # slide 6's own margin column, and a bridge whose bars are labelled
+        # "EBITDA" restates EBITDA levels the projections table already gives.
+        # Either would make two rules fire on one seed, and the suite's per-rule
+        # assertion -- catches its own, reports nothing else -- would stop
+        # meaning anything.
+        if self.defect_on("CO-004", slide_spec.index):
+            self._grid_table(
+                slide,
+                ("Fiscal year", "Revenue", "EBITDA", "Margin"),
+                # 580 / 3,050 is 19.0%, not 24.0%.
+                (("2028E", "3,050", "580", "24.0%"),),
+            )
+        if self.defect_on("CO-006", slide_spec.index):
+            self._grid_table(
+                slide,
+                ("Metric", "Value"),
+                # 2,760 from 1,562 over three years is 20.9%, not 30.0%.
+                #
+                # Struck from 2024A rather than 2023A deliberately. TY-006 seeds
+                # a stray decimal into the 2023A revenue cell, so on the dirty
+                # deck that year is stated two ways -- 1,284.5 in the table and
+                # 1,284 in the chart -- and CO-006 refuses to compute from an
+                # ambiguous endpoint, which is the behaviour it should have and
+                # would have made this seed silent.
+                (("Revenue CAGR 2024A-2027E", "30.0%"),),
+            )
+        if self.defect_on("CO-007", slide_spec.index):
+            self._grid_table(
+                slide,
+                # Headed "movement", not "EBITDA": the bars are deltas, and a
+                # column headed EBITDA would have every step read as a level
+                # and compared with the projections table.
+                ("Step", "EBITDA movement"),
+                (
+                    ("Opening", "263"),
+                    ("Volume", "45"),
+                    ("Price", "30"),
+                    ("Cost", "13"),
+                    # 263 + 45 + 30 + 13 is 351, not 400.
+                    ("Closing", "400"),
+                ),
+            )
+        if self.defect_on("CO-009", slide_spec.index):
+            # Restates one comparable's enterprise value correctly, under a
+            # footnote dated ten weeks earlier than slide 12's. The figures
+            # agree; only the date they are true of does not.
+            self._grid_table(
+                slide,
+                ("Company", "Enterprise value"),
+                (("Calderwood Logistics", "8,420"),),
+            )
+        if self.defect_on("CO-008", slide_spec.index):
+            # The same figure slide 6 states as 1,908 in millions, told in
+            # billions. Arithmetically identical, which is the point: CO-001
+            # must stay silent and CO-008 must not.
+            self._unit_caption(slide, "Figures in US$ billions")
+            self._grid_table(
+                slide, ("Fiscal year", "Revenue"), (("2025A", "1.908"),)
+            )
+
         self._footnote(slide, slide_spec)
 
     def _recap_table(
@@ -738,7 +811,7 @@ class _DeckBuilder:
         pair to compare, and only the value differs.
         """
         frame = slide.shapes.add_table(
-            2, 2, Pt(492), Pt(384), Pt(432), Pt(48)
+            2, 2, Pt(_RECAP_LEFT_PT), Pt(_RECAP_TOP_PT), Pt(_RECAP_WIDTH_PT), Pt(48)
         )
         frame.name = "Recap table"
         table = frame.table
@@ -764,6 +837,63 @@ class _DeckBuilder:
             self._cell_text(cell, value, font)
         del correct
 
+    def _unit_caption(self, slide: Any, text: str) -> None:
+        """A scale stated directly above the recap table, overriding the slide's.
+
+        Placed to overlap the table horizontally and to sit just above it,
+        because that is the only arrangement :func:`tieout.figures._inherited_unit`
+        will take a caption from in preference to the slide's own footnote.
+        """
+        box = self._text_box(slide, _RECAP_LEFT_PT, _RECAP_TOP_PT - 16, _RECAP_WIDTH_PT,
+                             12, "Recap units")
+        self._write_paragraph(
+            box.text_frame.paragraphs[0], text, self.brand.footnote_font()
+        )
+
+    def _grid_table(
+        self, slide: Any, headings: tuple[str, ...], rows: tuple[tuple[str, ...], ...]
+    ) -> None:
+        """A small table in the recap slot, of arbitrary shape.
+
+        :meth:`_recap_table` restates one figure and is fixed at two by two.
+        The derived checks need three and four columns, and a bridge needs six
+        rows, so the general form lives here and the shape comes from the seed.
+        """
+        columns = len(headings)
+        height = 18 * (len(rows) + 1)
+        frame = slide.shapes.add_table(
+            len(rows) + 1,
+            columns,
+            Pt(_RECAP_LEFT_PT),
+            Pt(_RECAP_TOP_PT),
+            Pt(_RECAP_WIDTH_PT),
+            Pt(height),
+        )
+        frame.name = "Recap table"
+        table = frame.table
+        self._plain_table_style(table)
+        first = _RECAP_WIDTH_PT // 2 if columns == 2 else _RECAP_WIDTH_PT // (columns + 1)
+        rest = (_RECAP_WIDTH_PT - first) // max(1, columns - 1)
+        for index in range(columns):
+            table.columns[index].width = Emu((first if index == 0 else rest) * 12700)
+        for index in range(len(rows) + 1):
+            table.rows[index].height = Emu(18 * 12700)
+
+        for column, heading in enumerate(headings):
+            cell = table.cell(0, column)
+            self._fill_cell(cell, self.brand.house_navy)
+            self._cell_text(cell, heading, self.brand.header_cell_font())
+        for row_index, row in enumerate(rows, start=1):
+            for column, value in enumerate(row):
+                cell = table.cell(row_index, column)
+                self._fill_cell(cell, self.brand.paper)
+                font = (
+                    self.brand.body_font(self.brand.table_sizes_pt[1])
+                    if column == 0
+                    else self.brand.figure_cell_font()
+                )
+                self._cell_text(cell, value, font)
+
     def _build_table(self, slide: Any, slide_spec: SlideSpec) -> None:
         self._title_block(slide, slide_spec)
         columns: list[str] = list(slide_spec.payload.get("columns", []))
@@ -780,6 +910,11 @@ class _DeckBuilder:
             rows[0][1] = "USD 8,420"
         if self.defect_on("TY-008", slide_spec.index) and rows:
             rows[0][0] = "As at 09/14/2026"
+        if self.defect_on("CO-005", slide_spec.index) and len(rows) > 2:
+            # 4,935 over 602 is 8.2x, not 11.5x. Seeded on the third row rather
+            # than the first because TY-007 already rewrites the first, and two
+            # seeds in one cell tell you nothing about either rule.
+            rows[2][3] = "11.5x"
 
         row_count = len(rows) + 1
         table_height = 24 + 24 * len(rows)
@@ -925,6 +1060,11 @@ class _DeckBuilder:
         text = slide_spec.payload.get("footnote")
         if not text:
             return
+        if self.defect_on("CO-009", slide_spec.index):
+            # A second as-of date, governing a figure this slide restates
+            # correctly. The figures agree, which is exactly why nobody notices:
+            # the deck is internally consistent and externally out of date.
+            text = f"Source: {self.spec.advisor_mark} analysis as at 30-June-2026."
         top = FOOTNOTE_TOP_PT
         if self.defect_on("LO-005", slide_spec.index):
             top = FOOTNOTE_TOP_PT - 36

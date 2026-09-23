@@ -1154,6 +1154,13 @@ def _table_flag(properties: etree._Element | None, name: str) -> bool:
 _C: Final[str] = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 _CHART_NS: Final[dict[str, str]] = {**NS, "c": _C}
 
+#: A ceiling on how many points one series is materialised into. A cache is
+#: free to declare a ``ptCount`` far larger than it holds values for, and a
+#: malformed or hostile part could declare a very large one; the tuple is built
+#: from a number in the file, so the file does not get to choose how much is
+#: allocated. No chart anyone puts on a slide comes near this.
+_MAX_CHART_POINTS: Final[int] = 4096
+
 _CHART_TYPE_TAGS: Final[tuple[str, ...]] = (
     "barChart",
     "bar3DChart",
@@ -1258,6 +1265,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
             ChartSeries(
                 name=_chart_text(name_el) if name_el is not None else None,
                 point_count=count,
+                values=_series_values(ser),
                 fill_hex=_series_fill(ser, context),
                 has_data_labels=_labels_shown(labels, inherited),
                 label_number_format=_label_format(labels) or _label_format(inherited),
@@ -1444,6 +1452,53 @@ def _every_point_overrides(ser: etree._Element) -> bool:
     ]
     declared = max(counts, default=0)
     return declared > 0 and len(overrides) >= declared
+
+
+def _series_values(ser: etree._Element) -> tuple[float | None, ...]:
+    """The plotted values of one series, from its cache or its literal.
+
+    Indexed by ``c:pt@idx`` rather than by document order. A sparse cache omits
+    the points it has no value for, so reading the ``c:pt`` elements in sequence
+    silently shifts every later point one category to the left -- which is
+    exactly the kind of off-by-one that makes a tie-out rule accuse a correct
+    chart. The gaps come back as ``None``.
+
+    ``c:numCache`` is the drawn data where the series points at a range;
+    ``c:numLit`` is where the series carries its values itself. Both are read,
+    and a cache wins where a series somehow has both, because the cache is the
+    one PowerPoint renders.
+    """
+    val = ser.find("c:val", _CHART_NS)
+    if val is None:
+        return ()
+    source = val.find("c:numRef/c:numCache", _CHART_NS)
+    if source is None:
+        source = val.find("c:numLit", _CHART_NS)
+    if source is None:
+        return ()
+
+    declared = 0
+    count_el = source.find("c:ptCount", _CHART_NS)
+    if count_el is not None and count_el.get("val"):
+        with contextlib.suppress(ValueError):
+            declared = int(str(count_el.get("val")))
+
+    by_index: dict[int, float] = {}
+    for point in source.findall("c:pt", _CHART_NS):
+        raw_index = point.get("idx")
+        value_el = point.find("c:v", _CHART_NS)
+        if raw_index is None or value_el is None or value_el.text is None:
+            continue
+        with contextlib.suppress(ValueError):
+            by_index[int(raw_index)] = float(value_el.text)
+
+    if not by_index:
+        return ()
+    length = max(declared, max(by_index) + 1)
+    # A cache claiming more points than any deck plots is a malformed part, and
+    # materialising it would allocate on a number this code did not choose.
+    length = min(length, _MAX_CHART_POINTS)
+    return tuple(by_index.get(index) for index in range(length))
 
 
 def _chart_text_strings(

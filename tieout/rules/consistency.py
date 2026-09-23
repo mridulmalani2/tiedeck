@@ -6,52 +6,60 @@ thing that gets asked about in the room, and the thing nobody catches at 2am on
 the fourth turn of a deck.
 
 They are deliberately mechanical and deliberately narrow. Everything here is
-derived from the deck's own tables, so a finding is arithmetic rather than
-opinion, it is reproducible, and it needs no profile, no key and no network.
-That matters: the same question put to a language model would cost a key, a
-network call and reproducibility, and would answer it less reliably.
+arithmetic rather than opinion, it is reproducible, and it needs no profile, no
+key and no network. That matters: the same question put to a language model
+would cost a key, a network call and reproducibility, and would answer it less
+reliably.
+
+These rules no longer walk tables themselves. They read
+:mod:`tieout.figures`, which indexes every figure in the deck -- table cells,
+chart points and figures stated in prose -- under one answer to "are these two
+numbers statements of the same fact?". That is the whole point of the move: the
+rule that catches a contradiction between two tables becomes the rule that
+catches it between a table and the chart beside it, or between a table and the
+headline above it, without a second implementation of what "the same figure"
+means. Where this module's first paragraph used to say "everything here is
+derived from the deck's own tables", it now says: everything here is derived
+from the deck's own figures, wherever they are stated.
 
 The shared limitation, stated once here and repeated in each docstring: two
 tables can carry the same label for genuinely different things. "Revenue" under
 "FY24" in a group table and in a segment table are different numbers and both
-correct. Every rule below is keyed on the pair (row label, column header)
-precisely so that the column disambiguates the scope, and each one requires the
-labels to be specific rather than generic. It is still the false-positive mode
-to watch.
+correct. :func:`tieout.figures.comparable` holds the whole of that discipline --
+the metric must be specific, the scope must match, the quantity must match, and
+the period must not conflict -- so that every rule here inherits it rather than
+re-deriving it and getting it slightly wrong. It is still the false-positive
+mode to watch.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import ClassVar, Final
 
+from tieout.figures import (
+    Figure,
+    build_index,
+    comparable,
+    normalise_label,
+    read_cell_value,
+    restate,
+    strip_value_footnote,
+    unwritable,
+)
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel, TableModel
 from tieout.profile.schema import Confidence, Profile, Severity
-from tieout.rules.base import Finding, Rule, cluster_findings, register
+from tieout.rules.base import Correction, Finding, Rule, cluster_findings, register
 from tieout.text import NumberReading, is_numeric_placeholder, parse_number
 
-#: Labels too generic to identify a metric across two tables. Keying on one of
-#: these invites exactly the false positive described in the module docstring.
-_GENERIC_LABELS: Final[frozenset[str]] = frozenset(
-    {
-        "",
-        "total",
-        "sum",
-        "value",
-        "amount",
-        "figure",
-        "metric",
-        "item",
-        "description",
-        "note",
-        "notes",
-        "n a",
-        "other",
-        "various",
-    }
-)
+__all__ = [
+    "ContradictoryFigure",
+    "ScaleMismatch",
+    "TotalDoesNotSum",
+    "normalise_label",
+    "read_cell_value",
+    "strip_value_footnote",
+]
 
 #: Row labels that assert their value is the sum of the rows above.
 _TOTAL_LABELS: Final[frozenset[str]] = frozenset(
@@ -68,142 +76,6 @@ _SCALE_FACTORS: Final[tuple[float, ...]] = (1000.0, 100.0)
 #: How close to an exact scale factor the ratio has to be.
 _SCALE_TOLERANCE: Final[float] = 0.02
 
-#: A trailing footnote marker: a symbol, or a bracketed number.
-#:
-#: Deliberately does NOT match a bare trailing number. A digit at the end of a
-#: table label is almost always part of the label -- "FY24", "Q1 2026",
-#: "Top 10" -- and stripping it silently turned those into "FY", "Q1 20" and
-#: "Top", which would have made two unrelated columns compare as one.
-_FOOTNOTE_MARKER: Final[re.Pattern[str]] = re.compile(
-    "[\\s\u00a0]*(?:[*\u2020\u2021\u00a7\u00b6]+|\\(\\d{1,2}\\)|\\[\\d{1,2}\\])$"
-)
-
-
-#: A footnote marker trailing a *value* rather than a label: "1,234 (2)",
-#: "58.1 (a)", "263*". A real table annotates its figures, and a cell the parser
-#: cannot read used to disable the arithmetic for its whole column.
-#:
-#: The lookbehind is what keeps "(5)" a parenthesised negative: a marker is only
-#: a marker when something precedes it. The bracketed forms are held to one or
-#: two digits, or a single letter, so "(1,234)" and "(2.5)" are never mistaken
-#: for one.
-_VALUE_FOOTNOTE: Final[re.Pattern[str]] = re.compile(
-    r"(?<=\S)[\s\u00a0]*"
-    r"(?:[*\u2020\u2021\u00a7\u00b6]+|[(\[](?:\d{1,2}|[a-e])[)\]])$",
-    re.IGNORECASE,
-)
-
-
-def strip_value_footnote(text: str) -> str:
-    """Remove a trailing footnote marker from a cell's value."""
-    return _VALUE_FOOTNOTE.sub("", text.strip()).strip()
-
-
-def read_cell_value(text: str) -> NumberReading | None:
-    """Parse a table cell, tolerating a footnote marker attached to the figure."""
-    reading = parse_number(text)
-    if reading is not None:
-        return reading
-    stripped = strip_value_footnote(text)
-    return parse_number(stripped) if stripped != text.strip() else None
-
-
-def normalise_label(text: str) -> str:
-    """Fold a row or column label to a comparable key.
-
-    Strips trailing footnote markers and bracketed qualifiers, because "EBITDA"
-    and "EBITDA(1)" and "EBITDA " are one label in every deck ever written, and
-    treating them as three would make these rules find nothing.
-
-    It does not strip a bare trailing number: see :data:`_FOOTNOTE_MARKER`.
-    """
-    folded = " ".join(text.split()).casefold()
-    folded = folded.split("\n", 1)[0]
-    folded = re.sub(r"\((?:[1-9]|1[0-9]|[a-e])\)\s*$", "", folded)
-    folded = _FOOTNOTE_MARKER.sub("", folded)
-    folded = re.sub(r"[^\w\s%.$-]", " ", folded)
-    return " ".join(folded.split()).strip(" :.-")
-
-
-def _is_specific(label: str) -> bool:
-    return bool(label) and label not in _GENERIC_LABELS and len(label) > 2
-
-
-@dataclass(frozen=True, slots=True)
-class Cell:
-    """One parsed numeric cell, with enough identity to compare it elsewhere."""
-
-    slide_index: int
-    shape: ShapeModel
-    table_name: str
-    row_label: str
-    column_label: str
-    reading: NumberReading
-    row: int
-    column: int
-
-    @property
-    def key(self) -> tuple[str, str]:
-        return (self.row_label, self.column_label)
-
-    @property
-    def where(self) -> str:
-        return f"{self.table_name} on slide {self.slide_index}"
-
-    @property
-    def comparable(self) -> bool:
-        """Whether this cell can be compared with one carrying the same key.
-
-        A percentage and a multiple are not the same quantity even under the same
-        label, so the suffix is part of comparability rather than part of the
-        key: that way a label carrying both is simply not compared, instead of
-        being reported as a contradiction.
-        """
-        return _is_specific(self.row_label) and _is_specific(self.column_label)
-
-
-def iter_numeric_cells(deck: DeckModel) -> Iterator[Cell]:
-    """Every numeric cell in every table, labelled by its row and column.
-
-    Row labels come from the first column and column labels from the header row,
-    which is how every banking table is built. A table with neither is skipped
-    rather than guessed at.
-    """
-    for slide in deck.slides:
-        for shape in slide.tables:
-            table = shape.table
-            if table is None or table.row_count < 2 or table.column_count < 2:
-                continue
-            headers = _headers(table)
-            for row in range(1, table.row_count):
-                label_cell = table.cell(row, 0)
-                if label_cell is None:
-                    continue
-                row_label = normalise_label(label_cell.text)
-                if not row_label:
-                    continue
-                for column in range(1, table.column_count):
-                    cell = table.cell(row, column)
-                    if cell is None or cell.is_merge_continuation:
-                        continue
-                    text = cell.text
-                    if not text or is_numeric_placeholder(text):
-                        continue
-                    reading = read_cell_value(text)
-                    if reading is None:
-                        continue
-                    yield Cell(
-                        slide_index=slide.index,
-                        shape=shape,
-                        table_name=shape.ref.name,
-                        row_label=row_label,
-                        column_label=headers.get(column, ""),
-                        reading=reading,
-                        row=row,
-                        column=column,
-                    )
-
-
 def _headers(table: TableModel) -> dict[int, str]:
     out: dict[int, str] = {}
     for column in range(table.column_count):
@@ -213,35 +85,103 @@ def _headers(table: TableModel) -> dict[int, str]:
     return out
 
 
-def _format(reading: NumberReading) -> str:
-    return reading.raw
+def _format(figure: Figure) -> str:
+    """A figure as the deck writes it.
 
-
-def _grouped_cells(deck: DeckModel) -> dict[tuple[str, str, str], list[Cell]]:
-    """Comparable numeric cells, keyed by row label, column header and suffix."""
-    grouped: dict[tuple[str, str, str], list[Cell]] = {}
-    for cell in iter_numeric_cells(deck):
-        if not cell.comparable:
-            continue
-        suffix = (cell.reading.suffix or "").casefold()
-        grouped.setdefault((*cell.key, suffix), []).append(cell)
-    return grouped
-
-
-def _table_of(cell: Cell) -> tuple[int, int]:
-    return (cell.slide_index, cell.shape.ref.uid)
-
-
-def _spans_two_tables(cells: list[Cell]) -> bool:
-    """Whether these cells come from at least two distinct tables.
-
-    Keyed on the table, not the slide. Repetition inside one table is a layout
-    artefact -- a figure restated in a summary row -- but two tables on one
-    slide stating the same figure differently is precisely the contradiction
-    this module exists to find, and keying on the slide index hid every one of
-    them.
+    The raw text, not the parsed value, because a finding that says "1,908" is
+    one a reader can find on the slide and "1908.0" is not.
     """
-    return len({_table_of(cell) for cell in cells}) >= 2
+    return figure.raw or figure.reading.raw
+
+
+def _values(one: Figure, other: Figure) -> tuple[float, float]:
+    """The two numbers to compare, in a common scale where one is known.
+
+    Both canonical when both figures know their scale, so "1,908" under a table
+    captioned in millions and "1.908" under one captioned in billions compare as
+    equal rather than as a contradiction. As written otherwise, which is what
+    the rules did before the index existed and is still the only honest reading
+    when a deck does not say what its figures are in.
+
+    Mixing the two would be the worst of both: a scale known on one side only
+    would compare 1,908,000,000 against 1,908 and report a factor of a million.
+    """
+    left, right = one.canonical, other.canonical
+    if left is not None and right is not None:
+        return left, right
+    return one.reading.value, other.reading.value
+
+
+def _describe(figure: Figure) -> str:
+    """How a finding names the fact two figures disagree about.
+
+    Built from what the index actually read rather than from a fixed template,
+    because the three sources name themselves differently and a message reading
+    "'' / 'revenue'" -- which is what a table-shaped template produces for a
+    chart point -- is a message nobody can act on.
+    """
+    parts = [f"'{figure.metric}'"]
+    if figure.scope:
+        parts.append(f"for '{figure.scope}'")
+    if figure.period:
+        parts.append(f"in {figure.period}")
+    return " ".join(parts)
+
+
+def _edit(other: Figure, first: Figure) -> Correction:
+    """An **Edit it**, never a **Fix it**.
+
+    Two *stated* figures disagree. Which of them is right is a judgement about
+    the deal, not arithmetic, and TieOut does not make it -- so no replacement
+    is offered. What is offered is the counterpart figure and the slide it is
+    on, beside the run being edited, so the person deciding has both numbers in
+    front of them.
+
+    See :class:`tieout.rules.base.Correction` for why the split is carried on
+    the finding rather than decided in the page.
+    """
+    return Correction(
+        kind="edit",
+        source=other.source,
+        shape_id=other.shape_id,
+        uid=other.uid,
+        address=other.address,
+        cell_paragraph=other.cell_run[0],
+        cell_run=other.cell_run[1],
+        current=_format(other),
+        replacement=None,
+        counterpart=_format(first),
+        counterpart_slide=first.slide_index,
+        refused=unwritable(other),
+    )
+
+
+def _evidence(first: Figure, other: Figure) -> str:
+    """Where a weaker anchor came from, appended to the message.
+
+    Silent for two table cells, which is the case the reader already understands
+    and the case the message would only get longer for. A chart point or a
+    figure read out of a sentence is matched on much thinner evidence, and a
+    reader deciding whether to act on the finding needs to see what that
+    evidence was.
+    """
+    parts = [
+        f"{figure.metric_from} in {figure.where}"
+        for figure in (first, other)
+        if figure.source != "table"
+    ]
+    return f" (matched on {', and '.join(parts)})" if parts else ""
+
+
+def _spans_two_places(figures: list[Figure]) -> bool:
+    """Whether these figures come from at least two distinct shapes.
+
+    The shape, not the slide. Repetition inside one table is a layout artefact
+    -- a figure restated in a summary row -- but two tables on one slide stating
+    the same figure differently is precisely the contradiction this module
+    exists to find, and keying on the slide index hid every one of them.
+    """
+    return len({figure.place for figure in figures}) >= 2
 
 
 def _is_scale_of(a: float, b: float) -> bool:
@@ -262,36 +202,56 @@ def _is_scale_of(a: float, b: float) -> bool:
 
 
 def _disagreements(
-    cells: list[Cell], *, scale: bool
-) -> list[tuple[Cell, Cell]]:
-    """Each distinct value that differs from the baseline, against the baseline.
+    deck: DeckModel, *, scale: bool
+) -> list[tuple[Figure, Figure, str]]:
+    """Every pair of figures that claim the same fact and do not agree.
 
     The baseline is the earliest statement of the figure; every later value that
     differs is measured against it. One pair per distinct value, so a figure
-    restated in six tables yields one finding per *value*, not per table -- but
+    restated in six places yields one finding per *value*, not per place -- but
     a figure stated three different ways yields two, because a reader who is
     told about one of them has not been told about the other.
 
     ``scale`` selects which half: CO-002 wants the pairs a clean factor apart,
-    CO-001 wants the rest.
+    CO-001 wants the rest. The third element of each tuple is the confidence
+    :func:`tieout.figures.comparable` allowed, which is what stops a finding
+    anchored on a sentence claiming the certainty of one anchored on two tables.
+
+    Grouped by period as well as by metric: the index deliberately leaves the
+    period out of the grouping key, because a period of ``None`` has to be able
+    to match a known one, and a dictionary key cannot do that. So the group is
+    gathered loosely and every pair inside it is put to ``comparable``.
     """
-    ordered = sorted(cells, key=lambda c: (c.slide_index, c.row, c.column))
-    baseline = ordered[0]
-    base_value = round(baseline.reading.value, 6)
-    out: list[tuple[Cell, Cell]] = []
-    seen: set[float] = set()
-    for cell in ordered[1:]:
-        value = round(cell.reading.value, 6)
-        if value == base_value or value in seen:
+    index = build_index(deck)
+    out: list[tuple[Figure, Figure, str]] = []
+    for _, figures in sorted(index.grouped().items()):
+        if not _spans_two_places(figures):
             continue
-        if _table_of(cell) == _table_of(baseline):
-            # Two readings of one figure inside a single table is that table's
-            # own layout, not two statements of the same fact.
-            continue
-        if _is_scale_of(value, base_value) is not scale:
-            continue
-        seen.add(value)
-        out.append((baseline, cell))
+        ordered = sorted(figures, key=lambda f: (f.place, f.address))
+        for position, baseline in enumerate(ordered):
+            base_value_seen: set[float] = set()
+            for candidate in ordered[position + 1 :]:
+                confidence = comparable(baseline, candidate)
+                if confidence is None:
+                    continue
+                if candidate.place == baseline.place:
+                    # Two readings of one figure inside a single shape is that
+                    # shape's own layout, not two statements of the same fact.
+                    continue
+                left, right = _values(baseline, candidate)
+                left, right = round(left, 6), round(right, 6)
+                if left == right or right in base_value_seen:
+                    continue
+                if _is_scale_of(left, right) is not scale:
+                    continue
+                base_value_seen.add(right)
+                out.append((baseline, candidate, confidence))
+            if out and out[-1][0] is baseline:
+                # The earliest statement is the baseline for everything after
+                # it, exactly as before. Once it has produced its pairs, a later
+                # figure must not become a second baseline for the same group
+                # and report the same disagreement from the other end.
+                break
     return out
 
 
@@ -300,57 +260,69 @@ def _disagreements(
 
 @register
 class ContradictoryFigure(Rule):
-    """Reports the same labelled figure carrying different values in two tables.
+    """Reports the same figure carrying different values in two places.
 
-    Measures: for every pair (row label, column header) that appears in more
-    than one table, whether the parsed values agree. Compared within a suffix
-    group, so a percentage is never weighed against a multiple, and only where
-    both labels are specific enough to identify a metric.
+    Measures: for every metric stated in more than one place -- two tables, a
+    table and the chart beside it, a table and the headline above it -- whether
+    the values agree. Compared within a quantity, so a percentage is never
+    weighed against a multiple, and only where the metric is specific enough to
+    identify and the periods do not conflict.
 
     This is the check the whole module exists for. A margin quoted as 15.6% on
     one page and 15.8% on another is the error that survives every proofread,
     because each page is internally correct and nobody holds both in mind.
 
+    Reading :mod:`tieout.figures` rather than walking tables is what extends it
+    past the tables.
+
+    The index's confidence ladder is used as a **gate**, not as a relabelling.
+    Anything it will not grade at least ``medium`` is not reported at all; what
+    survives is reported at this rule's own declared confidence, weakened by the
+    profile's provenance in the usual way. Passing the ladder's grade straight
+    into the finding would read better and behave worse: the grade tops out at
+    ``high``, which is above what this rule claims for itself, and supplying it
+    explicitly is exactly what stops ``Rule.finding`` consulting the profile. A
+    finding that quietly outranks the profile it was measured against is not an
+    improvement. What the ladder's grade does change is the message, which says
+    where a prose- or chart-anchored metric came from so a reader can weigh it.
+
     Known false-positive mode: two tables can use one label for different
     scopes -- "Revenue / FY24" in a group table and in a segment table are
-    different numbers, both right. Keying on the column header disambiguates
-    most of it, and generic labels are excluded, but a deck with two
-    identically-headed tables covering different entities will report a
-    contradiction that is not one. The fix in that case is to label the tables'
-    scopes, which is a drafting improvement anyway.
+    different numbers, both right. The period and the scope disambiguate most of
+    it, and generic labels are excluded, but a deck with two identically-labelled
+    tables covering different entities will report a contradiction that is not
+    one. The fix in that case is to label the tables' scopes, which is a
+    drafting improvement anyway.
     """
 
     id: ClassVar[str] = "CO-001"
     category: ClassVar[str] = "consistency"
     severity: ClassVar[Severity] = "major"
     confidence: ClassVar[Confidence] = "medium"
-    summary: ClassVar[str] = "The same labelled figure differs between tables"
+    summary: ClassVar[str] = "The same labelled figure differs between two statements of it"
     requires: ClassVar[tuple[str, ...]] = ()
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
-        for (row_label, column_label, _), cells in sorted(_grouped_cells(deck).items()):
-            if not _spans_two_tables(cells):
-                continue
-            for first, other in _disagreements(cells, scale=False):
-                findings.append(
-                    self.finding(
-                        where=other.shape.ref,
-                        profile=profile,
-                        provenance_path="consistency",
-                        message=(
-                            f"'{row_label}' / '{column_label}' is "
-                            f"{_format(other.reading)} here but "
-                            f"{_format(first.reading)} in {first.where}"
-                        ),
-                        measured=_format(other.reading),
-                        expected=f"{_format(first.reading)} (slide {first.slide_index})",
-                        remedy=(
-                            "Reconcile the two figures, or label the scopes so they differ"
-                        ),
-                        bbox_pt=other.shape.bbox_pt,
-                    )
+        for first, other, _ in _disagreements(deck, scale=False):
+            findings.append(
+                self.finding(
+                    where=other.ref,
+                    profile=profile,
+                    provenance_path="consistency",
+                    message=(
+                        f"{_describe(other)} is {_format(other)} here but "
+                        f"{_format(first)} in {first.where}{_evidence(first, other)}"
+                    ),
+                    measured=_format(other),
+                    expected=f"{_format(first)} (slide {first.slide_index})",
+                    remedy=(
+                        "Reconcile the two figures, or label the scopes so they differ"
+                    ),
+                    correction=_edit(other, first),
+                    bbox_pt=other.bbox_pt,
                 )
+            )
         return cluster_findings(findings)
 
 
@@ -380,32 +352,27 @@ class ScaleMismatch(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
-        for (row_label, column_label, _), cells in sorted(_grouped_cells(deck).items()):
-            if not _spans_two_tables(cells):
-                continue
-            for baseline, other in _disagreements(cells, scale=True):
-                pair = sorted((baseline, other), key=lambda c: abs(c.reading.value))
-                smaller, larger = pair[0], pair[1]
-                ratio = abs(larger.reading.value) / abs(smaller.reading.value)
-                findings.append(
-                    self.finding(
-                        where=larger.shape.ref,
-                        profile=profile,
-                        provenance_path="consistency",
-                        message=(
-                            f"'{row_label}' / '{column_label}' is "
-                            f"{_format(larger.reading)} here and "
-                            f"{_format(smaller.reading)} in {smaller.where}, a factor "
-                            f"of {ratio:,.0f} apart; one of the two is in the wrong unit"
-                        ),
-                        measured=_format(larger.reading),
-                        expected=(
-                            f"{_format(smaller.reading)} (slide {smaller.slide_index})"
-                        ),
-                        remedy="State both figures in the same scale",
-                        bbox_pt=larger.shape.bbox_pt,
-                    )
+        for baseline, other, _ in _disagreements(deck, scale=True):
+            values = dict(zip((baseline, other), _values(baseline, other), strict=True))
+            smaller, larger = sorted(values, key=lambda f: abs(values[f]))
+            ratio = abs(values[larger]) / abs(values[smaller])
+            findings.append(
+                self.finding(
+                    where=larger.ref,
+                    profile=profile,
+                    provenance_path="consistency",
+                    message=(
+                        f"{_describe(larger)} is {_format(larger)} here and "
+                        f"{_format(smaller)} in {smaller.where}, a factor "
+                        f"of {ratio:,.0f} apart; one of the two is in the wrong unit"
+                    ),
+                    measured=_format(larger),
+                    expected=f"{_format(smaller)} (slide {smaller.slide_index})",
+                    remedy="State both figures in the same scale",
+                    correction=_edit(larger, smaller),
+                    bbox_pt=larger.bbox_pt,
                 )
+            )
         return cluster_findings(findings)
 
 
@@ -487,6 +454,9 @@ class TotalDoesNotSum(Rule):
                         measured=f"{stated:,.10g}",
                         expected=f"{computed:,.10g} (+/-{tolerance:,.10g} rounding)",
                         remedy="Correct the total, or the rows it sums",
+                        correction=_total_correction(
+                            shape, table, total_row, column, computed
+                        ),
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -609,6 +579,37 @@ class TotalDoesNotSum(Rule):
                 )
             out.append((row, reading, is_total))
         return out, ""
+
+
+def _total_correction(
+    shape: ShapeModel, table: TableModel, row: int, column: int, computed: float
+) -> Correction | None:
+    """A **Fix it** for a total row: the column's own sum.
+
+    One of the four cases PLAN.md §5.5 allows a fix on, and the reasoning is
+    the same for all four: a total that must equal its column has one right
+    answer, so writing it is arithmetic rather than a decision. The replacement
+    is rendered in the stated figure's own format -- separator, decimals,
+    currency and all -- because a fix that corrects the arithmetic and breaks
+    the formatting has traded one finding for another.
+    """
+    cell = table.cell(row, column)
+    if cell is None:
+        return None  # pragma: no cover - the caller already read this cell
+    reading = read_cell_value(cell.text)
+    if reading is None:
+        return None  # pragma: no cover - a total that did not parse is not reported
+    return Correction(
+        kind="fix",
+        source="table",
+        shape_id=shape.ref.shape_id,
+        uid=shape.ref.uid,
+        address=(row, column),
+        cell_paragraph=0,
+        cell_run=0,
+        current=cell.text.strip(),
+        replacement=restate(reading, computed),
+    )
 
 
 def _rounding_bound(addends: list[NumberReading], stated: NumberReading) -> float:

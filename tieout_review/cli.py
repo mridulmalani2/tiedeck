@@ -36,8 +36,10 @@ from tieout.report import console as console_report
 from tieout.report import html as html_report
 from tieout.report import json_out
 from tieout.rules.base import AuditResult, clear_caches, run_rules
+from tieout_review.outbound import OutboundLogError, outbound_log_path
 from tieout_review.redact import Redacted
 from tieout_review.review import (
+    ApprovalMismatch,
     Prepared,
     RedactionFailed,
     RedactionHeld,
@@ -139,6 +141,12 @@ def _render_plan(prepared: Prepared, *, show_payload: bool) -> None:
             _out.print(f"  [dim]{name}[/dim]  {count} {kind} term(s)")
 
     _render_residuals(plan)
+    _out.print(
+        f"\n[dim]approval digest[/dim] [bold]{prepared.digest}[/bold]\n"
+        "[dim]Names this exact payload and this exact residual list. Pass it to "
+        "[bold]check --approve[/bold] and the send is refused if either has moved "
+        "since.[/dim]"
+    )
 
     if show_payload:
         _out.print()
@@ -222,6 +230,16 @@ def check(
             help="Send even though items could not be cleared. Read them first.",
         ),
     ] = False,
+    approve: Annotated[
+        str | None,
+        typer.Option(
+            "--approve",
+            help=(
+                "The digest printed by 'redact', naming the residual list you read. "
+                "Refuses if the deck or the term list has moved since."
+            ),
+        ),
+    ] = None,
     include_notes: Annotated[
         bool, typer.Option("--include-notes", help="Include speaker notes. Off by default.")
     ] = False,
@@ -251,18 +269,27 @@ def check(
         _fail(f"unknown --format {output_format!r}: use table, json or html")
 
     prepared = _prepare(deck_path, client, profile, forbid, forbid_file, include_notes)
-    if not prepared.plan.is_clear and not yes:
+    if not prepared.plan.is_clear and not (yes or approve):
         _render_plan(prepared, show_payload=False)
-        _fail("nothing has been sent. Review the list above, then re-run with --yes")
+        _fail(
+            "nothing has been sent. Review the list above, then re-run with "
+            "--approve DIGEST, or with --yes to accept whatever the list says now"
+        )
+
+    try:
+        prepared = _approved(prepared, yes=yes, approve=approve)
+    except ApprovalMismatch as exc:
+        _fail(str(exc))
+        return
 
     review_client = _build_client(model)
 
     try:
-        outcome = send(prepared.approve() if yes else prepared, review_client)
+        outcome = send(prepared, review_client)
     except RedactionHeld as exc:  # pragma: no cover - guarded above
         _fail(str(exc))
         return
-    except (RedactionFailed, ResponseError) as exc:
+    except (OutboundLogError, RedactionFailed, ResponseError) as exc:
         _fail(str(exc))
         return
     except Exception as exc:
@@ -285,6 +312,7 @@ def check(
             f"{outcome.characters_sent:,} characters sent"
             f"{_usage(outcome.usage)}[/dim]"
         )
+        _err.print(f"[dim]recorded in {outbound_log_path()}[/dim]")
         if outcome.dropped:
             _err.print(
                 f"[dim]{len(outcome.dropped)} answer(s) discarded as unreadable: "
@@ -294,6 +322,24 @@ def check(
 
     if result.exceeds(fail_on, include_non_gating=fail_on_semantic):
         raise typer.Exit(EXIT_FINDINGS)
+
+
+def _approved(prepared: Prepared, *, yes: bool, approve: str | None) -> Prepared:
+    """Turn the two flags into the one binding the library understands.
+
+    ``--approve DIGEST`` is the real thing: it names the payload the analyst read
+    on an earlier ``redact`` run, and a deck edited since then no longer answers
+    to it. ``--yes`` approves whatever the list says at this moment, which is the
+    flag's existing meaning and is only as strong as the habit of having looked —
+    it is kept because breaking every pipeline that uses it would buy nothing.
+    Both go through :meth:`Prepared.approve`, so ``send`` cannot tell them apart
+    and there is no second, looser path into it.
+    """
+    if approve:
+        return prepared.approve(approve.strip())
+    if yes:
+        return prepared.approve(prepared.digest)
+    return prepared
 
 
 def _build_client(model: str | None) -> ReviewClient:

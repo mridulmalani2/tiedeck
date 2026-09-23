@@ -152,9 +152,41 @@ FINANCE_VOCABULARY: Final[frozenset[str]] = frozenset(
 )
 
 
+#: Characters a reader never sees, a model reads straight through, and a regex
+#: stops dead at. A soft hyphen is the one that actually happens: Word inserts
+#: them silently, they survive a copy into PowerPoint, and "Thorn\u00adbury"
+#: renders as "Thornbury" on the slide while matching no pattern for it. Before
+#: this was stripped, such a name defeated the term list, produced no residual,
+#: reported ``is_clear`` and passed :meth:`Redacted.verify` — four controls, all
+#: silent, because every one of them was looking at the visible string and the
+#: payload was not made of it. Found by ``tests/test_review_outbound.py``'s
+#: adversarial corpus, which is the reason that corpus exists.
+#:
+#: Removing them rather than matching around them is deliberate. They carry no
+#: meaning for a reader or a model, so dropping them costs the payload nothing
+#: and closes the whole class at one point instead of hardening each pattern
+#: separately and missing one.
+_INVISIBLE: Final[re.Pattern[str]] = re.compile(
+    "["
+    "\u00ad"  # soft hyphen
+    "\u180e"  # Mongolian vowel separator
+    "\u200b"  # zero-width space
+    "\u200c"  # zero-width non-joiner
+    "\u200d"  # zero-width joiner
+    "\u2060"  # word joiner
+    "\ufeff"  # zero-width no-break space / BOM
+    "]"
+)
+
+
+def _visible(value: str) -> str:
+    """``value`` with the characters that hide a name inside a word removed."""
+    return _INVISIBLE.sub("", value)
+
+
 def _normalise(value: str) -> str:
     """Collapse whitespace and case, for matching a term to an earlier one."""
-    return " ".join(value.split()).casefold()
+    return " ".join(_visible(value).split()).casefold()
 
 
 def _term_pattern(term: str) -> re.Pattern[str] | None:
@@ -211,11 +243,18 @@ class Redacted:
         actually happens is not a missing rule, it is a rule that silently did
         not fire — a term with a soft hyphen in it, a pattern that backtracked.
         A non-empty result here means a bug in this module and must stop the run.
+
+        Both sides are stripped of invisible characters before the search, and
+        this must keep happening independently of :meth:`Redactor.apply` doing
+        the same. A check that trusts its input to have been cleaned by the code
+        it is checking is not a check. The soft-hyphen leak was invisible here
+        for exactly that reason.
         """
         offenders: list[str] = []
+        visible = _visible(self.text)
         for term in terms:
-            pattern = _term_pattern(term)
-            if pattern is not None and pattern.search(self.text):
+            pattern = _term_pattern(_visible(term))
+            if pattern is not None and pattern.search(visible):
                 offenders.append(term)
         return tuple(offenders)
 
@@ -258,7 +297,10 @@ class Redactor:
     ) -> None:
         self._terms: dict[str, TermSource] = {}
         for term, source in (terms or {}).items():
-            cleaned = " ".join(term.split())
+            # A name pasted into the blocklist out of a document carries the same
+            # invisible characters the payload does, and a term nobody can match
+            # is a term that protects nothing.
+            cleaned = " ".join(_visible(term).split())
             if cleaned:
                 self._terms.setdefault(cleaned, source)
         self._detectors = tuple(detectors)
@@ -296,7 +338,14 @@ class Redactor:
         that placeholder numbering is stable across it. Numbering follows first
         appearance, which makes a diff between two runs of the same deck
         readable.
+
+        Invisible characters come out first, before anything looks at the text.
+        Doing it here rather than in the caller is the point: this is the one
+        door every payload comes through, so a corpus that never went near
+        :mod:`tieout_review.extract` cannot get a soft hyphen past the term list
+        by arriving from somewhere else.
         """
+        corpus = _visible(corpus)
         terms = dict(self._terms)
         for term, source in self.harvest(corpus).items():
             terms.setdefault(term, source)

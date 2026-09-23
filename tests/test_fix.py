@@ -227,7 +227,32 @@ GEOMETRY_RULES = (
     "LO-001", "LO-002", "LO-003", "LO-004", "LO-005", "LO-006", "LO-007", "LO-008",
 )
 
-JUDGEMENT_RULES = ("CO-001", "CO-002", "CO-003", "HY-001", "HY-008", "TY-009")
+#: Rules where the tool can see a problem and cannot see the answer.
+#:
+#: CO-003 was on this list and is not any more, and the reason is worth stating
+#: because it looks like a loosening and is not. A total that does not sum, a
+#: margin that does not equal its inputs and a multiple that does not tie all
+#: share a shape: one figure is *derived* from others the deck also prints. The
+#: convention -- in this tool and in the modelling it audits -- is that the
+#: derived figure yields to its inputs, because the inputs are the primary
+#: facts and the derived figure is computed from them. Under that convention
+#: the answer is arithmetic, not a guess, and PLAN.md §5.5 names "a total that
+#: must equal its column" as one of the four fixes it allows.
+#:
+#: CO-001 and CO-002 stay, and the difference is the whole point: there two
+#: figures are each *stated*, neither is derived from the other, and which one
+#: is right is a judgement about the deal. Those get **Edit it**, which opens
+#: the run with the counterpart beside it and writes nothing on its own.
+JUDGEMENT_RULES = ("CO-001", "CO-002", "HY-001", "HY-008", "TY-009")
+
+#: The derived tie-out rules, where a fix *is* offered. The arithmetic is the
+#: rule's own and the replacement keeps the original's format.
+DERIVED_RULES = ("CO-003", "CO-004", "CO-005", "CO-006", "CO-007")
+
+#: The tie-out rules that report how a figure is told rather than what it says.
+#: Neither has a mechanical answer: which unit or which date a deck should
+#: settle on is the author's call.
+UNFIXABLE_TIEOUT_RULES = ("CO-008", "CO-009")
 
 
 @pytest.mark.parametrize("rule_id", GEOMETRY_RULES)
@@ -252,13 +277,41 @@ def test_no_fix_is_offered_where_the_answer_is_unknowable(rule_id):
     assert rule_id not in _BUILDERS
 
 
+@pytest.mark.parametrize("rule_id", DERIVED_RULES)
+def test_a_derived_figure_is_fixable_because_its_inputs_determine_it(rule_id):
+    """The other half of the rule above, and the line PLAN.md §5.5 draws.
+
+    A margin, a multiple, a growth rate, a bridge's close and a column total
+    are each computed from figures the deck also prints. Correcting one is
+    arithmetic on the deck's own numbers rather than a value invented for it.
+    """
+    from tieout_fix import _BUILDERS
+
+    assert rule_id in _BUILDERS
+
+
+@pytest.mark.parametrize("rule_id", UNFIXABLE_TIEOUT_RULES)
+def test_no_fix_is_offered_for_how_a_figure_is_told(rule_id):
+    """Which unit a deck settles on, and which as-of date governs it, are the
+    author's call. There is no arithmetic that answers either."""
+    from tieout_fix import _BUILDERS
+
+    assert rule_id not in _BUILDERS
+
+
 def test_the_dirty_reference_deck_is_only_partly_fixable(dirty_deck, reference_profile):
     """The seeded deck carries every co-existing defect at once, so it is the
     broadest check that planning never offers a fix it cannot make."""
     fixes = plan_fixes(_audit(dirty_deck, reference_profile), reference_profile)
     assert fixes, "some of the seeded defects are mechanical"
-    assert not {f.rule_id for f in fixes.values()} & set(GEOMETRY_RULES)
-    assert not {f.rule_id for f in fixes.values()} & set(JUDGEMENT_RULES)
+    offered = {f.rule_id for f in fixes.values()}
+    assert not offered & set(GEOMETRY_RULES)
+    assert not offered & set(JUDGEMENT_RULES)
+    assert not offered & set(UNFIXABLE_TIEOUT_RULES)
+    assert offered & set(DERIVED_RULES), (
+        "the seeded deck carries a wrong margin, multiple, CAGR, bridge and "
+        "total, and every one of them is arithmetic the deck itself determines"
+    )
 
 
 def test_every_fix_on_the_dirty_deck_applies_and_reduces_the_count(

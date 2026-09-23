@@ -655,6 +655,21 @@ def default_defects() -> tuple[SeededDefect, ...]:
         SeededDefect("CO-001", "a recap table restating an EBITDA figure wrongly", 7),
         SeededDefect("CO-002", "a recap table restating revenue in the wrong unit", 11),
         SeededDefect("CO-003", "a cumulative total that does not sum its column", 6),
+        # -- derived figures -----------------------------------------------------
+        #
+        # Each of these states a figure the deck's own numbers already determine,
+        # and states it wrongly. They are seeded on separate slides, and against
+        # periods and labels the projections table does not carry, so that each
+        # rule catches its own defect and no other rule catches it too: a recap
+        # restating a wrong margin *for a year slide 6 covers* would be a CO-001
+        # contradiction as well, and the per-rule assertions would stop meaning
+        # anything.
+        SeededDefect("CO-004", "a recap table whose margin does not equal its inputs", 5),
+        SeededDefect("CO-005", "a comparables multiple that does not equal EV over EBITDA", 12),
+        SeededDefect("CO-006", "a stated CAGR the revenue series does not give", 10),
+        SeededDefect("CO-007", "a bridge whose steps do not carry opening to closing", 16),
+        SeededDefect("CO-008", "the same revenue figure restated in billions", 17),
+        SeededDefect("CO-009", "a second as-of date governing a restated figure", 20),
     )
 
 

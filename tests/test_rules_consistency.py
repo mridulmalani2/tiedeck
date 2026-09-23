@@ -18,14 +18,11 @@ from pptx import Presentation
 from pptx.util import Emu, Pt
 
 from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
+from tieout.figures import build_index
 from tieout.fixtures.spec import default_defects
 from tieout.model.loader import load_deck
 from tieout.rules.base import run_rules
-from tieout.rules.consistency import (
-    _is_total_label,
-    iter_numeric_cells,
-    normalise_label,
-)
+from tieout.rules.consistency import _is_total_label, normalise_label
 
 SEEDED = {d.rule_id: d.slide_index for d in default_defects() if d.variant is None}
 CONSISTENCY_RULE_IDS = ("CO-001", "CO-002", "CO-003")
@@ -429,15 +426,18 @@ def test_label_normalisation(raw, expected):
     assert normalise_label(raw) == expected
 
 
-def test_cells_are_labelled_by_their_row_and_column(clean_deck):
-    cells = list(iter_numeric_cells(clean_deck))
-    assert cells, "the fixture has numeric tables"
-    keyed = {cell.key for cell in cells}
-    assert ("2025a", "revenue") in keyed
-    assert ("2025a", "ebitda") in keyed
-    for cell in cells:
-        assert cell.slide_index >= 1
-        assert cell.reading is not None
+def test_cells_are_labelled_by_their_metric_and_period(clean_deck):
+    """The rules read the figure index now, so this asserts what the index gives
+    them: a metric from the column header and a period from the row label, on a
+    table that puts the years down the side."""
+    figures = [f for f in build_index(clean_deck) if f.source == "table"]
+    assert figures, "the fixture has numeric tables"
+    keyed = {(f.period, f.metric) for f in figures}
+    assert ("FY2025A", "revenue") in keyed
+    assert ("FY2025A", "ebitda") in keyed
+    for figure in figures:
+        assert figure.slide_index >= 1
+        assert figure.reading is not None
 
 
 def test_the_consistency_category_is_silent_on_the_clean_deck(
@@ -648,3 +648,194 @@ def test_a_column_that_cannot_be_read_says_so(tmp_path, reference_profile):
     assert result.findings == []
     assert result.unchecked, "the column could not be read and nothing said so"
     assert "see note" in result.unchecked[0].reason
+
+
+# --------------------------------------------------------------------------------------
+# Past the tables
+#
+# The point of moving these rules onto tieout.figures, and PLAN.md section 3's
+# first two rows. Before the index, CO-001 needed the figure in *two tables*: a
+# headline was neither, and a chart carried no numeric values at all. Both of
+# those are now the same rule doing the same thing to a wider set of figures,
+# rather than a second implementation of what "the same figure" means.
+# --------------------------------------------------------------------------------------
+
+
+def _headline(path, table_rows, sentence):
+    """One slide of table, one slide of prose that may or may not tie to it."""
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    first = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = first.shapes.add_table(
+        len(table_rows), len(table_rows[0]), Pt(36), Pt(120), Pt(500), Pt(20 * len(table_rows))
+    )
+    frame.name = "Table 1"
+    for row_index, row in enumerate(table_rows):
+        for column_index, value in enumerate(row):
+            frame.table.cell(row_index, column_index).text = str(value)
+    second = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = second.shapes.add_textbox(Pt(36), Pt(60), Pt(800), Pt(40))
+    box.text_frame.text = sentence
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_co001_catches_a_headline_contradicting_its_table(tmp_path, reference_profile):
+    """PLAN.md section 3, first row: "Revenue grew to $412m" over a table
+    reading 408. CO-001 needed the figure in two tables; a headline is
+    neither."""
+    deck = _headline(
+        tmp_path / "headline.pptx",
+        _PROJECTIONS,
+        "Revenue reached 2,100 in 2025A on continued depot expansion",
+    )
+    findings = findings_for(_run(deck, reference_profile, "CO-001"), "CO-001")
+    assert findings, "the headline contradicts the table and must be reported"
+    (finding,) = findings
+    assert finding.slide_index == 2
+    assert "2,100" in finding.message
+    assert "1,908" in finding.message
+
+
+def test_a_prose_finding_says_what_it_was_matched_on(tmp_path, reference_profile):
+    """A prose anchor is much weaker evidence than a table label, and a reader
+    deciding whether to act on the finding has to be able to see that."""
+    deck = _headline(
+        tmp_path / "evidence.pptx",
+        _PROJECTIONS,
+        "Revenue reached 2,100 in 2025A on continued depot expansion",
+    )
+    (finding,) = findings_for(_run(deck, reference_profile, "CO-001"), "CO-001")
+    assert "matched on the sentence" in finding.message
+
+
+def test_co001_is_silent_when_the_headline_agrees(tmp_path, reference_profile):
+    """The half that matters. A rule that reported every sentence containing a
+    number would be switched off by lunchtime."""
+    deck = _headline(
+        tmp_path / "agrees.pptx",
+        _PROJECTIONS,
+        "Revenue reached 1,908 in 2025A on continued depot expansion",
+    )
+    assert findings_for(_run(deck, reference_profile, "CO-001"), "CO-001") == []
+
+
+def test_co001_is_silent_on_a_sentence_naming_no_metric_the_deck_uses(
+    tmp_path, reference_profile
+):
+    deck = _headline(
+        tmp_path / "ungrounded.pptx",
+        _PROJECTIONS,
+        "The team has grown to 240 people across the estate",
+    )
+    assert findings_for(_run(deck, reference_profile, "CO-001"), "CO-001") == []
+
+
+def _table_and_chart(path, table_rows, categories, series):
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    first = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = first.shapes.add_table(
+        len(table_rows), len(table_rows[0]), Pt(36), Pt(120), Pt(500), Pt(20 * len(table_rows))
+    )
+    frame.name = "Table 1"
+    for row_index, row in enumerate(table_rows):
+        for column_index, value in enumerate(row):
+            frame.table.cell(row_index, column_index).text = str(value)
+
+    second = presentation.slides.add_slide(presentation.slide_layouts[6])
+    data = CategoryChartData()
+    data.categories = list(categories)
+    for name, values in series:
+        data.add_series(name, values)
+    second.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Pt(36), Pt(120), Pt(500), Pt(280), data
+    )
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_co001_catches_a_chart_contradicting_the_table(tmp_path, reference_profile):
+    """PLAN.md section 3, second row: ChartModel carried no numeric values at
+    all, so a chart contradicting the table beside it could not be seen."""
+    deck = _table_and_chart(
+        tmp_path / "chart.pptx",
+        [["Fiscal year", "Revenue"], ["2024A", "1,562"], ["2025A", "1,908"]],
+        ["2024A", "2025A"],
+        [("Revenue", (1562.0, 2100.0))],
+    )
+    findings = findings_for(_run(deck, reference_profile, "CO-001"), "CO-001")
+    assert findings
+    (finding,) = findings
+    assert finding.slide_index == 2
+    assert "2,100" in finding.message
+
+
+def test_co001_is_silent_when_the_chart_agrees(tmp_path, reference_profile):
+    deck = _table_and_chart(
+        tmp_path / "chart_agrees.pptx",
+        [["Fiscal year", "Revenue"], ["2024A", "1,562"], ["2025A", "1,908"]],
+        ["2024A", "2025A"],
+        [("Revenue", (1562.0, 1908.0))],
+    )
+    assert findings_for(_run(deck, reference_profile, "CO-001"), "CO-001") == []
+
+
+def test_a_cumulative_total_is_not_compared_against_a_single_year(
+    tmp_path, reference_profile
+):
+    """The reference deck's own shape, and the false positive that closing the
+    period range fixed. A "Total 2023A-2027E" row states five years of revenue;
+    read as 2023A it contradicts the chart's first bar, and the clean deck
+    reported itself."""
+    deck = _table_and_chart(
+        tmp_path / "cumulative.pptx",
+        [
+            ["Fiscal year", "Revenue"],
+            ["2023A", "1,284"],
+            ["2024A", "1,562"],
+            ["Total 2023A-2024A", "2,846"],
+        ],
+        ["2023A", "2024A"],
+        [("Revenue", (1284.0, 1562.0))],
+    )
+    assert findings_for(_run(deck, reference_profile, "CO-001"), "CO-001") == []
+
+
+def test_a_figure_stated_in_two_scales_that_agree_is_not_a_contradiction(
+    tmp_path, reference_profile
+):
+    """One table in millions and one in billions, both saying the same thing.
+
+    Two rules have something to say about this and they must say different
+    things. Comparing the digits alone reports a factor of a thousand, which
+    would be wrong: the figures agree. So CO-001 and CO-002 are silent, and
+    CO-008 -- whose whole subject is a figure told in two units -- reports it
+    as the drafting observation it is.
+    """
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    for value, caption in (("1,908", "Figures in US$ millions."), ("1.908", "US$ bn")):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        frame = slide.shapes.add_table(2, 2, Pt(36), Pt(120), Pt(400), Pt(40))
+        for row_index, row in enumerate([["Fiscal year", "Revenue"], ["2025A", value]]):
+            for column_index, cell in enumerate(row):
+                frame.table.cell(row_index, column_index).text = cell
+        box = slide.shapes.add_textbox(Pt(36), Pt(420), Pt(400), Pt(20))
+        box.text_frame.text = caption
+    path = tmp_path / "scales.pptx"
+    presentation.save(str(path))
+    deck = load_deck(path)
+
+    contradictions = run_rules(deck, reference_profile, include=["CO-001", "CO-002"])
+    assert contradictions.findings == [], [f.message for f in contradictions.findings]
+
+    drift = findings_for(_run(deck, reference_profile, "CO-008"), "CO-008")
+    assert drift, "the same figure in millions and in billions is CO-008's subject"
+    assert "millions" in drift[0].message and "billions" in drift[0].message
