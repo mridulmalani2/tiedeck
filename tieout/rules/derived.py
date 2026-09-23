@@ -59,6 +59,7 @@ from tieout.figures import (
     is_specific,
     normalise_label,
     restate,
+    split_period,
     unwritable,
 )
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
@@ -176,6 +177,30 @@ _GROWTH_SUFFIXES: Final[tuple[str, ...]] = (
 # --------------------------------------------------------------------------------------
 # Arithmetic
 # --------------------------------------------------------------------------------------
+
+#: Rows that state a statistic **of** the column rather than a member of it.
+#: Every comparables table in banking ends in one, and the arithmetic that holds
+#: down each company's row does not hold across it: the median multiple is the
+#: median of the multiples, not the median EV over the median EBITDA. On a table
+#: whose medians are EV 3,180 and EBITDA 398, recomputing gives 8.0x against a
+#: correctly stated 9.0x -- a ``major`` finding, on the one row of the table that
+#: cannot be wrong in the way the rule is describing.
+#:
+#: "Total" and "sum" are deliberately absent. A total row is additive, so its
+#: margin really is its own EBITDA over its own revenue, and that is worth
+#: checking.
+_STATISTIC_ROWS: Final[frozenset[str]] = frozenset(
+    {
+        "median", "mean", "average", "avg", "weighted average", "simple average",
+        "high", "low", "max", "min", "maximum", "minimum", "range",
+        "upper quartile", "lower quartile", "25th percentile", "75th percentile",
+    }
+)
+
+
+def _is_a_statistic(scope: str) -> bool:
+    return scope.strip() in _STATISTIC_ROWS
+
 
 #: A figure displayed to ``d`` decimals stands for a true value within half a
 #: unit of its last place.
@@ -385,13 +410,33 @@ class _DerivedRatio(Rule):
     def _check(
         self, index: FigureIndex, stated: Figure, derivation: Derivation
     ) -> tuple[float, float, Figure, Figure] | str | None:
+        if _is_a_statistic(stated.scope):
+            return (
+                f"{derivation.name} is stated for '{stated.scope}', which is a "
+                "statistic of the rows above it rather than one of them, so it "
+                "is not the ratio of the figures beside it"
+            )
+        # A multiple that names no period of its own takes its inputs' periods:
+        # a comparables row prints an undated EV over an LTM EBITDA and calls
+        # the result "EV/EBITDA". Only where the figure itself is undated, and
+        # only inside a named scope, so the relaxation cannot reach across to
+        # another company or another year.
+        undated = stated.period is None
         numerator = index.lookup(
-            derivation.numerator, scope=stated.scope, period=stated.period, near=stated
+            derivation.numerator,
+            scope=stated.scope,
+            period=stated.period,
+            near=stated,
+            period_optional=undated,
         )
         if isinstance(numerator, str):
             return f"{derivation.name} could not be recomputed: {numerator}"
         denominator = index.lookup(
-            derivation.denominator, scope=stated.scope, period=stated.period, near=stated
+            derivation.denominator,
+            scope=stated.scope,
+            period=stated.period,
+            near=stated,
+            period_optional=undated,
         )
         if isinstance(denominator, str):
             return f"{derivation.name} could not be recomputed: {denominator}"
@@ -824,7 +869,33 @@ class BridgeDoesNotCarry(Rule):
     def _has_ends(self, series: Sequence[_Step]) -> bool:
         if len(series) < _MIN_STEPS + 2:
             return False
-        return _marks(series[0].label, _OPENING) and _marks(series[-1].label, _CLOSING)
+        if _marks(series[0].label, _OPENING) and _marks(series[-1].label, _CLOSING):
+            return True
+        return self._spans_two_periods(series)
+
+    def _spans_two_periods(self, series: Sequence[_Step]) -> bool:
+        """A bridge whose ends are named by their periods rather than by a word.
+
+        "FY24A revenue | Volume | Price | FX | FY25A revenue" is how a revenue
+        bridge is labelled in practice, and not one label in it is an opening or
+        a closing. Recognising a bridge only by those words meant the rule saw
+        no bridge at all on a deck whose bridge was drawn the ordinary way, and
+        said nothing rather than refusing -- the failure this whole file guards
+        against.
+
+        Three conditions, and they are required together because any one alone
+        reads a year-by-year history table as a bridge and reports it for not
+        summing: the ends name the same metric, they name different periods,
+        and **no step between them names a period at all**. A history table
+        names one on every row.
+        """
+        first_metric, first_period = split_period(series[0].label)
+        last_metric, last_period = split_period(series[-1].label)
+        if first_period is None or last_period is None or first_period == last_period:
+            return False
+        if not is_specific(first_metric) or first_metric != last_metric:
+            return False
+        return all(split_period(step.label)[1] is None for step in series[1:-1])
 
     def _check(
         self, series: list[_Step]
@@ -878,10 +949,19 @@ class UnitDrift(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
-        for figures in build_index(deck).grouped().values():
+        index = build_index(deck)
+        for figures in index.grouped().values():
             for first, other in _same_fact_pairs(figures):
                 reason = self._drift(first, other)
                 if reason is None:
+                    continue
+                if index.reconciles(first, other):
+                    # The deck states the conversion -- "GBP 1,510m (US$1,935m)"
+                    # -- which is what this rule is asking the drafter to do.
+                    # §5.4 scopes CO-008 to the same figure in a different scale
+                    # or currency "with no stated conversion"; nothing read the
+                    # conversion, so a deck reporting in two currencies and
+                    # reconciling them properly was reported for it.
                     continue
                 findings.append(
                     self.finding(

@@ -358,6 +358,14 @@ DATE_FORMATS: Final[tuple[str, ...]] = (
     "%B %Y",
     "%b %Y",
     "%d-%B-%y",
+    # The abbreviated month had a four-digit year and no two-digit one, while
+    # the full month had both. "As at 30-Jun-25" is how a banking footnote dates
+    # itself more often than any other form, and it parsed as no date at all --
+    # so CO-009 saw no as-of date on the slide and compared nothing. Unambiguous
+    # to add, because the month is alphabetic: no other format claims these.
+    "%d-%b-%y",
+    "%d %b %y",
+    "%d %B %y",
     "%d/%m/%y",
     "%m/%d/%y",
 )
