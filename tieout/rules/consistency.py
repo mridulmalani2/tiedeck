@@ -43,11 +43,12 @@ from tieout.figures import (
     comparable,
     normalise_label,
     read_cell_value,
+    restate,
     strip_value_footnote,
 )
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel, TableModel
 from tieout.profile.schema import Confidence, Profile, Severity
-from tieout.rules.base import Finding, Rule, cluster_findings, register
+from tieout.rules.base import Correction, Finding, Rule, cluster_findings, register
 from tieout.text import NumberReading, is_numeric_placeholder, parse_number
 
 __all__ = [
@@ -124,6 +125,56 @@ def _describe(figure: Figure) -> str:
     if figure.period:
         parts.append(f"in {figure.period}")
     return " ".join(parts)
+
+
+def _edit(other: Figure, first: Figure) -> Correction:
+    """An **Edit it**, never a **Fix it**.
+
+    Two *stated* figures disagree. Which of them is right is a judgement about
+    the deal, not arithmetic, and TieOut does not make it -- so no replacement
+    is offered. What is offered is the counterpart figure and the slide it is
+    on, beside the run being edited, so the person deciding has both numbers in
+    front of them.
+
+    See :class:`tieout.rules.base.Correction` for why the split is carried on
+    the finding rather than decided in the page.
+    """
+    return Correction(
+        kind="edit",
+        source=other.source,
+        shape_id=other.shape_id,
+        uid=other.uid,
+        address=other.address,
+        cell_paragraph=other.cell_run[0],
+        cell_run=other.cell_run[1],
+        current=_format(other),
+        replacement=None,
+        counterpart=_format(first),
+        counterpart_slide=first.slide_index,
+        refused=_unwritable(other),
+    )
+
+
+def _unwritable(figure: Figure) -> str | None:
+    """Why this figure cannot be written back, or None.
+
+    PLAN.md §6 names two: a chart point, and a run inside a group. Only the
+    first is refused. ``tieout_fix._shape_element_anywhere`` already searches
+    descendants for exactly this reason -- "no coordinate space stands between
+    an edit to a shape's words and the group it happens to sit in" -- so a
+    grouped run is written correctly today and refusing it would be refusing
+    something that works. A *geometry* write into a group is the dangerous one,
+    and that is handled elsewhere.
+
+    A button that quietly does nothing teaches people the tool is broken; a
+    button that says why it cannot teaches them something true about their deck.
+    """
+    if figure.source == "chart":
+        return (
+            "a chart's values live in its cached data and in the workbook behind "
+            "it, and TieOut writes neither -- correct this in the chart's own data"
+        )
+    return None
 
 
 def _evidence(first: Figure, other: Figure) -> str:
@@ -289,6 +340,7 @@ class ContradictoryFigure(Rule):
                     remedy=(
                         "Reconcile the two figures, or label the scopes so they differ"
                     ),
+                    correction=_edit(other, first),
                     bbox_pt=other.bbox_pt,
                 )
             )
@@ -338,6 +390,7 @@ class ScaleMismatch(Rule):
                     measured=_format(larger),
                     expected=f"{_format(smaller)} (slide {smaller.slide_index})",
                     remedy="State both figures in the same scale",
+                    correction=_edit(larger, smaller),
                     bbox_pt=larger.bbox_pt,
                 )
             )
@@ -422,6 +475,9 @@ class TotalDoesNotSum(Rule):
                         measured=f"{stated:,.10g}",
                         expected=f"{computed:,.10g} (+/-{tolerance:,.10g} rounding)",
                         remedy="Correct the total, or the rows it sums",
+                        correction=_total_correction(
+                            shape, table, total_row, column, computed
+                        ),
                         bbox_pt=shape.bbox_pt,
                     )
                 )
@@ -544,6 +600,37 @@ class TotalDoesNotSum(Rule):
                 )
             out.append((row, reading, is_total))
         return out, ""
+
+
+def _total_correction(
+    shape: ShapeModel, table: TableModel, row: int, column: int, computed: float
+) -> Correction | None:
+    """A **Fix it** for a total row: the column's own sum.
+
+    One of the four cases PLAN.md §5.5 allows a fix on, and the reasoning is
+    the same for all four: a total that must equal its column has one right
+    answer, so writing it is arithmetic rather than a decision. The replacement
+    is rendered in the stated figure's own format -- separator, decimals,
+    currency and all -- because a fix that corrects the arithmetic and breaks
+    the formatting has traded one finding for another.
+    """
+    cell = table.cell(row, column)
+    if cell is None:
+        return None  # pragma: no cover - the caller already read this cell
+    reading = read_cell_value(cell.text)
+    if reading is None:
+        return None  # pragma: no cover - a total that did not parse is not reported
+    return Correction(
+        kind="fix",
+        source="table",
+        shape_id=shape.ref.shape_id,
+        uid=shape.ref.uid,
+        address=(row, column),
+        cell_paragraph=0,
+        cell_run=0,
+        current=cell.text.strip(),
+        replacement=restate(reading, computed),
+    )
 
 
 def _rounding_bound(addends: list[NumberReading], stated: NumberReading) -> float:

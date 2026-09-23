@@ -610,6 +610,25 @@
     box-sizing: border-box; vertical-align: top;
   }
   .shape .grid > div.head { background: rgba(20,22,26,.05); font-weight: 700; }
+  .shape .grid p { margin: 0; white-space: pre-wrap; }
+  /* A cell's runs are editable now that tieout_fix can write one, so they take
+     the same caret and the same live outline a text frame's runs take. */
+  .shape .grid [data-run] { cursor: text; pointer-events: auto; }
+  .shape .grid [contenteditable="true"] {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+    background: rgba(255,255,255,.96); user-select: text; z-index: 6;
+  }
+
+  /* The other figure, while one of them is being edited. Fixed rather than
+     absolute so it is not clipped by the shape's own overflow:hidden -- a
+     counterpart the reader cannot see is the whole problem this solves. */
+  .counterpart {
+    position: fixed; z-index: 40; pointer-events: none;
+    background: var(--ink, #14161a); color: #fff;
+    padding: 4px 8px; border-radius: 4px; font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25); white-space: nowrap;
+  }
+  .counterpart::before { content: "elsewhere: "; opacity: .65; }
 
   /* ---- what the last correction changed ----
      A new total is a number to compare from memory. These are the three counts
@@ -1632,6 +1651,14 @@ function actionButtons(a, index) {
       <button class="go" data-move="${index}">Move it</button>${aside}
       <span class="manual">${esc(whyManual(a))}</span></div>`;
   }
+  // Two stated figures disagree. TieOut will not choose between them, so the
+  // offer is the run and the counterpart, not a correction.
+  if (a.editable) {
+    return `<div class="acts">
+      <button class="go" data-editfig="${index}">Edit it</button>${aside}
+      <span class="manual">Yours to decide — both figures are stated, and only
+      you know which is right.</span></div>`;
+  }
   return `<div class="acts">${aside}
     <span class="manual">${esc(whyManual(a))}</span></div>`;
 }
@@ -1645,6 +1672,8 @@ const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003"
 function whyManual(a) {
   if (a.movable)
     return "Yours to place — TieOut will not choose where it goes.";
+  if (a.editable)
+    return "Yours to decide — both figures are stated, and only you know which is right.";
   if (GEOMETRY.includes(a.rule_id))
     return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
   return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
@@ -1767,6 +1796,18 @@ function wireNote() {
       const action = (S.audit.actions || [])[Number(el.dataset.move)];
       const instance = action && action.instances.find((i) => movableOf(i));
       if (instance) beginMove(instance.slide, instance);
+    };
+  });
+  // Two stated figures disagree: open the run that holds one of them, with the
+  // other beside it. The button navigates rather than writing, which is the
+  // whole difference between this and Fix it.
+  $("pane").querySelectorAll("[data-editfig]").forEach((el) => {
+    el.onclick = (event) => {
+      event.stopPropagation();
+      const action = (S.audit.actions || [])[Number(el.dataset.editfig)];
+      const instance = action && action.instances.find(
+        (i) => i.figure && i.figure.kind === "edit" && !i.figure.refused);
+      if (instance) beginFigureEdit(instance);
     };
   });
   $("pane").querySelectorAll("[data-moveinst]").forEach((el) => {
@@ -2283,10 +2324,18 @@ function tableHtml(table) {
     ? table.row_heights_pt.map((h) => `${Math.max(h, 1)}fr`).join(" ")
     : `repeat(${table.row_count}, 1fr)`;
   const cells = table.cells.filter((c) => !c.is_merge_continuation).map((c) => {
-    const text = c.paragraphs.map((p) => p.runs.map((r) => r.text).join("")).join(" ");
     const isHead = table.first_row_is_header && c.row === 0;
-    return `<div class="${isHead ? "head" : ""}" style="grid-column:${c.column + 1} / span ${c.column_span};
-      grid-row:${c.row + 1} / span ${c.row_span};${fillCss(c.fill)}">${esc(text)}</div>`;
+    // Runs, not one escaped string. A tie-out correction addresses (row,
+    // column, paragraph, run), and a cell drawn as flat text has nothing for
+    // that address to point at — so the surface could show a wrong margin and
+    // not let anyone touch it. The markup mirrors a text frame's exactly, which
+    // is what lets beginTextEdit handle both with one code path.
+    const body = c.paragraphs.map((p) =>
+      `<p data-paragraph="${p.index}">${p.runs.map((r) => runHtml(r)).join("") || "&nbsp;"}</p>`
+    ).join("");
+    return `<div class="${isHead ? "head" : ""}" data-row="${c.row}" data-column="${c.column}"
+      style="grid-column:${c.column + 1} / span ${c.column_span};
+      grid-row:${c.row + 1} / span ${c.row_span};${fillCss(c.fill)}">${body}</div>`;
   }).join("");
   return `<div class="grid" style="grid-template-columns:${cols}; grid-template-rows:${rows}">${cells}</div>`;
 }
@@ -2338,7 +2387,13 @@ function wireShapes(view) {
     lastClick = isDouble ? { time: 0, uid: null } : { time: now, uid: shape.uid };
     if (isDouble) {
       const run = event.target.closest("[data-run]");
-      if (run && shape.editable.text_editable) beginTextEdit(shape, run);
+      if (!run) return;
+      const cell = run.closest("[data-row][data-column]");
+      if (cell) {
+        if (shape.editable.cell_text_editable) beginTextEdit(shape, run, cell);
+      } else if (shape.editable.text_editable) {
+        beginTextEdit(shape, run);
+      }
       else openShape(shape);
       return;
     }
@@ -2455,6 +2510,65 @@ function beginMove(slideIndex, source) {
   };
   renderSlide();
   focusEditor();
+}
+
+// Open the in-place editor on the run a tie-out finding names, with the
+// counterpart figure floated beside it.
+//
+// Navigating first and opening second, rather than the reverse, because the
+// run has to exist in the DOM before it can be put into edit — and after a
+// slide change the surface is fetched, so the span is not there yet. The wait
+// is bounded: a run that never appears leaves the person on the right slide
+// with the shape flashed, which is still most of the answer.
+async function beginFigureEdit(instance) {
+  const f = instance.figure;
+  if (!f) return;
+  if (S.slide !== instance.slide) {
+    select(instance.slide, instance.bbox_pt || null, "");
+    await loadCanvas(instance.slide);
+    renderSlide();
+  }
+  const view = S.canvas[S.slide];
+  const shape = view ? findCanvasShape(view, f.uid) : null;
+  const span = figureSpan(f);
+  if (!shape || !span) {
+    return paneMessage("warn",
+      `The figure is on slide ${instance.slide}. Double-click it on the slide to edit it.`);
+  }
+  span.scrollIntoView({ block: "center", behavior: "smooth" });
+  beginTextEdit(shape, span, f.row === null ? null : span.closest("[data-row][data-column]"),
+    f.counterpart ? { text: f.counterpart, slide: f.counterpart_slide } : null);
+}
+
+// The <span> a correction addresses, found the same way the correction was
+// written: by position, never by matching the text. Two cells in one table can
+// legitimately hold the same digits, and the one in front of the reader is the
+// one they asked about.
+function figureSpan(f) {
+  // Keyed on uid, not shape_id: the surface draws shapes by uid because
+  // cNvPr@id is not unique in practice, and two shapes on one slide sharing an
+  // id would otherwise put the editor on whichever came first.
+  const shapeEl = document.querySelector(`#shapes [data-uid="${f.uid}"]`);
+  if (!shapeEl) return null;
+  const holder = f.row === null
+    ? shapeEl
+    : shapeEl.querySelector(`[data-row="${f.row}"][data-column="${f.column}"]`);
+  if (!holder) return null;
+  const para = holder.querySelector(`[data-paragraph="${f.paragraph}"]`);
+  if (!para) return null;
+  return para.querySelector(`[data-run="${f.run}"]`);
+}
+
+function findCanvasShape(view, uid) {
+  const walk = (nodes) => {
+    for (const node of nodes || []) {
+      if (node.uid === uid) return node;
+      const inner = walk(node.children);
+      if (inner) return inner;
+    }
+    return null;
+  };
+  return walk(view.shapes);
 }
 
 // The other way into the same editor: clicking a real shape on the live
@@ -2858,7 +2972,7 @@ async function applyEdit() {
    to reach for, and the model has no slot for a paragraph split into two.
 */
 
-function beginTextEdit(shape, span) {
+function beginTextEdit(shape, span, cell, beside) {
   if (S.edit || S.textEdit) return;
   const paragraphEl = span.closest("[data-paragraph]");
   if (!paragraphEl) return;
@@ -2867,8 +2981,17 @@ function beginTextEdit(shape, span) {
     shape, span, slide: S.slide,
     paragraph: Number(paragraphEl.dataset.paragraph),
     run: Number(span.dataset.run),
+    // Present for a table cell, absent for a shape's own text frame. The
+    // server reads the pair together and switches address spelling on it.
+    row: cell ? Number(cell.dataset.row) : null,
+    column: cell ? Number(cell.dataset.column) : null,
     original, committing: false,
   };
+  // The counterpart figure, shown beside the run being edited. PLAN.md §5.5:
+  // which of two stated figures is right is a judgement about the deal, so the
+  // person making it needs both numbers in front of them rather than one number
+  // and a memory of the other.
+  if (beside) showCounterpart(span, beside);
   span.contentEditable = "true";
   span.spellcheck = false;
   span.onblur = () => commitTextEdit();
@@ -2879,6 +3002,29 @@ function beginTextEdit(shape, span) {
   };
   span.focus();
   placeCaretAtEnd(span);
+}
+
+// The other figure, floated beside the run being edited. Deliberately not a
+// prompt with an OK button: the edit itself is the commit, and an extra step
+// between reading the counterpart and typing would put the number back out of
+// sight at the moment it is needed.
+function showCounterpart(span, beside) {
+  hideCounterpart();
+  const chip = document.createElement("div");
+  chip.className = "counterpart";
+  chip.id = "counterpart";
+  chip.textContent = beside.slide
+    ? `${beside.text} on slide ${beside.slide}`
+    : beside.text;
+  document.body.appendChild(chip);
+  const box = span.getBoundingClientRect();
+  chip.style.left = `${Math.round(box.left)}px`;
+  chip.style.top = `${Math.round(box.bottom + 6)}px`;
+}
+
+function hideCounterpart() {
+  const chip = $("counterpart");
+  if (chip) chip.remove();
 }
 
 function placeCaretAtEnd(el) {
@@ -2897,6 +3043,7 @@ function placeCaretAtEnd(el) {
 function cancelTextEdit() {
   const t = S.textEdit;
   if (!t) return;
+  hideCounterpart();
   t.span.onblur = null;
   t.span.onkeydown = null;
   t.span.contentEditable = "false";
@@ -2911,6 +3058,7 @@ async function commitTextEdit() {
   t.span.onblur = null;
   t.span.onkeydown = null;
   t.span.contentEditable = "false";
+  hideCounterpart();
   if (text === t.original) { S.textEdit = null; return; }
   t.committing = true;
   busy("Editing the text");
@@ -2919,6 +3067,7 @@ async function commitTextEdit() {
     next = await api("/api/edit-text", { method: "POST", body: {
       deck_id: S.deck.deck_id, client: S.client, slide: t.slide,
       shape_id: t.shape.shape_id, paragraph: t.paragraph, run: t.run, text,
+      row: t.row, column: t.column,
     } });
   } catch (err) {
     busy(""); t.span.textContent = t.original; S.textEdit = null;

@@ -114,6 +114,7 @@ __all__ = [
     "normalise_label",
     "parse_period",
     "read_cell_value",
+    "restate",
     "strip_value_footnote",
 ]
 
@@ -547,6 +548,12 @@ class Figure:
     #: The text exactly as the deck writes it, for a replacement that has to be
     #: written in the original's own format.
     raw: str = ""
+    #: For a table figure, ``(paragraph, run)`` *inside the cell* — the address
+    #: a write needs on top of ``(row, column)``. A cell is a text frame like
+    #: any other, and a figure carrying a footnote marker ("58.1 (a)") has its
+    #: digits in one run and its marker in the next; rewriting the whole cell
+    #: would take the marker with it.
+    cell_run: tuple[int, int] = (0, 0)
 
     @property
     def place(self) -> tuple[int, int]:
@@ -751,6 +758,45 @@ class FigureIndex:
         return out
 
 
+def restate(reading: NumberReading, value: float) -> str:
+    """``value``, written the way the deck writes ``reading``.
+
+    This is the detail most likely to be skipped and most likely to be noticed.
+    A fix that corrects 23.1 to 23.4 and drops a currency prefix, a thousands
+    separator or a decimal place has introduced a formatting defect while
+    fixing an arithmetic one -- and TieOut's own typography rules will then
+    report it, on a slide TieOut itself just edited.
+
+    So every property the reading carries is carried through: the number of
+    decimals, the thousands separator and which one it is, whether a negative
+    is written with a minus or in parentheses, the currency prefix, and the
+    suffix. What is *not* carried through is the sign convention where the sign
+    changes: a figure written "(42)" that corrects to a positive is written
+    "42", because writing "(42)" for a positive number is worse than either.
+
+    The replacement is a string rather than a number for the same reason
+    ``Finding.measured`` is: the unit and the precision are part of what the
+    cell says.
+    """
+    magnitude = abs(value)
+    body = f"{magnitude:,.{reading.decimals}f}"
+    if reading.thousands_separator is None:
+        body = body.replace(",", "")
+    elif reading.thousands_separator != ",":
+        body = body.replace(",", reading.thousands_separator)
+
+    if reading.currency:
+        body = f"{reading.currency}{body}"
+    if reading.suffix:
+        body = f"{body}{reading.suffix}"
+
+    if value >= 0:
+        return body
+    if reading.negative_style == "parentheses":
+        return f"({body})"
+    return f"-{body}"
+
+
 def _tiers(
     candidates: Sequence[Figure], near: Figure | None
 ) -> tuple[list[Figure], list[Figure], list[Figure]]:
@@ -895,6 +941,7 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
             unit = _unit_of(reading).with_inherited(
                 header_units.get(column, Unit()).with_inherited(caption)
             )
+            inside = _cell_run_holding(cell.paragraphs, reading.raw)
             out.append(
                 Figure(
                     reading=reading,
@@ -913,9 +960,27 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                     unit=unit,
                     scope=scope,
                     raw=text.strip(),
+                    cell_run=inside,
                 )
             )
     return out
+
+
+def _cell_run_holding(paragraphs: Sequence[object], value: str) -> tuple[int, int]:
+    """Which ``(paragraph, run)`` of a cell holds the figure's digits.
+
+    Falls back to ``(0, 0)``, which is right for the overwhelming majority of
+    cells -- one paragraph, one run, the number and nothing else. The search
+    matters for the minority: a cell reading "58.1 (a)" often carries the
+    marker in a superscripted run of its own, and a correction that rewrote run
+    zero with the new figure alone would silently drop the footnote.
+    """
+    digits = value.strip()
+    for p_index, paragraph in enumerate(paragraphs):
+        for r_index, run in enumerate(getattr(paragraph, "runs", ())):
+            if digits and digits in getattr(run, "text", ""):
+                return (p_index, r_index)
+    return (0, 0)
 
 
 def _inherited_unit(slide: SlideModel, shape: ShapeModel) -> Unit:

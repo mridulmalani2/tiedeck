@@ -70,6 +70,66 @@ SEVERITY_GLYPHS: Final[dict[str, str]] = {
 
 
 @dataclass(frozen=True, slots=True)
+class Correction:
+    """Where a finding's figure is, and what -- if anything -- must replace it.
+
+    The whole of PLAN.md §5.5's argument is the split between the two kinds,
+    and it is carried here rather than decided in the UI:
+
+    ``fix``
+        The figure is *derived*, so it has one right answer. A margin that must
+        equal its inputs, a multiple that must equal its inputs, a total that
+        must equal its column, a bridge's closing figure. ``replacement`` is
+        that answer, already written in the original's own format, so applying
+        it is arithmetic and TieOut is not choosing anything.
+    ``edit``
+        Two *stated* figures disagree. Which of them is right is a judgement
+        about the deal, not arithmetic, so ``replacement`` is ``None`` and the
+        person is shown the counterpart figure and told where it is. TieOut
+        does not decide.
+
+    Attached by the rule, which has already computed everything in it. The
+    alternative -- re-deriving the address and the arithmetic in the web layer
+    -- is a second implementation of every rule's working, and the first time
+    the two disagreed it would be the one nobody tested that wrote to the deck.
+
+    ``refused`` is set where the figure cannot be written back: a chart point,
+    or a run inside a group. It carries the reason so the refusal is *visible*
+    rather than a button that does nothing.
+    """
+
+    #: ``"fix"`` or ``"edit"``. See above.
+    kind: str
+    #: ``"table"``, ``"text"`` or ``"chart"``: which address spelling applies.
+    source: str
+    shape_id: int
+    #: ``(row, column)``, ``(paragraph, run)`` or ``(series, point)``.
+    address: tuple[int, int]
+    #: The shape's identity within its slide. ``shape_id`` is what a *write*
+    #: addresses and ``uid`` is what anything keyed on identity uses, because
+    #: ``cNvPr@id`` is not unique in practice. The live surface draws shapes
+    #: keyed on ``uid``, so finding the figure on screen needs this one.
+    uid: int = -1
+    #: Where in the cell or run the figure's text sits, for a table cell whose
+    #: value is one run of one paragraph.
+    cell_paragraph: int = 0
+    cell_run: int = 0
+    #: The figure exactly as the deck writes it now.
+    current: str = ""
+    #: What must replace it, in the original's own format. ``None`` for an edit.
+    replacement: str | None = None
+    #: The other figure and where it is, for an edit.
+    counterpart: str | None = None
+    counterpart_slide: int | None = None
+    #: Why this figure cannot be written back, where it cannot.
+    refused: str | None = None
+
+    @property
+    def writable(self) -> bool:
+        return self.refused is None
+
+
+@dataclass(frozen=True, slots=True)
 class Finding:
     """One reported deviation.
 
@@ -97,6 +157,10 @@ class Finding:
     #: overlapping pair or a total that does not sum is a judgement, and a
     #: confident instruction there would be worse than silence.
     remedy: str | None = None
+    #: Where the figure this finding is about sits, and what to do with it.
+    #: Set only by the rules that read :mod:`tieout.figures`; ``None``
+    #: everywhere else, which is how the page knows not to offer a button.
+    correction: Correction | None = None
 
     @property
     def slide_index(self) -> int:
@@ -211,6 +275,7 @@ class Rule(ABC):
         severity: Severity | None = None,
         confidence: Confidence | None = None,
         remedy: str | None = None,
+        correction: Correction | None = None,
     ) -> Finding:
         """Build a finding, pulling severity, confidence and provenance from the
         profile so a rule cannot forget to.
@@ -238,6 +303,7 @@ class Rule(ABC):
             message=message,
             measured=measured,
             expected=expected,
+            correction=correction,
             expected_provenance=provenance,
             bbox_pt=bbox_pt,
             remedy=remedy,

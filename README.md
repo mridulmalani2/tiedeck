@@ -658,6 +658,35 @@ practice in some decks and a drafting observation rather than an accusation.
 Never: inventing a figure where nothing in the deck determines it. A correction
 is offered only where the answer is arithmetic.
 
+### Acting on a tie-out finding
+
+Two buttons, and the split between them is the whole argument.
+
+**Fix it** is offered only where the figure is *derived* and therefore has one
+right answer: a margin that must equal its inputs, a multiple that must equal
+its inputs, a total that must equal its column, a bridge's closing figure. The
+correction is arithmetic on figures the deck already prints, so TieOut is not
+choosing anything. The convention — here and in the modelling this audits — is
+that the derived figure yields to its inputs, because the inputs are the primary
+facts. It is one click to undo if you disagree.
+
+**Edit it** is offered where two figures are each *stated* and disagree. Which
+of them is right is a judgement about the deal, not arithmetic, so TieOut writes
+nothing. The button opens the run in the in-place editor on the slide, with the
+counterpart figure and its slide floated beside it, so the person deciding has
+both numbers in front of them. Type, Enter to write, Escape to leave it alone.
+
+**A replacement is written in the original's own format.** `NumberReading`
+carries the decimals, the thousands separator and which one it is, the negative
+style, the currency and the suffix, and a correction keeps all of them: 24.0%
+becomes 18.4%, not 18.39622641. A fix that corrected the arithmetic and dropped
+a per-cent sign would trade one finding for a typography one, on a slide TieOut
+had just edited.
+
+**A refusal is visible.** A chart's values live in a cached copy and in an
+embedded workbook, and TieOut writes neither — so a finding anchored on a chart
+point says that in a sentence rather than offering a button that does nothing.
+
 ### Turning a rule on or off
 
 Two rules ship **off**: `LO-006` because overflow detection is approximate and
@@ -1282,7 +1311,8 @@ when the server stops.
 5. **Run.**
 6. **Results.** A verdict, then the work, with **Fix it** on everything TieOut
    can correct exactly, **Move it** where the answer is a position rather than a
-   substitution, and **Export deck** when you are done. Each correction reports
+   substitution, **Edit it** where two stated figures disagree and only you know
+   which is right, and **Export deck** when you are done. Each correction reports
    what it fixed, what is left and what it exposed — see
    [What each correction changed](#what-each-correction-changed). **Copy note** puts the same thing on
    the clipboard as plain text, and the self-contained HTML report is the one
