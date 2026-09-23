@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field
 from tieout.learn import LearnResult, apply_answers, learn_from_decks
 from tieout.learn.emit import write as write_profile
 from tieout.model.deck import DeckModel
+from tieout.model.deck import ShapeModel as DeckShape
 from tieout.model.loader import DeckLoadError, load_deck
 from tieout.model.units import pt_to_emu
 from tieout.profile.loader import (
@@ -67,6 +68,7 @@ from tieout_fix import (
     delta,
     move_fix,
     plan_fixes,
+    recell_fix,
     resize_fix,
     retext_fix,
 )
@@ -249,6 +251,13 @@ class EditTextRequest(BaseModel):
     paragraph: int
     run: int
     text: str = Field(max_length=10_000)
+    #: Set together to edit a figure inside a table, where ``paragraph`` and
+    #: ``run`` then address the run *within that cell*. A tie-out finding is
+    #: nearly always about a cell, and before this the editor could only reach
+    #: a shape's own text frame -- so **Edit it** on the one thing it exists for
+    #: would have raised "that shape has no text frame".
+    row: int | None = None
+    column: int | None = None
 
 
 class UndoRequest(BaseModel):
@@ -690,6 +699,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         """
         deck = _require(store, request.deck_id)
         profile = _load(request.client)
+        in_cell = request.row is not None and request.column is not None
 
         with deck.lock:
             shape = find_shape(deck.model, request.slide, request.shape_id)
@@ -701,10 +711,14 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
                         "Re-run the check and try again."
                     ),
                 )
-            if not shape.has_text_frame:
-                raise HTTPException(status_code=422, detail="that shape has no text frame")
-
-            paragraphs = shape.text_frame_paragraphs
+            if in_cell:
+                paragraphs = _cell_paragraphs(shape, request)
+            else:
+                if not shape.has_text_frame:
+                    raise HTTPException(
+                        status_code=422, detail="that shape has no text frame"
+                    )
+                paragraphs = shape.text_frame_paragraphs
             if not 0 <= request.paragraph < len(paragraphs):
                 raise HTTPException(
                     status_code=422,
@@ -728,13 +742,26 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
                     detail="that is already the text, so nothing was written.",
                 )
 
-            chosen = retext_fix(
-                slide_index=request.slide,
-                shape_id=request.shape_id,
-                shape_name=shape.ref.display_name,
-                paragraph=request.paragraph,
-                run=request.run,
-                text=request.text,
+            chosen = (
+                recell_fix(
+                    slide_index=request.slide,
+                    shape_id=request.shape_id,
+                    shape_name=shape.ref.display_name,
+                    row=request.row or 0,
+                    column=request.column or 0,
+                    paragraph=request.paragraph,
+                    run=request.run,
+                    text=request.text,
+                )
+                if in_cell
+                else retext_fix(
+                    slide_index=request.slide,
+                    shape_id=request.shape_id,
+                    shape_name=shape.ref.display_name,
+                    paragraph=request.paragraph,
+                    run=request.run,
+                    text=request.text,
+                )
             )
             version = store.next_version(deck)
             report = apply_fix(deck.current, version, chosen)
@@ -884,6 +911,34 @@ def _check_reach(model: DeckModel, x_emu: int, y_emu: int) -> None:
                 "in practice, so it was not written."
             ),
         )
+
+
+def _cell_paragraphs(shape: DeckShape, request: EditTextRequest) -> Any:
+    """The paragraphs of the table cell an edit names, or a refusal.
+
+    Every check is a 404 or a 422 with a sentence rather than an exception,
+    because the realistic way to arrive here with a bad address is a deck that
+    changed under a page still showing the previous check -- recoverable, and
+    a different thing to tell someone than a bug.
+    """
+    table = shape.table
+    if table is None:
+        raise HTTPException(status_code=422, detail="that shape is not a table")
+    row, column = request.row or 0, request.column or 0
+    if not 0 <= row < table.row_count or not 0 <= column < table.column_count:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"that table has no cell at row {row + 1}, column {column + 1}. "
+                "Re-run the check and try again."
+            ),
+        )
+    cell = table.cell(row, column)
+    if cell is None:
+        raise HTTPException(
+            status_code=422, detail="that cell is a continuation of a merged cell"
+        )
+    return cell.paragraphs
 
 
 def _plan(deck: Deck, profile: Profile) -> dict[str, Fix]:

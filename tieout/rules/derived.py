@@ -58,11 +58,13 @@ from tieout.figures import (
     build_index,
     is_specific,
     normalise_label,
+    restate,
     split_period,
+    unwritable,
 )
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
 from tieout.profile.schema import Confidence, Profile, Severity
-from tieout.rules.base import Finding, Rule, cluster_findings, register
+from tieout.rules.base import Correction, Finding, Rule, cluster_findings, register
 from tieout.text import find_dates, parse_number
 
 __all__ = [
@@ -301,6 +303,36 @@ def _evidence(figure: Figure) -> str:
     return f"{figure.metric} {_format(figure)} (slide {figure.slide_index})"
 
 
+def _fix(stated: Figure, computed: float) -> Correction:
+    """A **Fix it**: the figure is derived, so it has one right answer.
+
+    PLAN.md §5.5 draws the whole line here. A margin that must equal its
+    inputs, a multiple that must equal its inputs, a growth rate that must
+    equal its series, a bridge's closing figure -- every one of them is
+    determined by numbers already on the page, so writing the answer is
+    arithmetic and TieOut is not choosing anything. Contrast
+    :func:`tieout.rules.consistency._edit`, where two *stated* figures disagree
+    and which is right is a judgement about the deal.
+
+    The replacement goes through :func:`tieout.figures.restate`, so it keeps
+    the original's decimals, separator, negative style, currency and suffix. A
+    fix that corrects 24.0% to 19.0 and drops the per-cent sign has traded an
+    arithmetic finding for a typography one.
+    """
+    return Correction(
+        kind="fix",
+        source=stated.source,
+        shape_id=stated.shape_id,
+        uid=stated.uid,
+        address=stated.address,
+        cell_paragraph=stated.cell_run[0],
+        cell_run=stated.cell_run[1],
+        current=_format(stated),
+        replacement=restate(stated.reading, computed),
+        refused=unwritable(stated),
+    )
+
+
 # --------------------------------------------------------------------------------------
 # The shared shape of CO-004 and CO-005
 # --------------------------------------------------------------------------------------
@@ -349,6 +381,7 @@ class _DerivedRatio(Rule):
                         f"{_evidence(numerator)} over {_evidence(denominator)}"
                     ),
                     remedy=self.remedy,
+                    correction=_fix(stated, computed),
                     bbox_pt=stated.bbox_pt,
                 )
             )
@@ -620,6 +653,7 @@ class GrowthDoesNotMatch(Rule):
                         f"{_evidence(start)} to {_evidence(end)}"
                     ),
                     remedy="Correct the rate, or the series it is computed from",
+                    correction=_fix(stated, computed),
                     bbox_pt=stated.bbox_pt,
                 )
             )
@@ -681,6 +715,22 @@ _CLOSING: Final[frozenset[str]] = frozenset(
 _MIN_STEPS: Final[int] = 2
 
 
+@dataclass(frozen=True, slots=True)
+class _Step:
+    """One bar of a bridge, with enough to write its value back.
+
+    ``address`` is ``(row, column)`` in a table and ``(series, point)`` in a
+    chart; ``source`` says which, so the closing figure can be corrected where
+    it is a cell and refused visibly where it is a bar.
+    """
+
+    label: str
+    value: float
+    decimals: int
+    source: str
+    address: tuple[int, int]
+
+
 def _marks(label: str, vocabulary: frozenset[str]) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", label) for word in vocabulary)
 
@@ -729,7 +779,7 @@ class BridgeDoesNotCarry(Rule):
                 if isinstance(verdict, str):
                     self.note_unchecked(shape.ref, verdict)
                     continue
-                opening, steps, stated, computed, tolerance = verdict
+                opening, steps, closing, computed, tolerance = verdict
                 findings.append(
                     self.finding(
                         where=shape.ref,
@@ -737,19 +787,43 @@ class BridgeDoesNotCarry(Rule):
                         provenance_path="consistency",
                         message=(
                             f"the bridge opens at {_plain(opening)} and states "
-                            f"{_plain(stated)} at the close, but the {steps} step(s) "
-                            f"between carry it to {_plain(computed)}"
+                            f"{_plain(closing.value)} at the close, but the {steps} "
+                            f"step(s) between carry it to {_plain(computed)}"
                         ),
-                        measured=_plain(stated),
+                        measured=_plain(closing.value),
                         expected=f"{_plain(computed)} (+/-{_tol(tolerance)} rounding)",
                         remedy="Correct the closing figure, or the steps between",
+                        correction=self._closing_correction(shape, closing, computed),
                         bbox_pt=shape.bbox_pt,
                     )
                 )
         del slide
         return cluster_findings(findings)
 
-    def _series(self, shape: ShapeModel) -> list[tuple[str, float, int]] | None:
+    def _closing_correction(
+        self, shape: ShapeModel, closing: _Step, computed: float
+    ) -> Correction | None:
+        """A **Fix it** on the closing figure, where it is a cell.
+
+        The closing figure is the one the steps determine; the steps are what a
+        person may want to argue with. A bridge drawn as a chart is refused
+        visibly, because its bars live in cached data TieOut does not write.
+        """
+        cell = shape.table.cell(*closing.address) if shape.table is not None else None
+        reading = parse_number(cell.text) if cell is not None else None
+        if reading is None:
+            return None
+        return Correction(
+            kind="fix",
+            source="table",
+            shape_id=shape.ref.shape_id,
+            uid=shape.ref.uid,
+            address=closing.address,
+            current=cell.text.strip() if cell is not None else "",
+            replacement=restate(reading, computed),
+        )
+
+    def _series(self, shape: ShapeModel) -> list[_Step] | None:
         """``(label, value, decimals)`` for a shape that looks like a bridge.
 
         A bridge is recognised by its ends, not by its chart type: PowerPoint
@@ -762,8 +836,8 @@ class BridgeDoesNotCarry(Rule):
             if not chart.categories or len(chart.series) != 1:
                 return None
             values = chart.series[0].values
-            plotted: list[tuple[str, float, int]] = [
-                (normalise_label(category), value, 0)
+            plotted: list[_Step] = [
+                _Step(normalise_label(category), value, 0, "chart", (0, position))
                 for position, category in enumerate(chart.categories)
                 if position < len(values) and (value := values[position]) is not None
             ]
@@ -772,7 +846,7 @@ class BridgeDoesNotCarry(Rule):
         table = shape.table
         if table is None or table.row_count < 4 or table.column_count < 2:
             return None
-        out: list[tuple[str, float, int]] = []
+        out: list[_Step] = []
         for row in range(table.row_count):
             label_cell = table.cell(row, 0)
             value_cell = table.cell(row, 1)
@@ -781,17 +855,25 @@ class BridgeDoesNotCarry(Rule):
             reading = parse_number(value_cell.text)
             if reading is None:
                 continue
-            out.append((normalise_label(label_cell.text), reading.value, reading.decimals))
+            out.append(
+                _Step(
+                    normalise_label(label_cell.text),
+                    reading.value,
+                    reading.decimals,
+                    "table",
+                    (row, 1),
+                )
+            )
         return out if self._has_ends(out) else None
 
-    def _has_ends(self, series: Sequence[tuple[str, float, int]]) -> bool:
+    def _has_ends(self, series: Sequence[_Step]) -> bool:
         if len(series) < _MIN_STEPS + 2:
             return False
-        if _marks(series[0][0], _OPENING) and _marks(series[-1][0], _CLOSING):
+        if _marks(series[0].label, _OPENING) and _marks(series[-1].label, _CLOSING):
             return True
         return self._spans_two_periods(series)
 
-    def _spans_two_periods(self, series: Sequence[tuple[str, float, int]]) -> bool:
+    def _spans_two_periods(self, series: Sequence[_Step]) -> bool:
         """A bridge whose ends are named by their periods rather than by a word.
 
         "FY24A revenue | Volume | Price | FX | FY25A revenue" is how a revenue
@@ -807,29 +889,27 @@ class BridgeDoesNotCarry(Rule):
         and **no step between them names a period at all**. A history table
         names one on every row.
         """
-        first_metric, first_period = split_period(series[0][0])
-        last_metric, last_period = split_period(series[-1][0])
+        first_metric, first_period = split_period(series[0].label)
+        last_metric, last_period = split_period(series[-1].label)
         if first_period is None or last_period is None or first_period == last_period:
             return False
         if not is_specific(first_metric) or first_metric != last_metric:
             return False
-        return all(split_period(label)[1] is None for label, _, _ in series[1:-1])
+        return all(split_period(step.label)[1] is None for step in series[1:-1])
 
     def _check(
-        self, series: list[tuple[str, float, int]]
-    ) -> tuple[float, int, float, float, float] | str | None:
-        opening = series[0][1]
-        stated = series[-1][1]
+        self, series: list[_Step]
+    ) -> tuple[float, int, _Step, float, float] | str | None:
+        opening = series[0].value
+        closing = series[-1]
         steps = series[1:-1]
         if len(steps) < _MIN_STEPS:
             return "this bridge has fewer than two steps between its ends"
-        computed = opening + sum(value for _, value, _ in steps)
-        tolerance = sum(
-            0.5 * 10.0**-decimals for _, _, decimals in series
-        )
-        if abs(computed - stated) <= tolerance:
+        computed = opening + sum(step.value for step in steps)
+        tolerance = sum(0.5 * 10.0**-step.decimals for step in series)
+        if abs(computed - closing.value) <= tolerance:
             return None
-        return opening, len(steps), stated, computed, tolerance
+        return opening, len(steps), closing, computed, tolerance
 
 
 # --------------------------------------------------------------------------------------

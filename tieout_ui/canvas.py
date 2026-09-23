@@ -55,11 +55,13 @@ _PLACEHOLDER_REASONS: Final[dict[str, str]] = {
     "unknown": "TieOut could not identify this shape's kind.",
 }
 
-#: Kinds whose text, when they have a text frame, is a substitution the editor
-#: may offer to change in place. A table's cell text and a chart's title text
-#: are both real and checkable, but editing either one here would need a
-#: cell-level or series-level write-back this tool does not have -- the same
-#: line PLAN.md draws at "select stops at the frame".
+#: Kinds whose own text frame the editor may change in place.
+#:
+#: A table is not here and does not need to be: its cells are editable through
+#: ``cell_text_editable`` below, which is a different address and therefore a
+#: different flag. A chart is not here either, and that one is a real refusal --
+#: a series' values live in a cached copy and in an embedded workbook, and
+#: TieOut writes neither.
 _TEXT_EDITABLE_KINDS: Final[frozenset[str]] = frozenset(
     {"autoshape", "textbox", "connector", "freeform", "placeholder"}
 )
@@ -130,6 +132,13 @@ def _shape(shape: ShapeModel, is_data_mark: bool) -> dict[str, Any]:
             "text_editable": (
                 shape.has_text_frame and shape.kind in _TEXT_EDITABLE_KINDS
             ),
+            # A table's cells, which is where a tie-out finding almost always
+            # lands. This read "no cell-level write-back this tool does not
+            # have" until ``tieout_fix.recell_fix`` gave it one, and the
+            # consequence was sharp: the derived checks could compute a
+            # correction for a margin and there was nowhere on the surface to
+            # apply it. The chart half of that refusal stands.
+            "cell_text_editable": shape.table is not None,
         },
     }
     return node

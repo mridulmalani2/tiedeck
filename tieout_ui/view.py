@@ -332,6 +332,45 @@ def _move_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:
     return block
 
 
+def _figure_block(finding: Finding) -> dict[str, Any] | None:
+    """What the page needs to act on a tie-out finding, or None.
+
+    PLAN.md §5.5's split, carried to the browser unchanged. The rule already
+    decided which of the two this is and why; nothing is re-derived here,
+    because a second opinion about whether a figure is derived is a second
+    place for the two to disagree.
+
+    ``fix`` findings do not need this block to get a button -- ``plan_fixes``
+    gives them the ordinary **Fix it** every other correctable rule uses. They
+    carry it anyway so the page can show the replacement beside the button,
+    and so a refusal has somewhere to be said out loud.
+    """
+    correction = finding.correction
+    if correction is None:
+        return None
+    return {
+        "kind": correction.kind,
+        "source": correction.source,
+        "shape_id": correction.shape_id,
+        "uid": correction.uid,
+        "row": correction.address[0] if correction.source == "table" else None,
+        "column": correction.address[1] if correction.source == "table" else None,
+        "paragraph": (
+            correction.cell_paragraph
+            if correction.source == "table"
+            else correction.address[0]
+        ),
+        "run": (
+            correction.cell_run if correction.source == "table" else correction.address[1]
+        ),
+        "current": correction.current,
+        "replacement": correction.replacement,
+        "counterpart": correction.counterpart,
+        "counterpart_slide": correction.counterpart_slide,
+        "refused": correction.refused,
+    }
+
+
 def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
     """The audit, arranged slide by slide.
 
@@ -358,6 +397,7 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
                 "remedy": finding.remedy,
                 "bbox_pt": finding.bbox_pt,
                 "move": _move_block(finding, deck),
+                "figure": _figure_block(finding),
             }
         )
 
@@ -498,6 +538,7 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "expected": finding["expected"],
                     "bbox_pt": finding["bbox_pt"],
                     "move": finding["move"],
+                    "figure": finding["figure"],
                 }
             )
 
@@ -518,6 +559,17 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # at least one of its shapes has to be one this can actually write.
         action["movable"] = action["rule_id"] in MOVABLE_RULES and any(
             instance["move"] and not instance["move"]["refused"]
+            for instance in action["instances"]
+        )
+        # Whether the page offers **Edit it**: two *stated* figures disagree,
+        # which of them is right is a judgement about the deal, and the editor
+        # can reach the run that holds one of them. Deliberately not "fixable":
+        # a derived figure gets the ordinary Fix it button, and offering both
+        # on one finding would blur the only distinction this is drawing.
+        action["editable"] = any(
+            instance["figure"]
+            and instance["figure"]["kind"] == "edit"
+            and not instance["figure"]["refused"]
             for instance in action["instances"]
         )
         # A measurement or an expectation on the group header is only true if
