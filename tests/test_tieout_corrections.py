@@ -582,3 +582,109 @@ def test_a_fix_can_be_undone(client, onboarded, dirty_path, store):
 
     client.post("/api/undo", json={"deck_id": upload["deck_id"], "client": "demo"})
     assert deck.current.read_bytes() == original
+
+
+# --------------------------------------------------------------------------------------
+# A figure split across runs
+# --------------------------------------------------------------------------------------
+
+
+def _split_prose(path, pieces):
+    """A deck whose prose states a figure across two runs of formatting.
+
+    Which is not exotic: bolding half a number, or pasting one and letting
+    PowerPoint keep the source's run boundaries, does it.
+    """
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    first = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = first.shapes.add_table(2, 2, Pt(36), Pt(120), Pt(400), Pt(40))
+    for r, row in enumerate([["Fiscal year", "Revenue"], ["2025A", "1,908"]]):
+        for c, value in enumerate(row):
+            frame.table.cell(r, c).text = value
+    second = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = second.shapes.add_textbox(Pt(36), Pt(60), Pt(800), Pt(40))
+    paragraph = box.text_frame.paragraphs[0]
+    for piece in pieces:
+        run = paragraph.add_run()
+        run.text = piece
+        run.font.size = Pt(12)
+    presentation.save(str(path))
+    return load_deck(path)
+
+
+def test_a_figure_split_across_runs_is_still_read(tmp_path):
+    """A reader sees one number, so the index records one number. Refusing to
+    read it would lose the contradiction entirely."""
+    from tieout.figures import build_index
+
+    deck = _split_prose(tmp_path / "split.pptx", ["Revenue reached $4", "12m in 2025A"])
+    (figure,) = build_index(deck).of_source("text")
+    assert figure.reading.value == 412.0
+    assert figure.raw == "$412m"
+
+
+def test_a_figure_split_across_runs_refuses_to_be_written(tmp_path, reference_profile):
+    """The correctness bug this closes, stated as the deck would have shown it.
+
+    The figure addresses to the run holding its first digit, which is where to
+    point someone. It is not where to *write*: a replacement put there leaves
+    "12m in 2025A" sitting after it, so correcting 412 to 1,908 would have
+    produced "1,90812m in 2025A" in a deck about to be sent.
+    """
+    deck = _split_prose(tmp_path / "refuse.pptx", ["Revenue reached $4", "12m in 2025A"])
+    (finding,) = _findings(deck, reference_profile, "CO-001")
+    correction = finding.correction
+    assert correction is not None
+    assert not correction.writable
+    assert "split across two runs" in (correction.refused or "")
+
+
+def test_a_split_figure_is_not_offered_as_a_fix(tmp_path, reference_profile):
+    """Asserted on the planner, because that is what the button reads."""
+    deck = _split_prose(tmp_path / "nofix.pptx", ["Revenue reached $4", "12m in 2025A"])
+    clear_caches()
+    assert plan_fixes(
+        run_rules(deck, reference_profile, include=["CO-*"]), reference_profile
+    ) == {}
+
+
+def test_a_figure_whole_inside_one_run_is_still_writable(tmp_path, reference_profile):
+    """The other half. A refusal that caught every prose figure would be a
+    regression dressed as a safety feature."""
+    deck = _split_prose(
+        tmp_path / "whole.pptx", ["Revenue reached ", "$412m", " in 2025A"]
+    )
+    (finding,) = _findings(deck, reference_profile, "CO-001")
+    assert finding.correction is not None
+    assert finding.correction.writable, finding.correction.refused
+
+
+def test_a_table_cell_split_across_runs_refuses_too(tmp_path, reference_profile):
+    """The same hazard down the other address. A cell whose figure is split
+    would fall back to run zero and overwrite half of it."""
+    from tieout.figures import build_index
+
+    presentation = Presentation()
+    presentation.slide_width = Emu(960 * 12700)
+    presentation.slide_height = Emu(540 * 12700)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_table(2, 4, Pt(36), Pt(120), Pt(600), Pt(40))
+    for column, heading in enumerate(["Fiscal year", "Revenue", "EBITDA", "Margin"]):
+        frame.table.cell(0, column).text = heading
+    for column, value in enumerate(["2025A", "1,908", "351"]):
+        frame.table.cell(1, column).text = value
+    split = frame.table.cell(1, 3).text_frame.paragraphs[0]
+    for piece in ("24", ".0%"):
+        split.add_run().text = piece
+    path = tmp_path / "cell.pptx"
+    presentation.save(str(path))
+
+    deck = load_deck(path)
+    margin = next(f for f in build_index(deck) if f.metric == "margin")
+    assert margin.split_run, "the premise: 24.0% is in two runs"
+
+    (finding,) = _findings(deck, reference_profile, "CO-004")
+    assert finding.correction is not None
+    assert not finding.correction.writable

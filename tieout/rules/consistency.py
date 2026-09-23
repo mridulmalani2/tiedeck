@@ -45,6 +45,7 @@ from tieout.figures import (
     read_cell_value,
     restate,
     strip_value_footnote,
+    unwritable,
 )
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel, TableModel
 from tieout.profile.schema import Confidence, Profile, Severity
@@ -151,30 +152,8 @@ def _edit(other: Figure, first: Figure) -> Correction:
         replacement=None,
         counterpart=_format(first),
         counterpart_slide=first.slide_index,
-        refused=_unwritable(other),
+        refused=unwritable(other),
     )
-
-
-def _unwritable(figure: Figure) -> str | None:
-    """Why this figure cannot be written back, or None.
-
-    PLAN.md §6 names two: a chart point, and a run inside a group. Only the
-    first is refused. ``tieout_fix._shape_element_anywhere`` already searches
-    descendants for exactly this reason -- "no coordinate space stands between
-    an edit to a shape's words and the group it happens to sit in" -- so a
-    grouped run is written correctly today and refusing it would be refusing
-    something that works. A *geometry* write into a group is the dangerous one,
-    and that is handled elsewhere.
-
-    A button that quietly does nothing teaches people the tool is broken; a
-    button that says why it cannot teaches them something true about their deck.
-    """
-    if figure.source == "chart":
-        return (
-            "a chart's values live in its cached data and in the workbook behind "
-            "it, and TieOut writes neither -- correct this in the chart's own data"
-        )
-    return None
 
 
 def _evidence(first: Figure, other: Figure) -> str:

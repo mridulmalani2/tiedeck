@@ -116,6 +116,7 @@ __all__ = [
     "read_cell_value",
     "restate",
     "strip_value_footnote",
+    "unwritable",
 ]
 
 #: Where a figure was read from. Decides how its address is spelled and how much
@@ -548,6 +549,14 @@ class Figure:
     #: The text exactly as the deck writes it, for a replacement that has to be
     #: written in the original's own format.
     raw: str = ""
+    #: Whether the figure's text spans more than one run.
+    #:
+    #: It is still read -- "$4" in one run and "12m" in the next is one number
+    #: and a reader sees one number -- but it cannot be *written*, because a
+    #: replacement put into the run holding the first digit leaves the rest of
+    #: the old figure sitting beside it. Correcting 412 to 2,100 that way gives
+    #: "2,10012m", which is worse than not offering the correction at all.
+    split_run: bool = False
     #: For a table figure, ``(paragraph, run)`` *inside the cell* — the address
     #: a write needs on top of ``(row, column)``. A cell is a text frame like
     #: any other, and a figure carrying a footnote marker ("58.1 (a)") has its
@@ -758,6 +767,45 @@ class FigureIndex:
         return out
 
 
+def unwritable(figure: Figure) -> str | None:
+    """Why this figure cannot be written back, or None.
+
+    PLAN.md §6 names two hazards and this answers both, plus one the plan did
+    not foresee. It lives here rather than beside the rules because it was
+    written twice, in two modules, and the two drifted apart within a day --
+    one kept a refusal the other had already dropped. A refusal is a property
+    of the figure, so it belongs with the figure.
+
+    * **A chart point.** Its values live in a cached copy and in an embedded
+      workbook, and TieOut writes neither.
+    * **A figure split across runs.** "$4" in one run and "12m" in the next is
+      one number to a reader and two places to write. A replacement put into
+      the first leaves the rest of the old figure beside it, so correcting 412
+      to 2,100 produces "2,10012m" in a deck someone is about to send.
+    * **A run inside a group is not refused.** ``tieout_fix`` reaches into
+      groups for text on purpose -- "no coordinate space stands between an edit
+      to a shape's words and the group it happens to sit in" -- so a grouped
+      run writes correctly today and refusing it would refuse something that
+      works. It is a *geometry* write into a group that is dangerous, and that
+      is handled elsewhere.
+
+    A button that quietly does nothing teaches people the tool is broken; a
+    button that says why it cannot teaches them something true about their deck.
+    """
+    if figure.source == "chart":
+        return (
+            "a chart's values live in its cached data and in the workbook behind "
+            "it, and TieOut writes neither -- correct this in the chart's own data"
+        )
+    if figure.split_run:
+        return (
+            "this figure is split across two runs of formatting, so there is no "
+            "single run to write -- a replacement would land in the first and "
+            "leave the rest of the old figure beside it"
+        )
+    return None
+
+
 def restate(reading: NumberReading, value: float) -> str:
     """``value``, written the way the deck writes ``reading``.
 
@@ -960,27 +1008,36 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                     unit=unit,
                     scope=scope,
                     raw=text.strip(),
-                    cell_run=inside,
+                    cell_run=inside or (0, 0),
+                    split_run=inside is None,
                 )
             )
     return out
 
 
-def _cell_run_holding(paragraphs: Sequence[object], value: str) -> tuple[int, int]:
-    """Which ``(paragraph, run)`` of a cell holds the figure's digits.
+def _cell_run_holding(
+    paragraphs: Sequence[object], value: str
+) -> tuple[int, int] | None:
+    """Which ``(paragraph, run)`` of a cell holds the whole figure, or None.
 
-    Falls back to ``(0, 0)``, which is right for the overwhelming majority of
-    cells -- one paragraph, one run, the number and nothing else. The search
-    matters for the minority: a cell reading "58.1 (a)" often carries the
-    marker in a superscripted run of its own, and a correction that rewrote run
-    zero with the new figure alone would silently drop the footnote.
+    ``None`` means no single run holds it: the figure is split across two or
+    more, and a replacement written into any one of them would leave the rest
+    of the old figure beside it. The caller marks such a figure unwritable
+    rather than guessing which run to overwrite.
+
+    The search matters for the ordinary case too. A cell reading "58.1 (a)"
+    often carries the marker in a superscripted run of its own, and a
+    correction that assumed run zero and rewrote it with the new figure alone
+    would silently drop the footnote.
     """
     digits = value.strip()
+    if not digits:
+        return (0, 0)
     for p_index, paragraph in enumerate(paragraphs):
         for r_index, run in enumerate(getattr(paragraph, "runs", ())):
-            if digits and digits in getattr(run, "text", ""):
+            if digits in getattr(run, "text", ""):
                 return (p_index, r_index)
-    return (0, 0)
+    return None
 
 
 def _inherited_unit(slide: SlideModel, shape: ShapeModel) -> Unit:
@@ -1188,7 +1245,11 @@ def _text_figures(
                 reading = _reading_from(match)
                 if reading is None or _is_a_year(reading):
                     continue
-                run_index = _run_holding(paragraph.runs, start + match.start("int"))
+                run_index, whole = _run_holding(
+                    paragraph.runs,
+                    start + match.start(),
+                    start + match.end(),
+                )
                 if run_index is None:
                     continue
                 out.append(
@@ -1204,6 +1265,7 @@ def _text_figures(
                         period=period,
                         unit=_unit_of(reading),
                         raw=match.group(0).strip(),
+                        split_run=not whole,
                     )
                 )
     return out
@@ -1280,22 +1342,29 @@ def _reading_from(match: re.Match[str]) -> NumberReading | None:
     )
 
 
-def _run_holding(runs: Sequence[object], offset: int) -> int | None:
-    """Which run of the paragraph contains the character at ``offset``.
+def _run_holding(
+    runs: Sequence[object], start: int, end: int
+) -> tuple[int | None, bool]:
+    """The run holding ``start``, and whether it holds the whole span.
 
     A figure split across runs by a stray formatting change -- "$4" in one run
-    and "12m" in the next -- reads as one number, and addresses back to the run
-    that holds its first digit. That is the run a fix has to rewrite; the rest
-    of the figure lives in runs a fix would have to clear, which is why
-    :mod:`tieout_ui.edit` refuses rather than guessing.
+    and "12m" in the next -- reads as one number and a reader sees one number,
+    so it is indexed. It addresses to the run holding its first digit, because
+    that is where to point someone.
+
+    The second element says whether a *write* is safe. It is not, when the
+    figure spans runs: a replacement put into the first leaves "12m" sitting
+    after it, and correcting 412 to 2,100 that way produces "2,10012m" in a
+    deck someone is about to send. The caller marks the figure unwritable and
+    the button says why.
     """
     position = 0
     for index, run in enumerate(runs):
         length = len(getattr(run, "text", ""))
-        if position <= offset < position + length:
-            return index
+        if position <= start < position + length:
+            return index, end <= position + length
         position += length
-    return None
+    return None, False
 
 
 def _ellipsis(text: str, limit: int = 60) -> str:

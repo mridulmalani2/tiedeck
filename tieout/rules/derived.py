@@ -59,6 +59,7 @@ from tieout.figures import (
     is_specific,
     normalise_label,
     restate,
+    unwritable,
 )
 from tieout.model.deck import DeckModel, ShapeModel, SlideModel
 from tieout.profile.schema import Confidence, Profile, Severity
@@ -303,30 +304,8 @@ def _fix(stated: Figure, computed: float) -> Correction:
         cell_run=stated.cell_run[1],
         current=_format(stated),
         replacement=restate(stated.reading, computed),
-        refused=_unwritable(stated),
+        refused=unwritable(stated),
     )
-
-
-def _unwritable(figure: Figure) -> str | None:
-    """Why this figure cannot be written back, or None.
-
-    PLAN.md §6: a fix whose run is inside a group, or a chart point, "must
-    refuse, visibly, rather than appearing to work". A button that quietly does
-    nothing teaches people the tool is broken; a button that says why it cannot
-    teaches them something true about their deck.
-    """
-    if figure.source == "chart":
-        return (
-            "a chart's values live in its cached data and in the workbook behind "
-            "it, and TieOut writes neither -- correct this in the chart's own data"
-        )
-    if figure.ref.group_path:
-        return (
-            "this figure is inside the group "
-            + " > ".join(figure.ref.group_path)
-            + ", and TieOut does not write text inside a group"
-        )
-    return None
 
 
 # --------------------------------------------------------------------------------------
