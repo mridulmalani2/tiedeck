@@ -11,13 +11,15 @@ their own reference deck. A report that merely asserts "the logo should be at
 not.
 
 Each slide reserves a fixed-aspect ``.thumb`` element and each finding carries a
-``data-bbox`` attribute, so slide images and overlays can be added later by
-populating the box and reading the attributes, with no change to this module or
-the template.
+``data-bbox`` attribute, so a slide image and overlays can be drawn by
+populating the box and reading the attributes -- the image now is, as a data
+URI, and the overlays are still future work.
 """
 
 from __future__ import annotations
 
+import base64
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -40,15 +42,37 @@ def _environment() -> Environment:
     )
 
 
-def render(result: AuditResult, deck: DeckModel | None = None) -> str:
-    """Render the report to a string."""
+def render(
+    result: AuditResult,
+    deck: DeckModel | None = None,
+    *,
+    original_name: str | None = None,
+    thumbnails: Sequence[bytes] | None = None,
+) -> str:
+    """Render the report to a string.
+
+    ``original_name`` is what the report is titled and headed with, and
+    ``deck_path`` -- TieOut's own internal working copy, ``v1-<name>.pptx``
+    inside a temp directory -- is never shown at all: the artefact meant to be
+    sent to someone else has no business naming the sender's machine or the
+    tool's own version bookkeeping. Omit it and the deck's own filename is
+    used instead, which is right for every caller but the UI server, which
+    knows the name the deck arrived under and passes it.
+
+    ``thumbnails`` are LibreOffice-rendered pages, one per slide in slide
+    order, embedded as data URIs so the ``.thumb`` box the template already
+    reserves shows the slide rather than an empty placeholder -- still one
+    self-contained file, nothing fetched at view time. Optional, and silently
+    absent where LibreOffice is not installed or has not finished rendering
+    yet: a report with no pictures is the same degrade the live canvas makes.
+    """
     grouped = result.findings_by_slide()
-    slides = _slides(result, deck, grouped)
+    slides = _slides(result, deck, grouped, thumbnails)
 
     template = _environment().get_template(_TEMPLATE_NAME)
     return template.render(
         result=result,
-        deck_name=Path(result.deck_path).name,
+        deck_name=original_name or Path(result.deck_path).name,
         summary=result.summary,
         severities=sorted(SEVERITY_ORDER, key=lambda name: SEVERITY_ORDER[name]),
         slides=slides,
@@ -57,10 +81,20 @@ def render(result: AuditResult, deck: DeckModel | None = None) -> str:
     )
 
 
-def write(result: AuditResult, path: str | Path, deck: DeckModel | None = None) -> Path:
+def write(
+    result: AuditResult,
+    path: str | Path,
+    deck: DeckModel | None = None,
+    *,
+    original_name: str | None = None,
+    thumbnails: Sequence[bytes] | None = None,
+) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(result, deck), encoding="utf-8")
+    target.write_text(
+        render(result, deck, original_name=original_name, thumbnails=thumbnails),
+        encoding="utf-8",
+    )
     return target
 
 
@@ -68,6 +102,7 @@ def _slides(
     result: AuditResult,
     deck: DeckModel | None,
     grouped: dict[int, list[Finding]],
+    thumbnails: Sequence[bytes] | None,
 ) -> list[dict[str, Any]]:
     """Every slide in the deck, so the sidebar shows clean slides too.
 
@@ -85,6 +120,10 @@ def _slides(
     for index in indices:
         findings = grouped.get(index, [])
         slide = deck.slide(index) if deck else None
+        image: str | None = None
+        if thumbnails is not None and 1 <= index <= len(thumbnails):
+            encoded = base64.b64encode(thumbnails[index - 1]).decode("ascii")
+            image = f"data:image/png;base64,{encoded}"
         out.append(
             {
                 "index": index,
@@ -93,6 +132,7 @@ def _slides(
                 "height_pt": round(slide.height_pt, 2) if slide else 0,
                 "findings": findings,
                 "counts": _counts(findings),
+                "image": image,
             }
         )
     return out

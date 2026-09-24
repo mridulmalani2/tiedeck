@@ -18,7 +18,7 @@ from typing import Any, Final
 from tieout.model.deck import DeckModel, ShapeModel
 from tieout.model.units import pt_to_emu
 from tieout.profile.schema import Profile
-from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding, load_all_rules
+from tieout.rules.base import DOCUMENT_LEVEL, SEVERITY_ORDER, AuditResult, Finding, load_all_rules
 from tieout_fix import action_key, finding_key, group_geometry_refusal
 from tieout_ui.edit import can_clear, editable
 
@@ -40,8 +40,16 @@ __all__ = [
 #: them would be an instruction to do something that does not work. BR-003 is
 #: the same -- a distorted logo is the wrong *size*, and this editor does not
 #: resize. What is left is the rules that are all about where a thing sits.
+#:
+#: BR-006 belongs here for the same reason: it prints the exact target
+#: position ("Move the page number to left 877.18pt, top 509.76pt") and the
+#: capability to write it was already there -- only the affordance was
+#: missing, so the finding read as unfixable when it was one click away.
+#: ``_move_block`` still returns ``None`` for the case BR-006 cannot name a
+#: shape at all (no page number anywhere near the expected box), so this adds
+#: no button where there is nothing to move.
 MOVABLE_RULES: Final[frozenset[str]] = frozenset(
-    {"BR-002", "BR-008", "LO-001", "LO-002", "LO-003", "LO-004", "LO-005", "LO-008"}
+    {"BR-002", "BR-006", "BR-008", "LO-001", "LO-002", "LO-003", "LO-004", "LO-005", "LO-008"}
 )
 
 
@@ -314,6 +322,11 @@ def _move_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:
     refused = movable(shape)
     block: dict[str, Any] = {
         "shape_id": ref.shape_id,
+        # The live surface draws shapes by uid, not shape_id -- cNvPr@id is
+        # not unique in practice (§10) -- so this is what lets a drag update
+        # the shape's own rendering rather than only the position editor's
+        # outline over it.
+        "uid": ref.uid,
         "shape": ref.display_name,
         "refused": refused,
         "left_pt": shape.left_pt,
@@ -330,6 +343,28 @@ def _move_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:
             cy_emu=pt_to_emu(shape.height_pt),
         )
     return block
+
+
+def _also_block(finding: Finding, deck: DeckModel) -> dict[str, Any] | None:
+    """The second shape a finding names, for the canvas to outline as well.
+
+    LO-004 reports one shape overlapping another; ``where`` can only ever be
+    one of them (the upper, per z-order), so the audit outlined only that one
+    and left the other shape in the message text and nowhere on the canvas.
+    Nothing here is writable -- this is a location, not a correction -- so it
+    carries just enough to draw a second outline.
+    """
+    ref = finding.also
+    if ref is None:
+        return None
+    shape = find_shape(deck, ref.slide_index, ref.shape_id)
+    if shape is None:
+        return None
+    return {
+        "uid": ref.uid,
+        "shape": ref.display_name,
+        "bbox_pt": [shape.left_pt, shape.top_pt, shape.width_pt, shape.height_pt],
+    }
 
 
 def _figure_block(finding: Finding) -> dict[str, Any] | None:
@@ -398,8 +433,17 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
                 "bbox_pt": finding.bbox_pt,
                 "move": _move_block(finding, deck),
                 "figure": _figure_block(finding),
+                "also": _also_block(finding, deck),
             }
         )
+
+    # A finding about the file rather than about any slide -- document
+    # metadata, a PowerPoint comment, the deck's own canvas size -- used to be
+    # filed under slide 1 for want of anywhere else to put it, which badged
+    # slide 1 as defective and ✓-ed it once "fixed" although nothing on it was
+    # wrong. It has nowhere in ``by_slide`` to land now (no slide carries index
+    # 0), so it is pulled out here and kept apart from every per-slide list.
+    document_findings = by_slide.pop(DOCUMENT_LEVEL, [])
 
     unchecked: dict[int, list[dict[str, str]]] = {}
     for entry in result.unchecked:
@@ -420,6 +464,12 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
         }
         for slide in deck.slides
     ]
+    # Fed to _actions() alongside the real slides so a document-level finding
+    # still becomes a job in "By fix" -- a blocker with no path there would be
+    # invisible in the default view -- carrying index 0, which the page reads
+    # as "Document" rather than a slide number.
+    grouping_input = slides + ([{"index": DOCUMENT_LEVEL, "findings": document_findings}]
+                               if document_findings else [])
 
     return {
         "deck": result.deck_path,
@@ -427,8 +477,9 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
         "slide_count": result.slide_count,
         "summary": result.summary,
         "verdict": _verdict(result.summary),
-        "actions": _actions(slides),
+        "actions": _actions(grouping_input),
         "slides": slides,
+        "document_findings": document_findings,
         "rules_run": sorted(result.rules_run),
         "rules_skipped": [
             {"rule_id": entry.rule_id, "reason": entry.reason}
@@ -539,6 +590,7 @@ def _actions(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "bbox_pt": finding["bbox_pt"],
                     "move": finding["move"],
                     "figure": finding["figure"],
+                    "also": finding["also"],
                 }
             )
 

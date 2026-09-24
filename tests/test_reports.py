@@ -402,6 +402,46 @@ def test_the_html_report_carries_the_hooks_for_later_slide_images(dirty_result, 
     assert "data-bbox" in markup
 
 
+def test_the_html_report_is_titled_with_the_original_name_not_the_working_copy():
+    """The audit's #20: the artefact was titled ``v1-<name>.pptx``, TieOut's own
+    internal version bookkeeping, and printed an absolute temp path in its
+    footer -- the sender's machine, in a file meant for someone else.
+    """
+    result = _synthetic()  # deck_path is "/decks/board.pptx"
+    markup = html_report.render(result, original_name="falcon_seeded.pptx")
+    assert "falcon_seeded.pptx" in markup
+    assert "board.pptx" not in markup
+    assert "/decks/" not in markup
+
+
+def test_the_html_report_names_no_path_when_given_no_original_name():
+    """Every other caller (the CLI) has no original filename to give, and the
+    deck's own basename is still a reasonable fallback -- the temp *path* is
+    what must never appear, not the filename.
+    """
+    markup = html_report.render(_synthetic())
+    assert "board.pptx" in markup
+    assert "/decks/" not in markup
+
+
+def test_the_html_report_embeds_rendered_slide_thumbnails(dirty_result, dirty_deck):
+    """Every slide row showed an empty grey box although the thumbnails had
+    already been rendered by the time the report was generated (the audit's
+    #20). One PNG byte string per slide, in slide order.
+    """
+    pages = [f"page-{n}".encode() for n in range(1, dirty_deck.slide_count + 1)]
+    markup = html_report.render(dirty_result, dirty_deck, thumbnails=pages)
+    assert 'class="thumb has-image"' in markup
+    assert "data:image/png;base64," in markup
+    assert 'data-placeholder="slide image"' in markup  # kept for the no-image slides
+
+
+def test_the_html_report_thumb_has_no_image_class_with_no_thumbnails(dirty_result, dirty_deck):
+    markup = html_report.render(dirty_result, dirty_deck)
+    assert 'class="thumb has-image"' not in markup
+    assert "data:image/png;base64," not in markup
+
+
 def test_the_html_report_adapts_to_dark_mode_and_to_a_phone():
     markup = html_report.render(_synthetic())
     assert "prefers-color-scheme: dark" in markup

@@ -591,7 +591,6 @@ def _merge_typography(
         "negative_style",
         "decimal_places_by_column",
         "date_format",
-        "currency_pattern",
         "unit_pattern",
     )
     for name in scalar_fields:
@@ -623,6 +622,43 @@ def _merge_typography(
             result, path, WIDENED, current, "not learned",
             f"the added deck uses {added!r} where the profile expected {current!r}",
         )
+
+    # Not a plain scalar: currency_pattern is a regex compiled from
+    # currency_literals, and the pair has to move together or a remedy could
+    # end up naming a marker the pattern no longer checks for.
+    path = "typography.currency_pattern"
+    current_pattern = existing.typography.currency_pattern
+    added_pattern = incoming.typography.currency_pattern
+    if (
+        added_pattern is not None
+        and current_pattern != added_pattern
+        and not _locked(merged, path, result, "currency convention")
+    ):
+        if current_pattern is None:
+            merged.typography.currency_pattern = added_pattern
+            merged.typography.currency_literals = incoming.typography.currency_literals
+            _record(
+                result, path, WIDENED, "not learned", added_pattern,
+                "the added deck provided the first evidence for this convention",
+            )
+        else:
+            merged.typography.currency_pattern = None
+            merged.typography.currency_literals = []
+            merged.not_learned.append(
+                NotLearned(
+                    key=path,
+                    reason=(
+                        f"the reference decks disagree: {current_pattern!r} in one "
+                        f"and {added_pattern!r} in the other, so there is no "
+                        "convention to enforce"
+                    ),
+                )
+            )
+            _record(
+                result, path, WIDENED, current_pattern, "not learned",
+                f"the added deck uses {added_pattern!r} where the profile "
+                f"expected {current_pattern!r}",
+            )
 
     path = "typography.canon_terms"
     if not _locked(merged, path, result, "terminology canon"):

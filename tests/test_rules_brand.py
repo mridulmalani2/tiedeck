@@ -16,7 +16,7 @@ import pytest
 from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import ReferenceSpec
 from tieout.profile.schema import NotLearned
-from tieout.rules.base import REGISTRY, clear_caches, load_all_rules, run_rules
+from tieout.rules.base import DOCUMENT_LEVEL, REGISTRY, clear_caches, load_all_rules, run_rules
 
 BRAND_RULE_IDS = [f"BR-{n:03d}" for n in range(1, 12)]
 
@@ -313,7 +313,8 @@ def test_br009_catches_wrong_slide_size(variant_decks, reference_profile):
 
     assert len(findings) == 1
     (finding,) = findings
-    assert finding.slide_index == 1
+    # The deck's own canvas size, not a property of any slide.
+    assert finding.slide_index == DOCUMENT_LEVEL
     assert finding.severity == "blocker"
     assert finding.measured == "720x540pt"
     assert finding.expected_provenance

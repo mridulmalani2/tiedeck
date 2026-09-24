@@ -432,6 +432,20 @@ def test_the_report_needs_a_check_first(client, uploaded):
     assert client.get(f"/api/report/{uploaded['deck_id']}").status_code == 404
 
 
+def test_the_report_names_the_uploaded_file_not_the_working_copy(
+    client, onboarded, uploaded, clean_path
+):
+    """The audit's #20: the report was titled and headed with TieOut's own
+    internal working copy, ``v1-<name>.pptx``, and printed the absolute temp
+    path -- machine-local and meaningless to whoever the report is sent to.
+    """
+    client.post("/api/check", json={"deck_id": uploaded["deck_id"], "client": "demo"})
+    markup = client.get(f"/api/report/{uploaded['deck_id']}").text
+    assert clean_path.name in markup
+    assert f"v1-{clean_path.name}" not in markup
+    assert "/tieout-ui" not in markup and "/tmp/" not in markup
+
+
 # --------------------------------------------------------------------------- #
 # Content review
 # --------------------------------------------------------------------------- #

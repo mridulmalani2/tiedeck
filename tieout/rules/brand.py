@@ -28,7 +28,7 @@ from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
 from tieout.model.furniture import LogoMark, logo_marks, normalise_text
 from tieout.model.units import approx_equal
 from tieout.profile.schema import Box, LogoProfile, Profile, Severity
-from tieout.rules.base import Finding, Rule, register
+from tieout.rules.base import DOCUMENT_LEVEL, Finding, Rule, register
 
 #: Fill and line kinds that carry no single measurable colour. ``inherit`` means
 #: the resolver found nothing to resolve, which is not the same as a colour.
@@ -966,7 +966,7 @@ class SlideDimensions(Rule):
             return []
         return [
             self.finding(
-                where=1,
+                where=DOCUMENT_LEVEL,
                 message=(
                     f"the deck canvas is {deck.width_pt:g}x{deck.height_pt:g}pt against an "
                     f"expected {expected.width_pt:g}x{expected.height_pt:g}pt, so every "

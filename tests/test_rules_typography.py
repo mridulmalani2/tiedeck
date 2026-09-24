@@ -345,6 +345,26 @@ def test_ty007_silent_on_clean(clean_deck, reference_profile):
     assert_silent_on_clean(result, "TY-007")
 
 
+def test_ty007_remedy_is_plain_language_not_a_regex(dirty_deck, reference_profile):
+    """The audit's #28: the remedy was the raw pattern the rule checks with,
+    not something its reader could act on.
+    """
+    result = run_rules(dirty_deck, reference_profile, include=["TY-007"])
+    finding = findings_for(result, "TY-007")[0]
+    assert finding.remedy == "Write it to match the house currency notation: one of 'US$', '$'"
+    assert "^(" not in finding.remedy
+
+
+def test_ty007_falls_back_to_the_pattern_with_no_literals_on_record(
+    dirty_deck, reference_profile
+):
+    """A profile learned before ``currency_literals`` existed carries none."""
+    reference_profile.typography.currency_literals = []
+    result = run_rules(dirty_deck, reference_profile, include=["TY-007"])
+    finding = findings_for(result, "TY-007")[0]
+    assert reference_profile.typography.currency_pattern in finding.remedy
+
+
 # --------------------------------------------------------------------------------------
 # TY-008 date format
 # --------------------------------------------------------------------------------------

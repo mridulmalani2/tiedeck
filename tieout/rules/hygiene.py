@@ -26,7 +26,7 @@ from tieout.model.deck import DeckModel, ShapeModel, SlideModel
 from tieout.model.package import Relationship
 from tieout.model.units import pt_to_inches
 from tieout.profile.schema import Confidence, Profile, Severity
-from tieout.rules.base import Finding, Rule, register
+from tieout.rules.base import DOCUMENT_LEVEL, Finding, Rule, register
 
 # --------------------------------------------------------------------------------------
 # Standard system fonts (HY-009)
@@ -156,6 +156,12 @@ def _compile_marker(marker: str) -> re.Pattern[str] | None:
     return re.compile(rf"\b{pattern}\b", re.IGNORECASE)
 
 
+def _marker_matches(text: str, marker: str, pattern: re.Pattern[str] | None) -> bool:
+    if pattern is not None:
+        return pattern.search(text) is not None
+    return marker.strip().casefold() in text.casefold()
+
+
 def _slide_index_of_part(part_name: str) -> int | None:
     match = _SLIDE_PART_RE.match(part_name)
     return int(match.group(1)) if match else None
@@ -198,19 +204,25 @@ class PlaceholderMarkerRule(Rule):
         compiled = [(marker, _compile_marker(marker)) for marker in markers]
         findings: list[Finding] = []
         for slide in deck.slides:
-            found = self._markers_on_slide(slide, compiled)
+            found, shape = self._markers_on_slide(slide, compiled)
             if not found:
                 continue
             listed = ", ".join(found)
+            # The shape carrying the first marker found, when one does -- a
+            # marker only in the speaker notes has no shape to point at, and
+            # the finding falls back to the slide, same as before. Without
+            # this the UI had the shape in hand and threw it away: a blocker
+            # navigated to the slide and highlighted nothing.
             findings.append(
                 self.finding(
-                    where=slide.index,
+                    where=shape.ref if shape is not None else slide.index,
                     message=f"placeholder or draft marker left in the text: {listed}",
                     profile=profile,
                     provenance_path="hygiene.placeholder_markers",
                     measured=listed,
                     expected="no placeholder markers",
                     remedy="Replace the placeholder text with the final wording",
+                    bbox_pt=shape.bbox_pt if shape is not None else None,
                 )
             )
         return findings
@@ -218,27 +230,32 @@ class PlaceholderMarkerRule(Rule):
     @staticmethod
     def _markers_on_slide(
         slide: SlideModel, compiled: list[tuple[str, re.Pattern[str] | None]]
-    ) -> list[str]:
-        """Distinct markers found on one slide, in profile order.
+    ) -> tuple[list[str], ShapeModel | None]:
+        """Distinct markers found on one slide, in profile order, and the first
+        shape any of them was found in.
 
         ``ShapeModel.text`` already folds in table cells, chart text strings and
         SmartArt labels, so leaf shapes plus the notes text cover everything a
-        reader can see.
+        reader can see. The shape returned is whichever leaf shape matched
+        first in document order -- not necessarily the shape carrying the
+        marker named first in ``compiled`` -- because it exists only to give
+        the finding somewhere to point, not to rank the markers.
         """
-        haystacks = [shape.text for shape in slide.leaf_shapes() if shape.text]
-        if slide.notes_text.strip():
-            haystacks.append(slide.notes_text)
+        leaves = [shape for shape in slide.leaf_shapes() if shape.text]
+        first_shape: ShapeModel | None = None
 
         found: list[str] = []
         for marker, pattern in compiled:
-            needle = marker.strip().casefold()
-            hit = any(
-                pattern.search(text) if pattern is not None else needle in text.casefold()
-                for text in haystacks
+            hit_shape = next(
+                (shape for shape in leaves if _marker_matches(shape.text, marker, pattern)),
+                None,
             )
+            hit = hit_shape is not None or _marker_matches(slide.notes_text, marker, pattern)
             if hit:
                 found.append(marker)
-        return found
+                if first_shape is None:
+                    first_shape = hit_shape
+        return found, first_shape
 
 
 # --------------------------------------------------------------------------------------
@@ -406,7 +423,7 @@ class DocumentMetadataRule(Rule):
         rendered = ", ".join(f"{name}={value}" for name, value in leaking.items())
         return [
             self.finding(
-                where=1,
+                where=DOCUMENT_LEVEL,
                 message=(
                     "document metadata identifies a person or an internal project: "
                     f"{rendered}"
@@ -466,7 +483,7 @@ class CommentsRule(Rule):
         attribution = f" by {', '.join(authors)}" if authors else ""
         return [
             self.finding(
-                where=1,
+                where=DOCUMENT_LEVEL,
                 message=(
                     f"{count} PowerPoint comment{plural}{attribution} left in the package"
                 ),
@@ -857,7 +874,7 @@ class NonStandardFontRule(Rule):
                 continue
             findings.append(
                 self.finding(
-                    where=1,
+                    where=DOCUMENT_LEVEL,
                     message=(
                         f"{typeface!r} is neither embedded nor a standard system font, "
                         "so it will be substituted on the recipient's machine"

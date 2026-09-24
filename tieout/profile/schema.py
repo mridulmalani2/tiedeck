@@ -99,6 +99,12 @@ class FontRole(_Model):
 
     def describe(self) -> str:
         if self.exact_pt is not None:
+            # "one of" a single value reads as a template nobody finished --
+            # fewer than 4 distinct sizes is exactly when this emits an exact
+            # set rather than a band (see derive_typography), so a role with
+            # only one observed size is the common case, not an edge one.
+            if len(self.exact_pt) == 1:
+                return f"{self.exact_pt[0]:g}pt"
             return "one of " + ", ".join(f"{v:g}pt" for v in self.exact_pt)
         if self.min_pt is not None and self.max_pt is not None:
             return f"{self.min_pt:g}pt to {self.max_pt:g}pt"
@@ -298,6 +304,11 @@ class TypographyProfile(_Model):
     decimal_places_by_column: Literal["consistent_within_column"] | None = None
     date_format: str | None = None
     currency_pattern: str | None = None
+    #: The literal currency markers ``currency_pattern`` was built from --
+    #: ``["$"]``, or ``["US$", "A$"]`` for a deck that states more than one --
+    #: kept apart from the regex so a remedy can say "write it as '$'" rather
+    #: than hand a reader the pattern that checks for it.
+    currency_literals: list[str] = Field(default_factory=list)
     unit_pattern: str | None = None
     #: Canonical surface form -> the variants that must be rewritten to it.
     canon_terms: dict[str, list[str]] = Field(default_factory=dict)

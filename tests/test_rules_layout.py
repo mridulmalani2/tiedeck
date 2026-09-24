@@ -258,6 +258,18 @@ def test_lo004_catches_overlapping_text_shapes(dirty_deck, reference_profile):
     _assert_catches(dirty_deck, reference_profile, "LO-004")
 
 
+def test_lo004_names_both_overlapping_shapes(dirty_deck, reference_profile):
+    """``where`` can only ever be one of the two; ``also`` is the other one.
+
+    The audit's #40: the canvas outlined the upper shape and left the lower
+    one -- the one the message also names -- with nothing to point at it.
+    """
+    finding = findings_for(_run(dirty_deck, reference_profile, "LO-004"), "LO-004")[0]
+    assert finding.also is not None
+    assert finding.also.slide_index == finding.where.slide_index
+    assert finding.also.shape_id != finding.where.shape_id
+
+
 def test_lo004_is_silent_on_the_clean_deck(clean_deck, reference_profile):
     assert_silent_on_clean(_run(clean_deck, reference_profile, "LO-004"), "LO-004")
 

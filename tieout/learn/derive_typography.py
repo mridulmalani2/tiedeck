@@ -400,6 +400,7 @@ def _derive_currency(
 
     pattern = "^(" + "|".join(_re.escape(literal) for literal in literals) + r")\s?[\d(]"
     result.profile.currency_pattern = pattern
+    result.profile.currency_literals = literals
     result.derivation.note_from(
         "typography.currency_pattern", classification, total_slides=total_slides
     )

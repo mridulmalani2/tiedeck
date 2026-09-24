@@ -525,7 +525,9 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             deck, profile, result, semantic=len(result.findings) - before_semantic
         )
         view["review"] = review
-        deck.report = html_report.render(result, deck.model)
+        deck.report = html_report.render(
+            result, deck.model, original_name=deck.filename, thumbnails=deck.thumbnails.pages
+        )
         return JSONResponse(view)
 
     @app.post("/api/fix")
@@ -974,7 +976,9 @@ def _recheck(
     result = run_rules(
         deck.model, profile, suppressions=load_suppressions(profile.client)
     )
-    deck.report = html_report.render(result, deck.model)
+    deck.report = html_report.render(
+        result, deck.model, original_name=deck.filename, thumbnails=deck.thumbnails.pages
+    )
     payload, change = _audit_payload(deck, profile, result)
     if correction and deck.log:
         store.note_delta(deck, change)

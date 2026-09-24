@@ -17,9 +17,9 @@ import pytest
 
 from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import ReferenceSpec, SeededDefect
-from tieout.model.deck import DeckModel
+from tieout.model.deck import DeckModel, ShapeRef
 from tieout.profile.schema import Profile
-from tieout.rules.base import AuditResult, run_rules
+from tieout.rules.base import DOCUMENT_LEVEL, AuditResult, run_rules
 from tieout.rules.hygiene import STANDARD_SYSTEM_FONTS, _font_base_name
 
 
@@ -65,6 +65,29 @@ def test_hy001_catches_placeholder_marker(
     result = check(dirty_deck, reference_profile, "HY-001")
     assert_caught_on(result, "HY-001", seeded_slide(spec, "HY-001"))
     assert "TBD" in findings_for(result, "HY-001")[0].message
+
+
+def test_hy001_names_the_shape_the_marker_is_in(
+    dirty_deck: DeckModel, reference_profile: Profile
+) -> None:
+    """The finding has the shape in hand and must not throw it away.
+
+    A shape-less finding (``where=slide.index``) navigates to the slide and
+    highlights nothing -- the blocker becomes a hunt-by-eye through whatever
+    text is on that slide.
+    """
+    finding = findings_for(check(dirty_deck, reference_profile, "HY-001"), "HY-001")[0]
+    assert isinstance(finding.where, ShapeRef)
+    assert finding.bbox_pt is not None
+
+
+def test_hy001_falls_back_to_the_slide_for_a_notes_only_marker(
+    dirty_deck: DeckModel, reference_profile: Profile
+) -> None:
+    """A marker only in the speaker notes has no shape to point at."""
+    reference_profile.hygiene.placeholder_markers = ["Thursday"]
+    finding = findings_for(check(dirty_deck, reference_profile, "HY-001"), "HY-001")[0]
+    assert not isinstance(finding.where, ShapeRef)
 
 
 def test_hy001_silent_on_clean(clean_deck: DeckModel, reference_profile: Profile) -> None:
@@ -157,7 +180,9 @@ def test_hy004_catches_document_metadata(
     variant_decks: dict[str, DeckModel], reference_profile: Profile
 ) -> None:
     result = check(variant_decks["metadata"], reference_profile, "HY-004")
-    assert_caught_on(result, "HY-004", 1)
+    # A document-level finding, not slide 1: the leak is a property of the
+    # file's own docProps, and nothing on slide 1 is wrong.
+    assert_caught_on(result, "HY-004", DOCUMENT_LEVEL)
     measured = findings_for(result, "HY-004")[0].measured or ""
     for leaking in ("creator=", "lastModifiedBy=", "company="):
         assert leaking in measured
@@ -190,7 +215,9 @@ def test_hy005_catches_comment(
     variant_decks: dict[str, DeckModel], reference_profile: Profile
 ) -> None:
     result = check(variant_decks["comments"], reference_profile, "HY-005")
-    assert_caught_on(result, "HY-005", 1)
+    # Document-level: a PowerPoint comment is a property of the package, and
+    # can sit on any slide -- reporting slide 1 would misattribute it there.
+    assert_caught_on(result, "HY-005", DOCUMENT_LEVEL)
     assert "M. Director" in findings_for(result, "HY-005")[0].message
 
 
@@ -299,9 +326,9 @@ def test_hy009_catches_non_standard_font(
     dirty_deck: DeckModel, reference_profile: Profile
 ) -> None:
     result = check(dirty_deck, reference_profile, "HY-009")
-    # A deck-level finding: the seeded slide is 16, but the font is a property of
-    # the deck, so the finding is reported against slide 1.
-    assert_caught_on(result, "HY-009", 1)
+    # A document-level finding: the seeded slide is 16, but the font is a
+    # property of the deck, and is reported as such rather than against slide 1.
+    assert_caught_on(result, "HY-009", DOCUMENT_LEVEL)
     assert "Bodoni Sixtysix" in findings_for(result, "HY-009")[0].message
 
 

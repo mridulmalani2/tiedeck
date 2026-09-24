@@ -68,6 +68,16 @@ SEVERITY_GLYPHS: Final[dict[str, str]] = {
     "info": "·",
 }
 
+#: ``Finding.where`` for a defect that is a property of the file rather than of
+#: any slide -- document metadata, a PowerPoint comment, a font never embedded,
+#: the deck's own canvas size. Slide indices are 1-based (:mod:`tieout.model.loader`
+#: enumerates from 1), so 0 cannot collide with a real slide, and four rules that
+#: used to hardcode ``where=1`` for exactly this reason attributed their finding
+#: to slide 1 -- badging it defective, navigating to it, and ✓-ing it once
+#: "fixed" -- when nothing on that slide was wrong. ``Finding.slide_index`` reads
+#: this straight through; callers that group by slide test for it explicitly.
+DOCUMENT_LEVEL: Final[int] = 0
+
 
 @dataclass(frozen=True, slots=True)
 class Correction:
@@ -161,10 +171,19 @@ class Finding:
     #: Set only by the rules that read :mod:`tieout.figures`; ``None``
     #: everywhere else, which is how the page knows not to offer a button.
     correction: Correction | None = None
+    #: A second shape this finding is about, for a rule that names two --
+    #: LO-004 reports one shape overlapping another, and ``where`` can only
+    #: ever be the one the rule leads with. ``None`` everywhere else.
+    also: ShapeRef | None = None
 
     @property
     def slide_index(self) -> int:
         return self.where.slide_index if isinstance(self.where, ShapeRef) else self.where
+
+    @property
+    def is_document_level(self) -> bool:
+        """A defect that is a property of the file, not of any one slide."""
+        return not isinstance(self.where, ShapeRef) and self.where == DOCUMENT_LEVEL
 
     @property
     def shape_name(self) -> str | None:
@@ -276,6 +295,7 @@ class Rule(ABC):
         confidence: Confidence | None = None,
         remedy: str | None = None,
         correction: Correction | None = None,
+        also: ShapeRef | None = None,
     ) -> Finding:
         """Build a finding, pulling severity, confidence and provenance from the
         profile so a rule cannot forget to.
@@ -307,6 +327,7 @@ class Rule(ABC):
             expected_provenance=provenance,
             bbox_pt=bbox_pt,
             remedy=remedy,
+            also=also,
         )
 
     def note_unchecked(self, where: ShapeRef | int, reason: str) -> None:

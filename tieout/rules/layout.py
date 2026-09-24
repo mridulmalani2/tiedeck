@@ -1055,6 +1055,7 @@ class TextShapeOverlap(Rule):
                 findings.append(
                     self.finding(
                         where=upper.ref,
+                        also=lower.ref,
                         profile=profile,
                         provenance_path="layout.overlap_area_share",
                         # Two bounded text boxes can overlap where their ink does
