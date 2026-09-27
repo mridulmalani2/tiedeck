@@ -10,6 +10,11 @@ against a deck written the way a real one is written, and §10 is what it said.
 It anticipated three things and found ten. A parallel read-only audit of the UI,
 fifty findings driven through the browser, is folded in at §11.
 
+**Amended again, 2026-09-27.** §11 is mostly done: the colour bug, the fix
+affordances, findings that named no object, the report's confidentiality and
+polish, five wording fixes, and the great majority of the interaction/state
+group. §11's own text carries what is still open.
+
 ---
 
 ## 1. The one-sentence version
@@ -36,9 +41,9 @@ than argument:
    writes one, it crashed and then disagreed with itself nine times — on a deck
    with nothing wrong in it. All ten are fixed; §10 is the account, and the
    reason it is worth reading is that five of the ten were *silent*.
-2. **Detection has outrun action.** A real deck produced twenty findings in the
-   app and ten had no way to resolve them. §5.5 closed two of those ten; §11 is
-   the queue for the rest, and its first item is one character.
+2. **Detection had outrun action.** A real deck produced twenty findings in the
+   app and ten had no way to resolve them. §5.5 closed two of those ten and PR
+   #11 closed most of the rest; §11 carries what is still open.
 
 ---
 
@@ -279,11 +284,11 @@ safe direction and costs findings.
 1. ~~**Drive the tie-out against a real deck** (5.1).~~ **Done** — §10. It found
    a crash, four false positives and five silences, and everything below is
    ordered by what it turned up.
-2. **The UI queue** (§11). This is now first among the outstanding work, and it
-   moved there on evidence rather than on taste: a real deck produced twenty
-   findings in the app and **ten had no resolution path**. §11.1 is one character
-   and stops the canvas — the surface the workflow asks you to judge on — from
-   misrepresenting the deck.
+2. ~~**The UI queue** (§11).~~ **Done, mostly** — §11.1–11.5 and the great
+   majority of §11.6 landed in PR #11. §11's own "Still open" list is the
+   remainder: #18 (reload recovery), #26 (small-shape resize handles), #33
+   (chart raster), #36 (overflow's visual distinction from chrome), and
+   #45–#47 from the grouped-findings run.
 3. **Record every unchecked path** (5.2). Still open, and §10 sharpened what it
    means: the recorded refusals were the visible half.
 4. **Writing a figure that spans runs** (5.3). A real deck did show it matters —
@@ -292,6 +297,8 @@ safe direction and costs findings.
 5. **The chart cache against its workbook** (5.4).
 6. **Periods** (5.5). §10 supplied one answer already: a sentence naming two
    periods gives each figure the period next to it, not the range of both.
+7. **§11's remainder**, listed in §11 itself — smaller now, and worth clearing
+   before the next real-deck pass finds new evidence to reorder against.
 
 ---
 
@@ -499,7 +506,7 @@ nothing is not even a refusal. §8 carries the rule this produced.
 
 ---
 
-## 11. The UI queue, from the read-only audit
+## 11. The UI queue, from the read-only audit — **11.1–11.5 and most of 11.6 done**
 
 A second audit ran in parallel: read-only, driven through the browser as a user
 would, against `falcon_seeded.pptx` (20 slides, 20 findings) and then
@@ -508,95 +515,53 @@ findings collapsed into 24 jobs, which is the only way to see the grouping at
 scale). Fifty findings, on the branch `claude/comprehensive-audit-be2242` as
 `UI_AUDIT.md`. That document is the detail; this is the queue.
 
-It audited commit `4172c99`, which is behind this branch, and §5.5 has landed
-since — `Correction` on the finding, `recell_fix` writing a table cell. **So its
-headline finding is partly answered already**: the audit's #8 and #41 say the
-two tie-out rules have no path at all, and a table cell now has one. The rest
-below stands. Each item says whether it was re-verified against the current head
-on 2026-09-23; **findings that need the app driven were not re-driven, and are
-carried on the auditor's evidence rather than re-measured.**
+It audited commit `4172c99`, which is behind this branch, and §5.5 had already
+landed by the time this section was written — `Correction` on the finding,
+`recell_fix` writing a table cell, closing the audit's #8 and #41. §11.1–11.5
+and the great majority of §11.6 landed in PR #11, on 2026-09-27, without
+re-driving the app: each fix is a source-level correction to a defect the
+audit named exactly, verified by reading the code the bug was in rather than
+by clicking through a browser. No test in this suite drives one yet, so the UI
+changes carry source-level regression tests (a string that must or must not
+appear in the served page) rather than behavioural ones; §11.6's own note on
+that gap is below.
 
-### 11.1 The canvas misrepresents the deck — verified live, one character
+**Still open**, in order of what is left to do:
 
-`tieout_ui/static/index.html` builds a run's colour as
-`` `color:#${f.color_hex}` ``, and `canvas_view()` emits `color_hex` **with the
-`#` already on it**. Measured rather than read: `canvas_view()` over a test deck
-returns `['#000000', '#0F2A4A', '#6B7280', '#C9A227']`. Every run is therefore
-styled `color:##0F2A4A`, which is invalid CSS and is dropped, so **no text on
-the live canvas is ever drawn in its real colour.** White-on-navy slides render
-dark on dark and cannot be read. Shape *fills* go through `hexToRgba()`, which
-strips the `#` defensively — which is why the gold logo box is right while the
-text beside it is not.
+* **#18** — reloading the page strands the deck and every correction on the
+  server, with no way back. The server already holds enough to recover from
+  (`GET /api/decks/{id}` exists, and `deck.rejected` persists there) — what is
+  missing is purely client-side: remembering `{deck_id, client}` across a
+  reload and re-attaching to a deck the server still has, rather than showing
+  "No deck open".
+* **#26** — a small shape's resize handles cover its own text, so a page
+  number cannot be edited. Every handle is drawn whenever a shape is in the
+  editor, regardless of whether *this* shape's own rules permit that axis;
+  narrowing that needs per-axis capability threaded into `S.edit`, which
+  nothing carries today.
+* **#33** — charts render as grey hatching while a rendered raster sits 200px
+  away in the rail. Solvable (crop the slide thumbnail to the chart's own
+  bbox) but not attempted.
+* **#36** — overflowing text is drawn correctly outside its shape's own box
+  (deliberate, and right — see the note on `.shape .text` in
+  `tieout_ui/static/index.html`) but with no visual distinction from the
+  canvas it spills onto, so it can read as chrome rather than deck content. A
+  design question (how to mark it without implying it is clipped) more than a
+  bug.
+* **#44–#49**, from the 26-slide grouped-findings run: #44 is answered by
+  §11.7 below (deliberate); #45 (Move it on a grouped finding opens the first
+  place only), #46 (three counts of three different things shown with
+  nothing relating them) and part of #47 (a remedy phrased as an instruction
+  to TieOut for a rule this queue's §11.2 wording fix does not cover) are
+  still open. #48 (`FontRole.describe()`'s "one of" phrasing) and #49
+  (LO-002's evidence) are done, in §11.5.
 
-First, because the canvas is the surface the workflow asks the user to identify,
-judge and fix defects on, and anything colour-related is unjudgeable while it
-holds. It is one character.
-
-### 11.2 The fix affordances still do not follow the remedies the rules compute
-
-Verified in `tieout_ui/view.py`: `MOVABLE_RULES` is `{BR-002, BR-008,
-LO-001…LO-005, LO-008}`.
-
-* **BR-006 prints the exact target coordinates** — "Move the page number to left
-  877.18pt, top 509.76pt" — and is not in the set, so it offers only *Set aside*
-  under the caption "TieOut can see this is wrong and cannot know what is
-  right", in the same card that states exactly what is right. The auditor
-  cleared it by hand through the canvas: the capability is there and only the
-  affordance is missing.
-* The same "Yours to fix" sentence covers three different situations: an answer
-  nobody can know, an answer the tool knows and will not apply (BR-006), and an
-  answer the tool knows and has no control for (LO-007 — where the sentence
-  shown is about *moving shapes*, attached to a font size).
-* **Ten of the twenty findings on the seeded deck had no resolution path.** Two
-  of those ten are now answerable by §5.5; the other eight are this queue.
-
-### 11.3 Findings that name no object
-
-* **HY-001 discards the shape it matched.** `tieout/rules/hygiene.py` emits
-  `where=slide.index` only, so a **blocker** — placeholder text left in the deck
-  — navigates to the slide and highlights nothing. Verified live. The rule has
-  the shape in hand when it matches and throws it away before the UI sees it.
-* HY-004 is a property of the file and is attributed to slide 1, badging and
-  then ✓-ing a slide with nothing wrong on it. *Not re-driven.*
-* LO-004 outlines one of the two overlapping shapes. *Not re-driven.*
-
-### 11.4 Confidentiality and polish in the report
-
-* **The HTML report is opened with the session token in the query string**, so
-  the credential authorising reads of live deck material is written into browser
-  history by a normal button press — while the main page does substitute-and-clear
-  exactly as designed. Verified live.
-* **The report is titled with TieOut's internal working copy**, `v1-<name>.pptx`
-  (`tieout/report/html.py`), and prints the absolute temp path in its footer.
-  The artefact meant to be sent to someone else carries machine-local paths.
-  Verified live.
-* Every slide row shows an empty "slide image" box although the app has rendered
-  thumbnails for all of them at that moment. *Not re-driven.*
-
-### 11.5 Wording that argues against the finding it is attached to
-
-* **LO-002's evidence ends "so the rule cannot fail this deck"**
-  (`tieout/learn/derive_layout.py`) and was printed under 13 findings where the
-  rule had just failed. True of the deck the profile was learned from, false of
-  the deck being checked, and nothing says which. Verified live.
-* **TY-007 gives its remedy as a raw regular expression** — "Write it to match
-  the house pattern `^(\$)\s?[\d(]`" (`tieout/rules/typography.py`). Verified
-  live.
-* "Set the size to one of 10.5pt", and a required-boilerplate remedy reading
-  "Add the footer text: 'H'" — the single letter of a logo badge. *Not
-  re-driven.*
-
-### 11.6 Interaction and state — carried on the auditor's evidence
-
-Not re-driven in this session, grouped by what they cost:
-
-| Cost | Findings |
-| --- | --- |
-| You cannot see what you are judging | drag moves only the outline (#2); off-slide content is clipped away on the one rule about off-slide content (#34); overflow is painted onto the app background (#36); charts are grey hatching while a good raster sits 200px away (#33); badges cover the content the finding is about (#11) |
-| You cannot act | resize is silently dead on shapes whose text overflows (#3); a small shape's handles cover its own text so a page number cannot be edited (#26); *By slide* has no buttons at all (#10) |
-| The counts and state lie | *Set aside* leaves "20 things to do" at 20 (#13); undo labels a restored finding **NEW**, which is the product's signal for *newly exposed* (#14); re-running *Check deck* wipes the correction log while the ribbon still claims it (#15); a reload strands the deck and every correction on the server with no way back (#18); the profile chip goes stale on opening a second deck (#42) |
-| Feedback is inconsistent | *Export deck* says nothing; *Copy note* reports success with nothing to copy (#23); a failed resize says nothing. Corrections announce themselves well, which is the standard the rest should meet |
-| Other | a native `window.confirm()` blocks the whole page for the data-mark guardrail, alone among every confirmation in the product (#24, verified live); the profile picker pre-selects the alphabetically first profile, so one click audits against the wrong client (#30, verified live); ticking *Content review* with no key blocks the offline audit too (#50) |
+Everything else the audit numbered — the colour bug, the fix affordances, the
+document-level findings, the report's confidentiality and polish, the wording
+fixes, and the interaction/state group (drag, resize, the native dialog, the
+counts that lied, the profile picker, the rail's blanking, By slide's missing
+buttons, the reachability of off-canvas content) — is done. `git log` on this
+branch names each one by its audit number.
 
 ### 11.7 Deliberate, and to be left alone
 
