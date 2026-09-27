@@ -153,6 +153,19 @@ def test_the_page_carries_the_token_and_no_external_reference(client, store):
         assert forbidden not in response.text, forbidden
 
 
+def test_a_run_colour_is_never_double_hashed(client):
+    """The audit's #1: canvas_view() emits color_hex already carrying its own
+    "#", and the page built ``color:#${f.color_hex}`` -- "color:##fff", which
+    is invalid CSS and is silently dropped, so no run was ever drawn in its
+    real colour. A source-level guard rather than a rendered one: nothing in
+    this suite drives a real browser, so this is what stands between the
+    one-character regression and it coming back unnoticed.
+    """
+    markup = client.get("/").text
+    assert "color:#${f.color_hex}" not in markup
+    assert "color:${f.color_hex}" in markup
+
+
 def test_the_page_drops_the_token_from_the_address_bar(client):
     """Or it stays in the browser's history and in anything copied from it."""
     assert "history.replaceState" in client.get("/").text

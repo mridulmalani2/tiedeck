@@ -428,13 +428,32 @@
   /* Where it is. */
   .mark {
     position: absolute; border: 2px solid var(--accent); background: rgba(27,58,95,.12);
-    box-shadow: 0 0 0 9999px rgba(20,22,26,.34); pointer-events: none; z-index: 2;
+    box-shadow: 0 0 0 9999px rgba(20,22,26,.34); pointer-events: none;
+    /* Above any shape's own stacking (shapeHtml sets z-index: z_order + 1,
+       and z_order reaches well past this on a real slide) -- otherwise the
+       outline itself, not only its handles, sits behind the shape it is
+       supposed to be pointing at. */
+    z-index: 900;
   }
+  /* Inset, not hung above the box on a negative top: the audit's #11 --
+     "SUMMARY BALANCE SHEET" and "Recommended positioning range" and the
+     eyebrow above the title, on four different slides, all a different shape
+     from the one flagged, hidden by a badge floating over whatever a house
+     style happens to place directly above it. Inside the box the worst it can
+     cover is a corner of the very shape the finding is about. */
   .mark span {
-    position: absolute; top: -18px; left: -2px; background: var(--accent); color: #fff;
+    position: absolute; top: 2px; left: 2px; background: var(--accent); color: #fff;
     font: 600 var(--t-micro)/1 var(--mono); padding: 3px var(--s1); white-space: nowrap;
     letter-spacing: .04em;
   }
+  /* LO-004's second shape: an outline with no spotlight of its own -- the
+     primary .mark already dims everything outside it, and a second 9999px
+     shadow here would fight it rather than add to it. */
+  .mark.also {
+    border-color: var(--major); background: rgba(138,90,0,.10);
+    box-shadow: none; border-style: dashed;
+  }
+  .mark.also span { background: var(--major); }
 
   /* ---- the position editor ----
      Geometry is the one thing TieOut will not decide, so this is the one place
@@ -447,7 +466,17 @@
      a judgement about its neighbours, and they have to be legible to be judged
      against. */
   .mark.live {
-    pointer-events: auto; cursor: grab; touch-action: none; z-index: 5;
+    pointer-events: auto; cursor: grab; touch-action: none;
+    /* Above any shape's own stacking, not just above the handful of other
+       overlays on this page. A shape's z-index is z_order + 1 (shapeHtml),
+       and z_order is the shape's own position in a real deck's draw order --
+       which reaches well past 5 on any slide with more than a few shapes. A
+       resize handle sitting under such a shape's own content (its text
+       especially, which keeps pointer-events for editing) took the drag as a
+       text selection instead: the audit's #3, silently dead resize on
+       exactly the shapes -- overflowing text -- most likely to paint over
+       their own corners. */
+    z-index: 1000;
     box-shadow: 0 1px 10px rgba(0,0,0,.30);
     transition: none;
   }
@@ -974,6 +1003,13 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const busy = (t) => { $("busy").textContent = t || ""; $("busy").className = t ? "busy" : ""; };
+
+// LO-004 names a second shape (the one its message also names, and the canvas
+// used to leave un-outlined) alongside the one `where` points at. Carried as
+// one JSON attribute rather than two, since it only ever travels with a bbox
+// and a label together or not at all.
+const alsoAttr = (also) =>
+  also && also.bbox_pt ? ` data-also='${esc(JSON.stringify(also))}'` : "";
 
 async function api(path, { method = "GET", body = null, form = null } = {}) {
   const headers = { "X-TieOut-Token": TOKEN };
@@ -1596,7 +1632,7 @@ function byFix(actions) {
         <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
         ${a.instances.map((i, k) => `<div class="inst${i.arrived ? " arrived" : ""}" data-goto="${i.slide}"
             data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
-            data-label="${esc(a.rule_id)}">
+            data-label="${esc(a.rule_id)}"${alsoAttr(i.also)}>
             <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
             — ${esc(sentence(i.message))}${
               a.movable && i.move && !i.move.refused
@@ -1606,7 +1642,7 @@ function byFix(actions) {
     const first = a.instances && a.instances[0];
     return `<div class="item${a.rejected ? " turned-down" : ""}"${first
         ? ` data-slide="${first.slide}" data-bbox="${first.bbox_pt
-            ? esc(first.bbox_pt.join(",")) : ""}" data-label="${esc(a.rule_id)}"` : ""}>
+            ? esc(first.bbox_pt.join(",")) : ""}" data-label="${esc(a.rule_id)}"${alsoAttr(first.also)}` : ""}>
       <div class="bar b-${esc(a.severity)}"></div>
       <div class="col">
         <div class="meta">
@@ -1663,19 +1699,34 @@ function actionButtons(a, index) {
     <span class="manual">${esc(whyManual(a))}</span></div>`;
 }
 
-// Named per rule rather than as one sentence, because the reasons are not the
-// same and the difference is the whole basis for the refusal. Where the shape
-// can be picked up, the sentence says what the refusal actually is: TieOut will
-// not choose the position, which is not the same as nothing being possible.
-const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003",
-                  "LO-004","LO-005","LO-006","LO-007","LO-008"];
+// Named per rule rather than as one sentence, because the reasons TieOut will
+// not act are not the same reason, and the difference is the whole basis for
+// the refusal. One sentence covering "an answer nobody can know", "an answer
+// TieOut knows and has no control to write" and "an answer TieOut knows and
+// will not apply" reads as the same excuse for three different situations —
+// LO-007 got "moving shapes satisfies a rule breaks the layout around them"
+// for a *font size*, which is not what a size band is.
+//
+// TieOut resizes nothing: LO-006 (text overflows its box) and LO-007 (a font
+// size out of band) both have a known number and no control to write it.
+// BR-003 is the same for a logo's size, as distinct from BR-002's position,
+// which this editor does move.
+const SIZE_RULES = ["BR-003", "LO-006", "LO-007"];
+// TieOut adds no shape and no text box: BR-001 (logo absent), BR-010 (a
+// required footer line or confidentiality marking absent) and CH-001 (a
+// chart with no title or caption) all have a computed remedy that starts
+// "Add the...", and none of them can be carried out by a control that only
+// moves, resizes or retypes what is already there.
+const CANNOT_ADD = ["BR-001", "BR-010", "CH-001"];
 function whyManual(a) {
   if (a.movable)
     return "Yours to place — TieOut will not choose where it goes.";
   if (a.editable)
     return "Yours to decide — both figures are stated, and only you know which is right.";
-  if (GEOMETRY.includes(a.rule_id))
-    return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
+  if (SIZE_RULES.includes(a.rule_id))
+    return "Yours to fix: TieOut knows the size and does not resize a shape or a font.";
+  if (CANNOT_ADD.includes(a.rule_id))
+    return "Yours to fix: TieOut does not add a shape or a text box.";
   return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
 }
 
@@ -1823,7 +1874,8 @@ function wireNote() {
     el.onclick = (event) => {
       event.stopPropagation();
       const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
-      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "",
+        alsoOf(el));
     };
   });
   // Only a card that names a slide navigates. Unifying the two modes onto one
@@ -1835,9 +1887,21 @@ function wireNote() {
       const slide = Number(el.dataset.slide);
       if (!Number.isFinite(slide)) return;
       const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
-      select(slide, bbox.length === 4 ? bbox : null, el.dataset.label || "");
+      select(slide, bbox.length === 4 ? bbox : null, el.dataset.label || "", alsoOf(el));
     };
   });
+}
+
+// The second shape LO-004 names, parsed back off the element `alsoAttr` wrote
+// it onto. A malformed or absent attribute is simply no second outline, never
+// a thrown error over a decoration.
+function alsoOf(el) {
+  if (!el.dataset.also) return null;
+  try {
+    return JSON.parse(el.dataset.also);
+  } catch (_) {
+    return null;
+  }
 }
 
 function item(n, slide, f) {
@@ -1845,7 +1909,7 @@ function item(n, slide, f) {
     ? `<div class="ev">${esc(f.measured || "")}${f.expected
         ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
   return `<div class="item${f.arrived ? " arrived" : ""}" data-slide="${slide.index}"
-    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}">
+    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}"${alsoAttr(f.also)}>
     <div class="bar b-${f.severity}"></div>
     <div class="col">
       <div class="meta">
@@ -2304,7 +2368,13 @@ function runHtml(r) {
     f.bold ? "font-weight:700" : "",
     f.italic ? "font-style:italic" : "",
     f.underline ? "text-decoration:underline" : "",
-    f.color_hex ? `color:#${f.color_hex}` : "",
+    // color_hex already carries its own "#" -- canvas_view() emits it that
+    // way, same as every other hex field this page reads (fill.hex, line.hex,
+    // both fed straight to hexToRgba below). A second one here built
+    // "color:##fff", which is invalid CSS and is silently dropped, so no run
+    // was ever drawn in its real colour: white-on-navy text rendered as the
+    // fallback dark ink, dark on dark.
+    f.color_hex ? `color:${f.color_hex}` : "",
   ].filter(Boolean).join(";");
   // Runs with no text (an empty run some authoring tool left behind) still
   // need somewhere to click, or an all-empty paragraph could never be
@@ -2466,7 +2536,17 @@ function markup() {
     left:${pc(left, S.deck.width_pt)}; top:${pc(top, S.deck.height_pt)};
     width:${pc(width, S.deck.width_pt)}; height:${pc(height, S.deck.height_pt)}; ${rotate}">
     ${m.label ? `<span>${esc(m.label)}</span>` : ""}${handles}</div>`;
-  return editLayer() + box;
+  // LO-004's second shape -- the one the message names and the canvas used to
+  // leave un-outlined (the audit's #40). Not drawn mid-edit: the editor is
+  // busy with the primary box, and a second outline over it would read as
+  // part of what is being moved.
+  const alsoBox = m.also && m.also.bbox_pt && !e
+    ? (([aleft, atop, awidth, aheight]) => `<div class="mark also" style="
+        left:${pc(aleft, S.deck.width_pt)}; top:${pc(atop, S.deck.height_pt)};
+        width:${pc(awidth, S.deck.width_pt)}; height:${pc(aheight, S.deck.height_pt)};">
+        ${m.also.shape ? `<span>${esc(m.also.shape)}</span>` : ""}</div>`)(m.also.bbox_pt)
+    : "";
+  return editLayer() + box + alsoBox;
 }
 
 /* ---------- the position editor ----------
@@ -2501,7 +2581,7 @@ function beginMove(slideIndex, source) {
   if (!m) return;
   select(slideIndex, [m.left_pt, m.top_pt, m.width_pt, m.height_pt], m.shape);
   S.edit = {
-    slide: slideIndex, shapeId: m.shape_id, name: m.shape,
+    slide: slideIndex, shapeId: m.shape_id, uid: m.uid, name: m.shape,
     x0: m.x_emu, y0: m.y_emu, x: m.x_emu, y: m.y_emu,
     cx0: m.cx_emu, cy0: m.cy_emu, cx: m.cx_emu, cy: m.cy_emu,
     rotation: m.rotation || 0,
@@ -2581,16 +2661,25 @@ function beginEditFromCanvas(slideIndex, shape) {
   const refused = shape.editable.move_refused || shape.editable.resize_refused;
   if (refused) return paneMessage("warn", refused);
   if (shape.editable.data_mark) {
-    const proceed = window.confirm(
-      `${shape.editable.data_mark_warning}\n\nMove or resize "${shape.name}" anyway?`
+    // Inline, like every other confirmation in the product -- a native
+    // window.confirm() here blocked the whole page, not just this shape,
+    // until someone clicked it, and could not be driven through the app's
+    // own automation.
+    paneConfirm(
+      `${shape.editable.data_mark_warning} Move or resize "${shape.name}" anyway?`,
+      () => _placeEditFromCanvas(slideIndex, shape)
     );
-    if (!proceed) return;
+    return;
   }
+  _placeEditFromCanvas(slideIndex, shape);
+}
+
+function _placeEditFromCanvas(slideIndex, shape) {
   select(slideIndex, [shape.left_pt, shape.top_pt, shape.width_pt, shape.height_pt], shape.name);
   const x = Math.round(shape.left_pt * EMU_PT), y = Math.round(shape.top_pt * EMU_PT);
   const cx = Math.round(shape.width_pt * EMU_PT), cy = Math.round(shape.height_pt * EMU_PT);
   S.edit = {
-    slide: slideIndex, shapeId: shape.shape_id, name: shape.name,
+    slide: slideIndex, shapeId: shape.shape_id, uid: shape.uid, name: shape.name,
     x0: x, y0: y, cx0: cx, cy0: cy, x, y, cx, cy,
     rotation: shape.rotation || 0,
     handle: "move",
@@ -2757,6 +2846,23 @@ function paintEdit() {
     box.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
     box.style.width = `${(e.cx / (S.deck.width_pt * EMU_PT)) * 100}%`;
     box.style.height = `${(e.cy / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  }
+  // The shape itself, not only the outline over it -- the audit's #2. The
+  // live surface draws every shape from the static tree it fetched, and
+  // nothing before this repainted that element during a drag: the outline
+  // and the readout moved, and "SECTION 03" stayed exactly where it started
+  // until Apply revealed the result. Keyed on uid because that is how the
+  // surface addresses its own shapes; a shape this editor cannot name one
+  // for (should not happen -- every path into S.edit sets it) simply keeps
+  // showing the outline moving alone, which is the previous behaviour.
+  if (e.uid !== undefined) {
+    const live = $("shapes")?.querySelector(`[data-uid="${e.uid}"]`);
+    if (live) {
+      live.style.left = `${(e.x / (S.deck.width_pt * EMU_PT)) * 100}%`;
+      live.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
+      live.style.width = `${(e.cx / (S.deck.width_pt * EMU_PT)) * 100}%`;
+      live.style.height = `${(e.cy / (S.deck.height_pt * EMU_PT)) * 100}%`;
+    }
   }
   $("slide").querySelectorAll(".guide").forEach((el) => {
     const mine = el.dataset.col !== undefined
@@ -3113,7 +3219,7 @@ function slideTitle(index) {
   return s ? s.archetype.replace(/_/g, " ") : "";
 }
 
-function select(index, bbox, label) {
+function select(index, bbox, label, also) {
   // Selecting anything else puts the shape down. Nothing has been written, so
   // there is nothing to undo — but an edit abandoned in silence reads as one
   // that was applied and did nothing, so it says so.
@@ -3126,7 +3232,11 @@ function select(index, bbox, label) {
   }
   if (S.textEdit) cancelTextEdit();
   S.slide = index;
-  S.mark = bbox ? { bbox, label: label || "" } : null;
+  // `also` is LO-004's second shape -- present only when the caller has one
+  // and the finding is still on the same slide as `bbox` (an overlap is
+  // always one slide, but nothing enforces that here, so this stays honest
+  // if a future rule reuses the field across two).
+  S.mark = bbox ? { bbox, label: label || "", also: also || null } : null;
   $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;
   scrollRailTo(index);
   renderSlide();
@@ -3171,6 +3281,23 @@ function paneMessage(kind, text) {
   $("flash").innerHTML = `<div class="msg ${kind}">${esc(text)}</div>`;
 }
 function clearFlash() { $("flash").innerHTML = ""; }
+
+// Every confirmation, warning and refusal in the product is inline in the
+// task pane -- except one, until this: the data-mark guardrail raised a
+// native window.confirm(), which blocks the whole page (not just the one
+// shape) until it is dismissed, cannot be styled, and could not even be
+// driven through the audit's own automation. `onProceed` runs if the person
+// clicks through; declining just clears the message, same as dismissing any
+// other warning here.
+function paneConfirm(text, onProceed) {
+  $("flash").innerHTML = `<div class="msg warn">${esc(text)}
+    <div class="acts" style="margin-top:8px">
+      <button class="go" id="confirm-proceed">Move or resize anyway</button>
+      <button id="confirm-cancel">Cancel</button>
+    </div></div>`;
+  $("confirm-proceed").onclick = () => { clearFlash(); onProceed(); };
+  $("confirm-cancel").onclick = clearFlash;
+}
 
 renderIntro();
 deckPanel();
