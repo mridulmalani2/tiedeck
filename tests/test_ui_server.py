@@ -166,6 +166,28 @@ def test_a_run_colour_is_never_double_hashed(client):
     assert "color:${f.color_hex}" in markup
 
 
+def test_the_report_and_export_links_never_carry_the_token_in_a_url(client):
+    """The audit's #19: the token was in the query string of a link a normal
+    button press opened in a new tab, so it sat in the address bar and in
+    browser history. Both routes are now fetched with the header and handed
+    to the browser as a local blob -- neither URL, carrying no token, ever
+    reaches a tab's address bar.
+    """
+    markup = client.get("/").text
+    assert "/api/report/${encodeURIComponent(S.deck.deck_id)}?t=" not in markup
+    assert "/api/export/${encodeURIComponent(S.deck.deck_id)}?t=" not in markup
+    assert "createObjectURL" in markup
+
+
+def test_no_native_confirm_dialog_remains(client):
+    """The audit's #24: window.confirm() blocks the whole page, not just the
+    one shape, cannot be styled, and could not be driven through the app's
+    own automation -- the only confirmation in the product that was not
+    inline in the task pane.
+    """
+    assert "window.confirm(" not in client.get("/").text
+
+
 def test_the_page_drops_the_token_from_the_address_bar(client):
     """Or it stays in the browser's history and in anything copied from it."""
     assert "history.replaceState" in client.get("/").text

@@ -62,7 +62,13 @@
      [hidden] — so the API key field showed with content review switched off,
      which is exactly the wrong affordance. */
   [hidden] { display: none !important; }
-  html, body { height: 100%; }
+  /* The app is a fixed-height shell -- rail, canvas and pane each scroll
+     their own content (their own overflow:auto rules, below). Without this,
+     scrolling any of them to its own end at an extreme (a fast wheel flick,
+     an overscroll bounce) fell through to the document itself, which had
+     nowhere to go but reveal grey page below the whole app -- carrying the
+     title bar, the ribbon and Undo with it (the audit's #16). */
+  html, body { height: 100%; overflow: hidden; }
   body {
     margin: 0; font: var(--t-md)/1.5 var(--font); color: var(--ink);
     background: var(--chrome); display: flex; flex-direction: column;
@@ -164,6 +170,15 @@
     display: flex; flex-direction: column; gap: var(--s1); font-size: var(--t-micro);
     letter-spacing: .07em; text-transform: uppercase; color: var(--ink-4);
   }
+  /* An unsettled question is a full sentence, not a field label -- ".stack"
+     is otherwise only ever a short caption like "Palette" or "Tolerance",
+     and uppercasing five lines of prose makes the one thing on the House
+     style tab that needs a decision the hardest thing on it to read (the
+     audit's #35). */
+  label.stack .qtext {
+    text-transform: none; letter-spacing: normal; color: var(--ink-2);
+    font-size: var(--t-sm); line-height: 1.4;
+  }
 
   /* ---- body: rail | canvas | pane ---- */
   .body { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -203,9 +218,19 @@
   .b-minor { background: var(--minor); } .b-info { background: var(--info); }
   .b-ok { background: var(--ok); }
 
+  /* Block layout with the slide centred by its own margin, not a flex
+     justify-content:center. A flex (or grid) container that centres an
+     overflowing child clips the overflow rather than making it scrollable --
+     the browser has no reachable scroll position for content that overflows
+     symmetrically around a centred line. LO-001 on a shape whose right edge
+     sits 446pt past the slide's own 960pt-wide edge was exactly that: the
+     "extends outside the slide canvas" finding drew a canvas that made the
+     extending part unreachable, on the one rule it is the entire subject of
+     (the audit's #34). margin:auto centres the same way and keeps the
+     overflow reachable by scrolling either direction. */
   .canvas {
     flex: 1 1 auto; background: var(--canvas); overflow: auto; padding: var(--s6);
-    display: flex; align-items: flex-start; justify-content: center; min-width: 0;
+    min-width: 0;
   }
   /* The slide is the document on the desk: a hairline so a white deck keeps its
      edge, and a soft drop so it sits above the surface rather than in it. */
@@ -214,6 +239,7 @@
     border: 1px solid rgba(20,22,26,.10);
     box-shadow: 0 1px 2px rgba(20,22,26,.06), 0 8px 24px rgba(20,22,26,.10);
     display: flex; align-items: center; justify-content: center; position: relative;
+    margin: 0 auto;
   }
   .slide img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .slide .placeholder { text-align: center; color: var(--ink-3); padding: 34px; max-width: 560px; }
@@ -361,6 +387,11 @@
     color: var(--ink); letter-spacing: -.006em;
   }
   .item .say { font-weight: 400; }
+  /* A finding's own cross-reference to another slide -- CO-001's "37.4 in
+     Table 0 on slide 14" -- reads as a link now instead of plain text (the
+     audit's #38: reconciling the two figures means finding the other one,
+     and only the card's own slide, never the one it names, was clickable). */
+  a.xref { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
   .item .scope { font-size: var(--t-sm); color: var(--ink-3); margin-top: var(--s1); }
   .item .scope a { color: var(--ink-2); text-decoration: none; cursor: pointer;
     border-bottom: 1px solid var(--line-2); }
@@ -899,7 +930,7 @@
     </div>
     <div class="grp">
       <div class="row">
-        <button class="small" id="copynote">Copy note</button>
+        <button class="small" id="copynote" disabled>Copy note</button>
         <button class="small" id="openreport" disabled>HTML report</button>
       </div>
       <div class="name">Share</div>
@@ -1071,12 +1102,15 @@ async function upload(file) {
   busy("");
   // A new deck invalidates everything measured about the last one. Leaving the
   // tally up made the status bar read "16 blocker" under a deck that had not
-  // been checked.
+  // been checked -- and leaving the chip up (the audit's #42) said "Profile:
+  // falcon" was in force against a deck no house style had been chosen for.
   S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
-  S.plan = null; S.digest = null; S.approved = false;
+  S.plan = null; S.digest = null; S.approved = false; S.client = null;
   S.lastChange = null; S.canvas = {}; S.canvasVersion++; S.selected = null; S.mark = null;
   $("tally").textContent = "";
+  $("guarantee").textContent = "Offline · nothing leaves this machine";
   $("openreport").disabled = true;
+  $("copynote").disabled = true;
   $("undo").disabled = true;
   $("editstate").textContent = "No corrections made";
   $("tab-style").disabled = !S.client;
@@ -1084,6 +1118,11 @@ async function upload(file) {
   $("doc").textContent = S.deck.filename;
   $("pos").textContent = `Slide 1 of ${S.deck.slide_count}`;
   clearFlash();
+  // Replacing the rail's content does not move its scroll position -- a
+  // second, shorter deck opened after scrolling the first one down otherwise
+  // shows slide 1 selected nowhere on screen, the rail still scrolled to
+  // wherever the previous deck left it (the audit's #43).
+  if ($("rail")) $("rail").scrollTop = 0;
   renderRail(); renderSlide(); renderIntro(); thumbState(); deckPanel();
   loadClients();
   pollThumbs();
@@ -1131,7 +1170,14 @@ async function pollThumbs() {
 async function loadClients() {
   let d;
   try { d = await api("/api/profiles"); } catch (e) { return; }
-  $("client").innerHTML = d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
+  // No option pre-selected: a <select> with none of its own defaults to its
+  // first, and that first one is whichever the server lists first -- a
+  // leftover scratch profile named "Test", ahead of a real client's only
+  // because of case-sensitive ordering. One click on "Use this profile"
+  // audited the deck against the wrong house style, silently (the audit's
+  // #30). The placeholder is disabled so it can never itself be chosen.
+  $("client").innerHTML = `<option value="" disabled selected>Choose a profile…</option>`
+    + d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
   $("useclient").disabled = !d.clients.length;
 }
 
@@ -1229,7 +1275,7 @@ function renderStyle() {
     <div class="block">
       <h3>${outstanding.length} question${outstanding.length === 1 ? "" : "s"} the evidence did not settle</h3>
       ${outstanding.map((q) => `
-        <label class="stack">${esc(q.question)}
+        <label class="stack"><span class="qtext">${esc(q.question)}</span>
           <select data-question="${esc(q.id)}"${draft ? " disabled" : ""}>
             ${(q.options.length ? q.options : [q.default]).map((o) =>
               `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
@@ -1397,6 +1443,14 @@ $("revert").onclick = async () => {
 $("semantic").onchange = () => {
   $("keygrp").hidden = !$("semantic").checked;
   S.approved = false;
+  // The audit's #31: unticking Content review after "Show what would be
+  // sent" left the redaction preview on screen with no way back to the
+  // review note short of switching tabs and back. Restore it directly,
+  // the same view a plain re-check would show.
+  if (!$("semantic").checked && S.plan) {
+    S.plan = null;
+    if (current() === "review") renderNote();
+  }
 };
 
 // Changing either of these changes the payload, which changes its digest. The
@@ -1459,9 +1513,15 @@ $("check").onclick = async () => {
   if (S.checking) return;
   if (!S.client) return paneMessage("warn",
     "Choose an existing profile or create one on the Deck tab first.");
-  const semantic = $("semantic").checked;
-  if (semantic && !$("apikey").value.trim())
-    return paneMessage("warn", "Content review needs an API key, or turn it off.");
+  // The audit's #50: an optional, off-by-default extra with a missing field
+  // used to take the primary, offline action down with it -- ticking Content
+  // review with no key blocked the mechanical audit too, not only the
+  // review it was actually missing something for. The mechanical check now
+  // always runs; only the semantic pass is skipped, with a warning that says
+  // why the deck still shows no content-review findings.
+  let semantic = $("semantic").checked;
+  const noKey = semantic && !$("apikey").value.trim();
+  if (noKey) semantic = false;
   S.checking = true;
   clearFlash();
   // Drop the previous run before starting this one, so nothing on screen is
@@ -1477,6 +1537,19 @@ $("check").onclick = async () => {
       approved_digest: S.approved ? S.digest : null,
       api_key: semantic ? $("apikey").value.trim() : null,
     }});
+    // The audit's #15: re-running Check deck wiped the note's correction
+    // banner and its fixed/remain block while the ribbon kept reporting the
+    // same correction -- because the ribbon reads deck.log, which a plain
+    // check never touches, and the banner reads S.lastChange, which was
+    // dropped above and nothing repopulated it. The server's own log is
+    // still the record of what happened, so read the last entry back out of
+    // it. Always "fix": undo pops the log rather than appending to it, so a
+    // remaining entry is never one.
+    const corrections = S.audit.corrections || [];
+    if (corrections.length) {
+      const last = corrections[corrections.length - 1];
+      S.lastChange = { what: last.summary, kind: "fix", delta: last.delta };
+    }
   } catch (e) {
     S.checking = false; $("check").disabled = false; busy("");
     renderNote();
@@ -1484,7 +1557,10 @@ $("check").onclick = async () => {
   }
   S.checking = false; $("check").disabled = false; busy("");
   $("openreport").disabled = false;
+  $("copynote").disabled = false;
   tab("review"); renderRail(); renderNote(); editState();
+  if (noKey) paneMessage("warn", "Content review needs an API key, or turn it off. "
+    + "Audited without it.");
 };
 
 /* ---------- the review note ---------- */
@@ -1520,6 +1596,13 @@ function renderNote() {
     : "no findings";
 
   const actions = a.actions || [];
+  // "Things to do" is a work queue, and Set Aside is a decision about the
+  // queue -- so it has to shrink with it, the same way "TieOut can fix"
+  // already does (fixable_count is computed server-side excluding rejected
+  // actions). Before this fix it stayed at the original total regardless of
+  // what had been set aside (the audit's #13): the one count someone reads
+  // as "what's left" never moved as things left it.
+  const toDo = actions.filter((a) => !a.rejected).length;
   const head = `
     <div class="verdict v-${esc(v.state)}">
       <div class="call"><i></i>${esc(v.headline)}</div>
@@ -1527,7 +1610,7 @@ function renderNote() {
       ${s.total ? `<div class="counts">
         ${kinds.map((k) => `<span class="c-${k}"><b>${s[k]}</b><em>${k}</em></span>`).join("")}
       </div>
-      <div class="totals"><b>${actions.length}</b> ${actions.length === 1 ? "thing" : "things"} to do${
+      <div class="totals"><b>${toDo}</b> ${toDo === 1 ? "thing" : "things"} to do${
         a.fixable_count ? `<span class="sep">·</span><b>${a.fixable_count}</b> TieOut can fix` : ""}</div>` : ""}
     </div>
     <div class="note-head"><b>${a.slide_count}</b> slides checked against
@@ -1630,11 +1713,12 @@ function byFix(actions) {
     const instances = a.count > 1 || a.instances[0].shape ? `
       <details>
         <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
-        ${a.instances.map((i, k) => `<div class="inst${i.arrived ? " arrived" : ""}" data-goto="${i.slide}"
+        ${a.instances.map((i, k) => `<div class="inst${
+          i.arrived && S.lastChange?.kind !== "undo" ? " arrived" : ""}" data-goto="${i.slide}"
             data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
             data-label="${esc(a.rule_id)}"${alsoAttr(i.also)}>
             <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
-            — ${esc(sentence(i.message))}${
+            — ${linkedSentence(i.message)}${
               a.movable && i.move && !i.move.refused
                 ? ` <button class="mv" data-moveinst="${index}:${k}">Move</button>` : ""}
           </div>`).join("")}
@@ -1648,7 +1732,7 @@ function byFix(actions) {
         <div class="meta">
           <span class="n">${index + 1}. ${esc(a.rule_id)}</span>
           <span class="tag b-${esc(a.severity)}">${esc(a.severity)}</span>
-          ${a.arrived ? `<span class="tag now" title="Not reported before the last correction">${
+          ${a.arrived && S.lastChange?.kind !== "undo" ? `<span class="tag now" title="Not reported before the last correction">${
             a.arrived === a.count ? "new" : `${a.arrived} new`}</span>` : ""}
           ${a.category === "semantic" ? `<span class="tag sem">semantic</span>` : ""}
         </div>
@@ -1904,25 +1988,61 @@ function alsoOf(el) {
   }
 }
 
+// The job this finding belongs to, so a by-slide card can offer the same
+// action a by-fix card would -- the audit's #10: "By slide" is the order a
+// deck actually gets corrected in, and used to carry no buttons at all, so
+// acting on anything meant switching views and finding the same finding
+// again. A linear scan over the (at most low hundreds of) actions each time
+// a card renders, rather than a map built once: this pane redraws on every
+// correction anyway, and the action list is exactly what would need
+// rebuilding to keep a map current.
+function actionForFinding(id) {
+  const actions = S.audit?.actions || [];
+  for (let index = 0; index < actions.length; index++) {
+    const k = actions[index].instances.findIndex((i) => i.id === id);
+    if (k >= 0) return { action: actions[index], index, k };
+  }
+  return null;
+}
+
+// actionButtons() addresses "the first instance this action has" (data-move
+// and data-editfig both take only the action's index) -- correct from a
+// by-fix card, which always shows the group. From a by-slide card showing
+// one specific instance, that would silently open a *different* slide's
+// shape when the two disagree about which instance comes first. Fixing and
+// setting aside are unambiguous either way (both act on every instance by
+// design), so those pass straight through the shared behaviour; a move or
+// an edit action shows a button only where this instance is the only one
+// there is, and otherwise falls back to the manual explanation.
+function actionButtonsForInstance(match) {
+  const { action: a, index } = match;
+  if (a.rejected || a.fixable || a.count === 1) return actionButtons(a, index);
+  return `<div class="acts"><button data-reject="${esc(a.key)}">Set aside</button>
+    <span class="manual">${esc(whyManual(a))}</span></div>`;
+}
+
 function item(n, slide, f) {
   const delta = f.measured || f.expected
     ? `<div class="ev">${esc(f.measured || "")}${f.expected
         ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
-  return `<div class="item${f.arrived ? " arrived" : ""}" data-slide="${slide.index}"
+  const match = actionForFinding(f.id);
+  return `<div class="item${
+    f.arrived && S.lastChange?.kind !== "undo" ? " arrived" : ""}" data-slide="${slide.index}"
     data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}"${alsoAttr(f.also)}>
     <div class="bar b-${f.severity}"></div>
     <div class="col">
       <div class="meta">
         <span class="n">${n}. ${esc(f.rule_id)}</span>
         <span class="tag b-${f.severity}">${esc(f.severity)}</span>
-        ${f.arrived ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
+        ${f.arrived && S.lastChange?.kind !== "undo" ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
         ${f.category === "semantic" ? `<span class="tag sem">semantic</span>` : ""}
         ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
       </div>
-      <p class="say">${esc(sentence(f.message))}</p>
+      <p class="say">${linkedSentence(f.message)}</p>
       ${f.remedy ? `<div class="do">${esc(f.remedy)}</div>` : ""}
       ${delta}
       ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+      ${match ? actionButtonsForInstance(match) : ""}
     </div></div>`;
 }
 
@@ -1934,6 +2054,19 @@ function sentence(text) {
   const first = t[0] === t[0].toLowerCase() && /[a-z]/.test(t[0])
     ? t[0].toUpperCase() + t.slice(1) : t;
   return /[.!?]$/.test(first) ? first : first + ".";
+}
+
+// A tie-out finding's own message is where the *other* slide is named --
+// "23.8 here but 37.4 in Table 0 on slide 14" -- and reconciling the two
+// figures means finding that second table by hand (the audit's #38: the
+// card's own slide is a link, the one it disagrees with is not). Escaped
+// first, then linked: "slide" and digits survive escaping untouched, so
+// this never turns escaped markup back into live HTML.
+function linkedSentence(text) {
+  return esc(sentence(text)).replace(
+    /\bslide (\d+)\b/gi,
+    (whole, n) => `<a class="xref" data-goto="${n}">${whole}</a>`
+  );
 }
 
 function fileName(path) { return String(path || "").split("/").pop(); }
@@ -1950,6 +2083,10 @@ function reviewBanner(r) {
 }
 
 $("copynote").onclick = async () => {
+  // The audit's #23: this was clickable before any check had run, and
+  // reported "Note copied" over a pane that still said "Run Check deck" --
+  // there was nothing to copy, and the person believed there was.
+  if (!S.audit) return;
   const text = plainNote();
   try { await navigator.clipboard.writeText(text); busy("Note copied"); setTimeout(() => busy(""), 1600); }
   catch (_) { paneMessage("warn", "The browser refused clipboard access. The HTML report is the other way out."); }
@@ -2032,14 +2169,66 @@ function plainNote() {
 $("undo").onclick = () => correct("/api/undo",
   { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
 
-$("export").onclick = () => {
-  window.open(
-    `/api/export/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`,
-    "_blank", "noopener");
+// Both routes used to be opened by URL, with the session token in the query
+// string -- the audit's #19. The main page substitutes the token into the
+// document and drops it from the address bar on load, exactly to keep it out
+// of history; these two links undid that with a normal button press. Fetched
+// with the header instead and handed to the browser as a local blob, neither
+// route's URL -- carrying no token at all -- ever reaches the address bar or
+// a history entry.
+
+// The filename the server already computed (deck.filename, or "(corrected)"
+// once something has been fixed) -- read back off Content-Disposition rather
+// than reconstructed here, so there is exactly one place that decides it.
+function _filenameFrom(response, fallback) {
+  const header = response.headers.get("content-disposition") || "";
+  const match = header.match(/filename="?([^";]+)"?/);
+  return match ? match[1] : fallback;
+}
+
+async function _downloadBlob(path, fallbackName, openInline) {
+  let response;
+  try {
+    response = await fetch(path, { headers: { "X-TieOut-Token": TOKEN } });
+  } catch (_) {
+    paneMessage("bad", "Could not reach the server.");
+    return false;
+  }
+  if (!response.ok) {
+    paneMessage("bad", `Could not open this: ${response.statusText}`);
+    return false;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  if (openInline) {
+    window.open(url, "_blank", "noopener");
+  } else {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = _filenameFrom(response, fallbackName);
+    a.click();
+  }
+  // Revoked on a delay rather than immediately: a new tab (the report) needs
+  // the URL to still resolve after it opens, and a download needs it to
+  // survive the click that starts the save.
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return true;
+}
+
+$("export").onclick = async () => {
+  // The audit's #22: pressing Export gave no toast, no status line, no change
+  // to the ribbon -- only Chrome's own download bar said anything happened,
+  // and on a machine with that hidden, nothing did.
+  const ok = await _downloadBlob(
+    `/api/export/${encodeURIComponent(S.deck.deck_id)}`,
+    S.deck.filename || "deck.pptx",
+    false
+  );
+  if (ok) paneMessage("good", "Export started — check your downloads.");
 };
 
 $("openreport").onclick = () => {
-  window.open(`/api/report/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`, "_blank", "noopener");
+  _downloadBlob(`/api/report/${encodeURIComponent(S.deck.deck_id)}`, "report.html", true);
 };
 
 /* ---------- slides ---------- */
@@ -2069,7 +2258,7 @@ function railRowHtml(s, a, thumbs) {
     : `<span class="tally b-ok">&#10003;</span>`;
   const inner = thumbs
     ? `<img loading="lazy" alt="Slide ${s.index}"
-        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}">`
+        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}&v=${S.deck.thumbnails.version || 0}">`
     : `<span class="stub">${esc(a?.title || s.archetype.replace(/_/g, " "))}</span>`;
   return `<span class="n">${s.index}</span><span class="box">${inner}${tally}</span>`;
 }
@@ -2131,7 +2320,19 @@ function paintRail(remeasure) {
     }
     el.style.top = `${i * rowH}px`;
     el.setAttribute("aria-current", String(s.index === S.slide));
-    el.innerHTML = railRowHtml(s, byIndex[s.index], thumbs);
+    // Rewritten only if something about this row actually changed. Every
+    // correction used to rebuild every mounted row unconditionally, which
+    // tore down and recreated every <img> even where nothing about it had --
+    // a brand-new element has no rendered pixels to reuse from the one it
+    // replaced, so the whole rail went blank until each one reloaded (the
+    // audit's #37). The URL itself now carries the render version (paired
+    // with this diff, not on its own: without the diff, a version that
+    // never changes on 19 of 20 rows would still rebuild all 20 for nothing).
+    const html = railRowHtml(s, byIndex[s.index], thumbs);
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
   }
   Object.keys(mounted).forEach((k) => { if (!wanted.has(k)) mounted[k].remove(); });
 }
@@ -2662,9 +2863,9 @@ function beginEditFromCanvas(slideIndex, shape) {
   if (refused) return paneMessage("warn", refused);
   if (shape.editable.data_mark) {
     // Inline, like every other confirmation in the product -- a native
-    // window.confirm() here blocked the whole page, not just this shape,
-    // until someone clicked it, and could not be driven through the app's
-    // own automation.
+    // browser dialog here blocked the whole page, not just this shape, until
+    // someone clicked it, and could not be driven through the app's own
+    // automation.
     paneConfirm(
       `${shape.editable.data_mark_warning} Move or resize "${shape.name}" anyway?`,
       () => _placeEditFromCanvas(slideIndex, shape)
@@ -3284,7 +3485,7 @@ function clearFlash() { $("flash").innerHTML = ""; }
 
 // Every confirmation, warning and refusal in the product is inline in the
 // task pane -- except one, until this: the data-mark guardrail raised a
-// native window.confirm(), which blocks the whole page (not just the one
+// native browser dialog, which blocks the whole page (not just the one
 // shape) until it is dismissed, cannot be styled, and could not even be
 // driven through the audit's own automation. `onProceed` runs if the person
 // clicks through; declining just clears the message, same as dismissing any
