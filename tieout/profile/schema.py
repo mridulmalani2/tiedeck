@@ -99,6 +99,12 @@ class FontRole(_Model):
 
     def describe(self) -> str:
         if self.exact_pt is not None:
+            # "one of" a single value reads as a template nobody finished --
+            # fewer than 4 distinct sizes is exactly when this emits an exact
+            # set rather than a band (see derive_typography), so a role with
+            # only one observed size is the common case, not an edge one.
+            if len(self.exact_pt) == 1:
+                return f"{self.exact_pt[0]:g}pt"
             return "one of " + ", ".join(f"{v:g}pt" for v in self.exact_pt)
         if self.min_pt is not None and self.max_pt is not None:
             return f"{self.min_pt:g}pt to {self.max_pt:g}pt"
@@ -298,6 +304,11 @@ class TypographyProfile(_Model):
     decimal_places_by_column: Literal["consistent_within_column"] | None = None
     date_format: str | None = None
     currency_pattern: str | None = None
+    #: The literal currency markers ``currency_pattern`` was built from --
+    #: ``["$"]``, or ``["US$", "A$"]`` for a deck that states more than one --
+    #: kept apart from the regex so a remedy can say "write it as '$'" rather
+    #: than hand a reader the pattern that checks for it.
+    currency_literals: list[str] = Field(default_factory=list)
     unit_pattern: str | None = None
     #: Canonical surface form -> the variants that must be rewritten to it.
     canon_terms: dict[str, list[str]] = Field(default_factory=dict)
@@ -428,6 +439,24 @@ class SuppressionFile(_Model):
         return [s for s in self.suppressions if s.count >= threshold]
 
 
+class Intended(_Model):
+    """A finding someone declared intentional for this house style.
+
+    PLAN.md §0. Keyed by a *signature* -- what the finding is about, never which
+    slide it is on -- so it holds for the next turn of the deck and for every
+    other deck in the house style, where a suppression keyed by slide number
+    would hold for neither. A false positive dismissed once is a nuisance; one
+    that returns every run is why a tool gets switched off.
+    """
+
+    rule_id: str
+    signature: str
+    note: str = ""
+    #: The finding's message when it was declared, so whoever reads the profile
+    #: later can see what was dismissed without re-running the deck.
+    example: str = ""
+
+
 class Profile(_Model):
     """A complete learned profile."""
 
@@ -454,8 +483,55 @@ class Profile(_Model):
     provenance: dict[str, str] = Field(default_factory=dict)
     #: Dotted field path -> the confidence of the derivation.
     confidence: dict[str, Confidence] = Field(default_factory=dict)
+    #: Findings declared intentional for this house style. Kept through a
+    #: re-learn and a merge, because nothing a reference deck shows can
+    #: re-derive a decision a person made about it.
+    intended: list[Intended] = Field(default_factory=list)
 
     # -- accessors ---------------------------------------------------------------
+
+    def intends(self, rule_id: str, signature: str) -> Intended | None:
+        """The declaration covering this finding, or None.
+
+        A clustered finding carries one signature per instance, a line each,
+        and is covered only when every one of them is: declaring one shape off
+        the grid intentional says nothing about the four beside it.
+        """
+        if not signature:
+            return None
+        declared = {
+            entry.signature: entry for entry in self.intended if entry.rule_id == rule_id
+        }
+        parts = signature.split("\n")
+        if not all(part in declared for part in parts):
+            return None
+        return declared[parts[0]]
+
+    def declare_intended(
+        self, rule_id: str, signature: str, *, note: str = "", example: str = ""
+    ) -> int:
+        """Record each line of ``signature`` as intended. Returns how many were new."""
+        known = {(entry.rule_id, entry.signature) for entry in self.intended}
+        added = 0
+        for part in signature.split("\n"):
+            if part and (rule_id, part) not in known:
+                self.intended.append(
+                    Intended(rule_id=rule_id, signature=part, note=note, example=example)
+                )
+                known.add((rule_id, part))
+                added += 1
+        return added
+
+    def withdraw_intended(self, rule_id: str, signature: str) -> int:
+        """Forget each line of ``signature``. Returns how many were removed."""
+        parts = set(signature.split("\n"))
+        before = len(self.intended)
+        self.intended = [
+            entry
+            for entry in self.intended
+            if not (entry.rule_id == rule_id and entry.signature in parts)
+        ]
+        return before - len(self.intended)
 
     def provenance_for(self, field_path: str) -> str | None:
         """The provenance string for a field, falling back to its ancestors.

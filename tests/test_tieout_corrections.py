@@ -625,20 +625,24 @@ def test_a_figure_split_across_runs_is_still_read(tmp_path):
     assert figure.raw == "$412m"
 
 
-def test_a_figure_split_across_runs_refuses_to_be_written(tmp_path, reference_profile):
-    """The correctness bug this closes, stated as the deck would have shown it.
+def test_a_figure_split_across_runs_is_addressed_by_its_characters(
+    tmp_path, reference_profile
+):
+    """The correctness bug this used to close by refusing, now closed by writing.
 
     The figure addresses to the run holding its first digit, which is where to
-    point someone. It is not where to *write*: a replacement put there leaves
-    "12m in 2025A" sitting after it, so correcting 412 to 1,908 would have
-    produced "1,90812m in 2025A" in a deck about to be sent.
+    point someone and not where to *write*: a replacement put there alone
+    leaves "12m in 2025A" after it, so correcting 412 to 1,908 produced
+    "1,90812m in 2025A". It was refused until PLAN.md §5.3; it now carries the
+    span of its own characters across both runs, which is what a write needs.
     """
     deck = _split_prose(tmp_path / "refuse.pptx", ["Revenue reached $4", "12m in 2025A"])
     (finding,) = _findings(deck, reference_profile, "CO-001")
     correction = finding.correction
     assert correction is not None
-    assert not correction.writable
-    assert "split across two runs" in (correction.refused or "")
+    assert correction.writable, correction.refused
+    assert correction.span == (16, 21)
+    assert correction.current == "$412m"
 
 
 def test_a_split_figure_is_not_offered_as_a_fix(tmp_path, reference_profile):
@@ -661,9 +665,10 @@ def test_a_figure_whole_inside_one_run_is_still_writable(tmp_path, reference_pro
     assert finding.correction.writable, finding.correction.refused
 
 
-def test_a_table_cell_split_across_runs_refuses_too(tmp_path, reference_profile):
+def test_a_table_cell_split_across_runs_is_written_across_them(tmp_path, reference_profile):
     """The same hazard down the other address. A cell whose figure is split
-    would fall back to run zero and overwrite half of it."""
+    fell back to run zero and would overwrite half of it, so it was refused;
+    it is written by its span now, and reads whole afterwards."""
     from tieout.figures import build_index
 
     presentation = Presentation()
@@ -687,4 +692,12 @@ def test_a_table_cell_split_across_runs_refuses_too(tmp_path, reference_profile)
 
     (finding,) = _findings(deck, reference_profile, "CO-004")
     assert finding.correction is not None
-    assert not finding.correction.writable
+    assert finding.correction.writable, finding.correction.refused
+    clear_caches()
+    (fix,) = plan_fixes(
+        run_rules(deck, reference_profile, include=["CO-004"]), reference_profile
+    ).values()
+    out = tmp_path / "cell-fixed.pptx"
+    assert apply_fix(path, out, fix).applied
+    cell = Presentation(str(out)).slides[0].shapes[0].table.cell(1, 3)
+    assert cell.text == "18.4%"

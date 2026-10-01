@@ -274,6 +274,14 @@ class ChartSeries:
     #: chosen by the author, and guessing at it would report a deck for a
     #: colour nobody in it picked.
     fill_hex: str | None = None
+    #: The range in the embedded workbook the series points at, as the chart
+    #: part spells it: ``Sheet1!$B$2:$B$4``. ``None`` for literal values.
+    workbook_ref: str | None = None
+    #: That range's values, read from the workbook itself (PLAN.md §5.4), in
+    #: range order and aligned with :attr:`values` point for point. ``None``
+    #: where it was not read, with the reason in :attr:`workbook_note`.
+    workbook_values: tuple[float | None, ...] | None = None
+    workbook_note: str = ""
 
 
 @dataclass(frozen=True, slots=True)

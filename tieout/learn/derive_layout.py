@@ -268,7 +268,9 @@ def derive_margins(
             note += (
                 f"; the {', '.join(sorted(clamped))} margin"
                 f"{'s were' if len(clamped) > 1 else ' was'} clamped to the "
-                f"tightest edge observed so the rule cannot fail this deck"
+                "tightest edge observed in the reference deck, so this margin "
+                "cannot be tighter than the reference deck's own closest call -- "
+                "a deck being checked can still sit outside it"
             )
         result.derivation.note(path, note, "high")
 

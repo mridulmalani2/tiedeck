@@ -76,7 +76,7 @@ from lxml import etree
 
 from tieout.model.units import EMU_PER_POINT
 from tieout.profile.schema import Profile
-from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding
+from tieout.rules.base import SEVERITY_ORDER, AuditResult, Correction, Finding
 
 __all__ = [
     "MOVE_KIND",
@@ -512,6 +512,7 @@ def _derived_figure(
                 "paragraph": correction.address[0],
                 "run": correction.address[1],
                 "text": correction.replacement,
+                **_spanned(correction),
             },
             f"Set {correction.current} to {correction.replacement}",
         )
@@ -526,9 +527,22 @@ def _derived_figure(
             "paragraph": correction.cell_paragraph,
             "run": correction.cell_run,
             "text": correction.replacement,
+            **_spanned(correction),
         },
         f"Set {correction.current} to {correction.replacement}",
     )
+
+
+def _spanned(correction: Correction) -> dict[str, Any]:
+    """The figure's characters and what they must read now, for a span write.
+
+    A derived figure's correction replaces exactly those characters -- never
+    the run holding them, which in prose is usually the whole sentence -- and
+    refuses if they no longer read as the figure the check saw.
+    """
+    if correction.span is None:
+        return {}
+    return {"span": list(correction.span), "expect": correction.current}
 
 
 #: rule id -> the builder that turns one of its findings into a fix, or None
@@ -1559,6 +1573,10 @@ def _apply_retext(path: Path, fix: Fix) -> int:
     if not 0 <= p_index < len(paragraphs):
         raise MoveFailed(f"paragraph {p_index} does not exist in that text frame")
     paragraph = paragraphs[p_index]
+    if "span" in payload:
+        _write_span(paragraph, payload)
+        _write_part(path, items, part, root)
+        return 1
 
     runs = [
         child for child in paragraph if etree.QName(child).localname in ("r", "br", "fld")
@@ -1639,6 +1657,10 @@ def _apply_recell(path: Path, fix: Fix) -> int:
     p_index = int(payload["paragraph"])
     if not 0 <= p_index < len(paragraphs):
         raise MoveFailed(f"paragraph {p_index} does not exist in that cell")
+    if "span" in payload:
+        _write_span(paragraphs[p_index], payload)
+        _write_part(path, items, part, root)
+        return 1
 
     runs = [
         child
@@ -1664,6 +1686,69 @@ def _apply_recell(path: Path, fix: Fix) -> int:
 
     _write_part(path, items, part, root)
     return 1
+
+
+def _write_span(paragraph: etree._Element, payload: dict[str, Any]) -> None:
+    """Replace a figure's own characters, wherever the runs happen to break.
+
+    PLAN.md §5.3. The replacement goes into the run holding the figure's first
+    character, in that run's formatting; the rest of the figure's characters
+    are removed from the runs after it, and every run keeps whatever else it
+    held and its own formatting. So "$4" + "12m in FY25A" corrected to 2,100
+    reads "$2,100" + "m in FY25A" -- not "2,10012m in FY25A", which is what
+    writing the first run alone produced, and not the run-zero sentence
+    replaced by a bare figure, which is what writing "the run holding it" did
+    to every figure in prose.
+
+    Runs are counted as the loader counts them -- ``a:r``, ``a:br`` as a line
+    break, ``a:fld`` by its rendered text -- so a span the model measured names
+    the same characters here. A span crossing a break or a field is refused:
+    one has no text to replace, and the other's is PowerPoint's to render.
+    Before anything is written the characters are compared with what the
+    check read, and a mismatch is refused: the deck changed since.
+    """
+    start, end = (int(value) for value in payload["span"])
+    children = [
+        child for child in paragraph if etree.QName(child).localname in ("r", "br", "fld")
+    ]
+
+    def text_of(child: etree._Element) -> str:
+        if etree.QName(child).localname == "br":
+            return "\n"
+        return str(child.findtext("a:t", default="", namespaces=_NS))
+
+    joined = "".join(text_of(child) for child in children)
+    expected = str(payload.get("expect", ""))
+    if expected and joined[start:end] != expected:
+        raise MoveFailed(
+            f"that figure no longer reads {expected!r} where the check found it -- "
+            "re-run the check and try again"
+        )
+
+    written = False
+    position = 0
+    for child in children:
+        text = text_of(child)
+        low, high = position, position + len(text)
+        position = high
+        if max(start, low) >= min(end, high):
+            continue
+        if etree.QName(child).localname != "r":
+            raise MoveFailed(
+                "part of that figure is a line break or an auto-updating field, "
+                "not editable text"
+            )
+        cut_from, cut_to = max(start, low) - low, min(end, high) - low
+        text_el = child.find("a:t", _NS)
+        if text_el is None:  # pragma: no cover - a run with text has an a:t
+            text_el = etree.SubElement(child, f"{{{_A}}}t")
+        updated = text[:cut_from] + ("" if written else str(payload["text"])) + text[cut_to:]
+        written = True
+        text_el.text = updated
+        if updated != updated.strip():
+            text_el.set(_XML_SPACE, "preserve")
+    if not written:
+        raise MoveFailed("that figure is no longer where the check found it")
 
 
 _APPLIERS: Final[dict[str, Any]] = {

@@ -782,6 +782,22 @@ def _currency_candidates(text: str) -> Iterator[tuple[str, str]]:
         yield text[index:end], token
 
 
+def _house_currency_phrase(literals: list[str], expression: str) -> str:
+    """The house currency marker(s), for a person to read rather than parse.
+
+    "Write it to match the house pattern ``^(\\$)\\s?[\\d(]``" tells a reader
+    nothing they can act on -- the pattern is what the rule checks with, not
+    what the deck's own author wrote. ``literals`` is the surface form(s) that
+    pattern was built from; falling back to the expression itself only
+    happens for a profile learned before this field existed.
+    """
+    if not literals:
+        return expression
+    if len(literals) == 1:
+        return repr(literals[0])
+    return "one of " + ", ".join(repr(literal) for literal in literals)
+
+
 @register
 class CurrencyNotation(Rule):
     """Currency notation deviating from the learned pattern.
@@ -819,6 +835,11 @@ class CurrencyNotation(Rule):
             return self.skip(
                 f"typography.currency_pattern is not a valid regex: {error}"
             )
+        # The regex is what checks a candidate; it is not what a person should
+        # be handed to fix one. A profile derived before currency_literals
+        # existed carries none, and the pattern itself is the fallback then --
+        # worse to read, never wrong.
+        house = _house_currency_phrase(profile.typography.currency_literals, expression)
 
         findings: list[Finding] = []
         for slide in deck.slides:
@@ -846,8 +867,8 @@ class CurrencyNotation(Rule):
                         profile=profile,
                         provenance_path="typography.currency_pattern",
                         measured=f"{key}: {example.strip()!r}",
-                        expected=f"matching {expression}",
-                        remedy=f"Write it to match the house pattern {expression}",
+                        expected=f"the house currency notation ({house})",
+                        remedy=f"Write it to match the house currency notation: {house}",
                         bbox_pt=shape.bbox_pt,
                     )
                 )

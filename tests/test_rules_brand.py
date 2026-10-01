@@ -16,7 +16,7 @@ import pytest
 from tests.conftest import assert_silent_on_clean, findings_for, slide_indices
 from tieout.fixtures.spec import ReferenceSpec
 from tieout.profile.schema import NotLearned
-from tieout.rules.base import REGISTRY, clear_caches, load_all_rules, run_rules
+from tieout.rules.base import DOCUMENT_LEVEL, REGISTRY, clear_caches, load_all_rules, run_rules
 
 BRAND_RULE_IDS = [f"BR-{n:03d}" for n in range(1, 12)]
 
@@ -313,7 +313,8 @@ def test_br009_catches_wrong_slide_size(variant_decks, reference_profile):
 
     assert len(findings) == 1
     (finding,) = findings
-    assert finding.slide_index == 1
+    # The deck's own canvas size, not a property of any slide.
+    assert finding.slide_index == DOCUMENT_LEVEL
     assert finding.severity == "blocker"
     assert finding.measured == "720x540pt"
     assert finding.expected_provenance
@@ -469,3 +470,30 @@ def test_br011_says_nothing_about_a_series_with_no_fill_of_its_own(
     assert chart is not None
     assert chart.series[0].fill_hex is None
     assert findings_for(check(deck, reference_profile, "BR-011"), "BR-011") == []
+
+
+def test_a_page_number_finding_names_the_page_number_shape(clean_deck, reference_profile):
+    """BR-006 and BR-007 built the finding's shape from the furniture's *uid*
+    passed as the shape *id*. On a slide whose uids and ids differ -- every
+    slide past the first few of the reference deck -- the finding pointed at a
+    different shape, and **Move it** moved the footnote. Found by driving the
+    UI's Move it through a group of twelve page numbers."""
+    from tieout.rules.base import run_rules as run
+
+    profile = reference_profile.model_copy(deep=True)
+    assert profile.brand.footer.page_number is not None
+    box = profile.brand.footer.page_number.box_pt
+    assert box is not None
+    box.left += 30  # every page number is now off its expected position
+    result = run(clean_deck, profile, include=["BR-006"])
+    assert result.findings, "the premise: page numbers are reported"
+    from tieout.model.deck import ShapeRef
+
+    for finding in result.findings:
+        assert isinstance(finding.where, ShapeRef)
+        slide = clean_deck.slide(finding.slide_index)
+        assert slide is not None
+        shape = next(
+            s for s in slide.all_shapes() if s.ref.shape_id == finding.where.shape_id
+        )
+        assert shape.ref.uid == finding.where.uid, (finding.slide_index, shape.ref.name)

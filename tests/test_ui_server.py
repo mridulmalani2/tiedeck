@@ -153,6 +153,41 @@ def test_the_page_carries_the_token_and_no_external_reference(client, store):
         assert forbidden not in response.text, forbidden
 
 
+def test_a_run_colour_is_never_double_hashed(client):
+    """The audit's #1: canvas_view() emits color_hex already carrying its own
+    "#", and the page built ``color:#${f.color_hex}`` -- "color:##fff", which
+    is invalid CSS and is silently dropped, so no run was ever drawn in its
+    real colour. A source-level guard rather than a rendered one: nothing in
+    this suite drives a real browser, so this is what stands between the
+    one-character regression and it coming back unnoticed.
+    """
+    markup = client.get("/").text
+    assert "color:#${f.color_hex}" not in markup
+    assert "color:${f.color_hex}" in markup
+
+
+def test_the_report_and_export_links_never_carry_the_token_in_a_url(client):
+    """The audit's #19: the token was in the query string of a link a normal
+    button press opened in a new tab, so it sat in the address bar and in
+    browser history. Both routes are now fetched with the header and handed
+    to the browser as a local blob -- neither URL, carrying no token, ever
+    reaches a tab's address bar.
+    """
+    markup = client.get("/").text
+    assert "/api/report/${encodeURIComponent(S.deck.deck_id)}?t=" not in markup
+    assert "/api/export/${encodeURIComponent(S.deck.deck_id)}?t=" not in markup
+    assert "createObjectURL" in markup
+
+
+def test_no_native_confirm_dialog_remains(client):
+    """The audit's #24: window.confirm() blocks the whole page, not just the
+    one shape, cannot be styled, and could not be driven through the app's
+    own automation -- the only confirmation in the product that was not
+    inline in the task pane.
+    """
+    assert "window.confirm(" not in client.get("/").text
+
+
 def test_the_page_drops_the_token_from_the_address_bar(client):
     """Or it stays in the browser's history and in anything copied from it."""
     assert "history.replaceState" in client.get("/").text
@@ -430,6 +465,20 @@ def test_the_report_is_self_contained(client, onboarded, uploaded):
 
 def test_the_report_needs_a_check_first(client, uploaded):
     assert client.get(f"/api/report/{uploaded['deck_id']}").status_code == 404
+
+
+def test_the_report_names_the_uploaded_file_not_the_working_copy(
+    client, onboarded, uploaded, clean_path
+):
+    """The audit's #20: the report was titled and headed with TieOut's own
+    internal working copy, ``v1-<name>.pptx``, and printed the absolute temp
+    path -- machine-local and meaningless to whoever the report is sent to.
+    """
+    client.post("/api/check", json={"deck_id": uploaded["deck_id"], "client": "demo"})
+    markup = client.get(f"/api/report/{uploaded['deck_id']}").text
+    assert clean_path.name in markup
+    assert f"v1-{clean_path.name}" not in markup
+    assert "/tieout-ui" not in markup and "/tmp/" not in markup
 
 
 # --------------------------------------------------------------------------- #

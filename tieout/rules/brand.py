@@ -28,7 +28,7 @@ from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel
 from tieout.model.furniture import LogoMark, logo_marks, normalise_text
 from tieout.model.units import approx_equal
 from tieout.profile.schema import Box, LogoProfile, Profile, Severity
-from tieout.rules.base import Finding, Rule, register
+from tieout.rules.base import DOCUMENT_LEVEL, Finding, Rule, register
 
 #: Fill and line kinds that carry no single measurable colour. ``inherit`` means
 #: the resolver found nothing to resolve, which is not the same as a colour.
@@ -658,6 +658,22 @@ class UnapprovedTypeface(Rule):
 # --------------------------------------------------------------------------------------
 
 
+def _page_number_ref(deck: DeckModel, slide_index: int, uid: int) -> ShapeRef:
+    """The page number's own ref, found by the uid furniture detection keys on.
+
+    BR-006 and BR-007 built ``ShapeRef(slide, uid, "Page number")`` -- the uid
+    in the *shape id* position. On any slide whose uids and ids differ the
+    finding named another shape, and **Move it** moved the footnote. Falls back
+    to an id no shape has, which the move path refuses rather than guesses at.
+    """
+    slide = deck.slide(slide_index)
+    if slide is not None:
+        for shape in slide.all_shapes():
+            if shape.ref.uid == uid:
+                return shape.ref
+    return ShapeRef(slide_index, -1, "Page number", uid=uid)
+
+
 @register
 class PageNumber(Rule):
     """Reports a page number that is missing, malformed, or out of position.
@@ -724,7 +740,7 @@ class PageNumber(Rule):
                 continue
             findings.append(
                 self.finding(
-                    where=ShapeRef(slide.index, observation.uid, "Page number"),
+                    where=_page_number_ref(deck, observation.slide_index, observation.uid),
                     message="; ".join(messages),
                     profile=profile,
                     provenance_path="brand.footer.page_number",
@@ -836,7 +852,7 @@ class PageNumberSequence(Rule):
                 continue
             return [
                 self.finding(
-                    where=ShapeRef(current.slide_index, current.uid, "Page number"),
+                    where=_page_number_ref(deck, current.slide_index, current.uid),
                     message=(
                         f"page number {current.value} does not follow {previous.value} on "
                         f"slide {previous.slide_index}: the sequence stops ascending here"
@@ -966,7 +982,7 @@ class SlideDimensions(Rule):
             return []
         return [
             self.finding(
-                where=1,
+                where=DOCUMENT_LEVEL,
                 message=(
                     f"the deck canvas is {deck.width_pt:g}x{deck.height_pt:g}pt against an "
                     f"expected {expected.width_pt:g}x{expected.height_pt:g}pt, so every "

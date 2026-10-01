@@ -1013,6 +1013,16 @@ def _derive_boilerplate(
     learnable_indices = {s.index for s in learnable}
 
     for normalised, slides in sorted(furniture.boilerplate.items()):
+        # A single character repeated on every slide is the logo's own badge
+        # text ("H"), not required boilerplate -- a real deck's furniture
+        # detector picked it up because it is, in fact, verbatim and repeated,
+        # and the false positive read back as "Required boilerplate text
+        # absent -- Add the footer text: 'H'". No genuine footer, confidentiality
+        # marking or page label is one character; the threshold is set below
+        # the shortest real example seen ("H" and single digits) rather than at
+        # a length tuned to any one client's copy.
+        if len(normalised.strip()) < 2:
+            continue
         present = {index for index in slides if index in learnable_indices}
         if len(present) < threshold:
             continue

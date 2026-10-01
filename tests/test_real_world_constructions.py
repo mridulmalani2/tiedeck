@@ -507,6 +507,24 @@ def test_a_divider_marked_section_03_is_not_a_content_slide(tmp_path: Path) -> N
 # --------------------------------------------------------------------------------------
 
 
+def test_the_monogram_is_not_reported_as_missing_boilerplate(vector_logo_reviewed) -> None:
+    """"H" is the mark's own monogram, not a required footer line.
+
+    ``_derive_boilerplate`` excludes a one-character repeated string from
+    ``footer.boilerplate`` -- a real deck's own monogram badge otherwise reads
+    back as "Required boilerplate text absent -- Add the footer text: 'H'",
+    which is nonsense presented as a requirement. It still has to stay
+    excluded from content measurement at check time (the previous test), which
+    is a different mechanism (``profile.brand.logo.lockup_text``) from the one
+    this test is about.
+    """
+    boilerplate_texts = {
+        entry.text.strip().casefold()
+        for entry in vector_logo_reviewed.profile.brand.footer.boilerplate
+    }
+    assert "h" not in boilerplate_texts
+
+
 def test_a_drawn_mark_is_learned_as_the_logo(vector_logo_reviewed) -> None:
     """BR-001, BR-002 and BR-003 all require ``brand.logo``, and the deriver gave
     up with "the reference deck contains no images". On the client deck that left

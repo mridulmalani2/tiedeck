@@ -62,7 +62,13 @@
      [hidden] — so the API key field showed with content review switched off,
      which is exactly the wrong affordance. */
   [hidden] { display: none !important; }
-  html, body { height: 100%; }
+  /* The app is a fixed-height shell -- rail, canvas and pane each scroll
+     their own content (their own overflow:auto rules, below). Without this,
+     scrolling any of them to its own end at an extreme (a fast wheel flick,
+     an overscroll bounce) fell through to the document itself, which had
+     nowhere to go but reveal grey page below the whole app -- carrying the
+     title bar, the ribbon and Undo with it (the audit's #16). */
+  html, body { height: 100%; overflow: hidden; }
   body {
     margin: 0; font: var(--t-md)/1.5 var(--font); color: var(--ink);
     background: var(--chrome); display: flex; flex-direction: column;
@@ -164,6 +170,15 @@
     display: flex; flex-direction: column; gap: var(--s1); font-size: var(--t-micro);
     letter-spacing: .07em; text-transform: uppercase; color: var(--ink-4);
   }
+  /* An unsettled question is a full sentence, not a field label -- ".stack"
+     is otherwise only ever a short caption like "Palette" or "Tolerance",
+     and uppercasing five lines of prose makes the one thing on the House
+     style tab that needs a decision the hardest thing on it to read (the
+     audit's #35). */
+  label.stack .qtext {
+    text-transform: none; letter-spacing: normal; color: var(--ink-2);
+    font-size: var(--t-sm); line-height: 1.4;
+  }
 
   /* ---- body: rail | canvas | pane ---- */
   .body { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -203,9 +218,19 @@
   .b-minor { background: var(--minor); } .b-info { background: var(--info); }
   .b-ok { background: var(--ok); }
 
+  /* Block layout with the slide centred by its own margin, not a flex
+     justify-content:center. A flex (or grid) container that centres an
+     overflowing child clips the overflow rather than making it scrollable --
+     the browser has no reachable scroll position for content that overflows
+     symmetrically around a centred line. LO-001 on a shape whose right edge
+     sits 446pt past the slide's own 960pt-wide edge was exactly that: the
+     "extends outside the slide canvas" finding drew a canvas that made the
+     extending part unreachable, on the one rule it is the entire subject of
+     (the audit's #34). margin:auto centres the same way and keeps the
+     overflow reachable by scrolling either direction. */
   .canvas {
     flex: 1 1 auto; background: var(--canvas); overflow: auto; padding: var(--s6);
-    display: flex; align-items: flex-start; justify-content: center; min-width: 0;
+    min-width: 0;
   }
   /* The slide is the document on the desk: a hairline so a white deck keeps its
      edge, and a soft drop so it sits above the surface rather than in it. */
@@ -214,6 +239,7 @@
     border: 1px solid rgba(20,22,26,.10);
     box-shadow: 0 1px 2px rgba(20,22,26,.06), 0 8px 24px rgba(20,22,26,.10);
     display: flex; align-items: center; justify-content: center; position: relative;
+    margin: 0 auto;
   }
   .slide img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .slide .placeholder { text-align: center; color: var(--ink-3); padding: 34px; max-width: 560px; }
@@ -293,6 +319,14 @@
     font-size: var(--t-xs); color: var(--ink-4);
   }
   .note-head b { color: var(--ink-3); font-weight: 500; }
+  /* PLAN.md §0: what was read as intended, listed rather than hidden. */
+  details.excused {
+    padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line);
+    font-size: var(--t-xs); color: var(--ink-3);
+  }
+  details.excused summary { cursor: pointer; }
+  details.excused .inst { padding: var(--s1) 0; color: var(--ink-4); cursor: pointer; }
+  details.excused .inst .at { color: var(--ink-3); }
 
   .modes {
     display: flex; gap: var(--s4); padding: 0 var(--s5);
@@ -361,6 +395,11 @@
     color: var(--ink); letter-spacing: -.006em;
   }
   .item .say { font-weight: 400; }
+  /* A finding's own cross-reference to another slide -- CO-001's "37.4 in
+     Table 0 on slide 14" -- reads as a link now instead of plain text (the
+     audit's #38: reconciling the two figures means finding the other one,
+     and only the card's own slide, never the one it names, was clickable). */
+  a.xref { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
   .item .scope { font-size: var(--t-sm); color: var(--ink-3); margin-top: var(--s1); }
   .item .scope a { color: var(--ink-2); text-decoration: none; cursor: pointer;
     border-bottom: 1px solid var(--line-2); }
@@ -428,13 +467,35 @@
   /* Where it is. */
   .mark {
     position: absolute; border: 2px solid var(--accent); background: rgba(27,58,95,.12);
-    box-shadow: 0 0 0 9999px rgba(20,22,26,.34); pointer-events: none; z-index: 2;
+    box-shadow: 0 0 0 9999px rgba(20,22,26,.34); pointer-events: none;
+    /* Above any shape's own stacking (shapeHtml sets z-index: z_order + 1,
+       and z_order reaches well past this on a real slide) -- otherwise the
+       outline itself, not only its handles, sits behind the shape it is
+       supposed to be pointing at. */
+    z-index: 900;
   }
+  /* Inset, not hung above the box on a negative top: the audit's #11 --
+     "SUMMARY BALANCE SHEET" and "Recommended positioning range" and the
+     eyebrow above the title, on four different slides, all a different shape
+     from the one flagged, hidden by a badge floating over whatever a house
+     style happens to place directly above it. Inside the box the worst it can
+     cover is a corner of the very shape the finding is about. */
   .mark span {
-    position: absolute; top: -18px; left: -2px; background: var(--accent); color: #fff;
+    position: absolute; top: 2px; left: 2px; background: var(--accent); color: #fff;
     font: 600 var(--t-micro)/1 var(--mono); padding: 3px var(--s1); white-space: nowrap;
     letter-spacing: .04em;
   }
+  /* A box too small to hold its own label beside its content -- a page number
+     -- carries the label underneath instead, where it covers nothing. */
+  .mark.tiny span { top: calc(100% + 3px); }
+  /* LO-004's second shape: an outline with no spotlight of its own -- the
+     primary .mark already dims everything outside it, and a second 9999px
+     shadow here would fight it rather than add to it. */
+  .mark.also {
+    border-color: var(--major); background: rgba(138,90,0,.10);
+    box-shadow: none; border-style: dashed;
+  }
+  .mark.also span { background: var(--major); }
 
   /* ---- the position editor ----
      Geometry is the one thing TieOut will not decide, so this is the one place
@@ -447,7 +508,17 @@
      a judgement about its neighbours, and they have to be legible to be judged
      against. */
   .mark.live {
-    pointer-events: auto; cursor: grab; touch-action: none; z-index: 5;
+    pointer-events: auto; cursor: grab; touch-action: none;
+    /* Above any shape's own stacking, not just above the handful of other
+       overlays on this page. A shape's z-index is z_order + 1 (shapeHtml),
+       and z_order is the shape's own position in a real deck's draw order --
+       which reaches well past 5 on any slide with more than a few shapes. A
+       resize handle sitting under such a shape's own content (its text
+       especially, which keeps pointer-events for editing) took the drag as a
+       text selection instead: the audit's #3, silently dead resize on
+       exactly the shapes -- overflowing text -- most likely to paint over
+       their own corners. */
+    z-index: 1000;
     box-shadow: 0 1px 10px rgba(0,0,0,.30);
     transition: none;
   }
@@ -569,6 +640,18 @@
        paragraph cannot swallow a click meant for whatever it spilled over. */
     pointer-events: none;
   }
+  /* The audit's #36. Text that runs past its box is drawn where PowerPoint
+     draws it -- past the box -- which is right, and it read as part of the
+     canvas, which is not. The box's own edge is drawn, so the reader sees
+     where the shape ends and that the text does not, and a tag says so.
+     Nothing is clipped: clipping would show a deck that does not exist. */
+  .shape.spills { outline: 1px dashed rgba(183,71,42,.75); outline-offset: 0; }
+  .shape.spills::after {
+    content: "text runs past its box"; position: absolute; left: 100%; bottom: 0;
+    margin-left: 4px; white-space: nowrap; pointer-events: none;
+    font: 600 var(--t-micro)/1 var(--mono); color: #fff; background: rgba(183,71,42,.85);
+    padding: 2px 4px; border-radius: 2px;
+  }
   .shape .text.anchor-ctr { justify-content: center; }
   .shape .text.anchor-b { justify-content: flex-end; }
   .shape .text p { margin: 0; white-space: pre-wrap; }
@@ -595,6 +678,17 @@
     font-size: var(--t-xs); color: var(--ink-3); line-height: 1.4;
   }
   .shape .placeholder-box b { display: block; color: var(--ink-2); margin-bottom: 2px; }
+  /* A chart drawn from the slide's own render, cropped to the chart's box
+     (the audit's #33). Marked as a picture so it is never mistaken for
+     something the canvas models and lets you edit. */
+  .shape .placeholder-box.raster {
+    border: 1px dashed rgba(20,22,26,.25); background-repeat: no-repeat;
+    align-items: flex-start; justify-content: flex-end; padding: 2px;
+  }
+  .shape .placeholder-box.raster span {
+    background: rgba(255,255,255,.85); color: var(--ink-3);
+    font-size: var(--t-micro); padding: 1px 4px; border-radius: 2px;
+  }
   .shape img.pic { width: 100%; height: 100%; object-fit: fill; display: block; }
   /* A table is drawn as a real CSS grid rather than <table>: percentage
      column tracks plus row/column spans read exactly as the model measured
@@ -870,7 +964,7 @@
     </div>
     <div class="grp">
       <div class="row">
-        <button class="small" id="copynote">Copy note</button>
+        <button class="small" id="copynote" disabled>Copy note</button>
         <button class="small" id="openreport" disabled>HTML report</button>
       </div>
       <div class="name">Share</div>
@@ -911,11 +1005,11 @@
 // from the URL, so it is never in a link. The launcher opens the page with a
 // ?t= query so the browser can carry it in; drop that immediately, or the token
 // stays in the browser's history and in anything the user copies.
-if (location.search) history.replaceState(null, "", location.pathname);
+if (location.search) history.replaceState(null, "", location.pathname + location.hash);
 
 const TOKEN = "__TIEOUT_TOKEN__";
 const S = {
-  deck: null, client: null, profile: null, audit: null, plan: null,
+  deck: null, client: null, profile: null, audit: null, plan: null, clients: [],
   // What the last preview showed, named by the digest the server issued for it.
   // The check request echoes the digest back, and the server refuses it if the
   // deck or the term list has moved since — so a stale preview cannot approve a
@@ -975,6 +1069,13 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const busy = (t) => { $("busy").textContent = t || ""; $("busy").className = t ? "busy" : ""; };
 
+// LO-004 names a second shape (the one its message also names, and the canvas
+// used to leave un-outlined) alongside the one `where` points at. Carried as
+// one JSON attribute rather than two, since it only ever travels with a bbox
+// and a label together or not at all.
+const alsoAttr = (also) =>
+  also && also.bbox_pt ? ` data-also='${esc(JSON.stringify(also))}'` : "";
+
 async function api(path, { method = "GET", body = null, form = null } = {}) {
   const headers = { "X-TieOut-Token": TOKEN };
   if (body) headers["Content-Type"] = "application/json";
@@ -1019,6 +1120,11 @@ canvasEl.ondrop = (e) => {
 // are replaced.
 $("slide").addEventListener("click", (event) => {
   if (event.target.closest(".shape") || event.target.closest(".mark")) return;
+  // The editor's own toolbar sits inside the slide too, and a click on one of
+  // its buttons is not a click on empty slide. Without this, Reset put the
+  // shape back and then put the editor away, and Next place opened the next
+  // shape and closed it in the same click.
+  if (event.target.closest("#posbar")) return;
   if (S.mark || S.edit) select(S.slide, null, "");
 });
 // One point of slide space is a different number of pixels at every window
@@ -1033,14 +1139,23 @@ async function upload(file) {
   try { S.deck = await api("/api/decks", { method: "POST", form }); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
   busy("");
+  attachDeck();
+}
+
+// Everything that follows S.deck changing to a deck the server holds -- a
+// fresh upload, or the same deck re-attached after a reload (#18).
+function attachDeck() {
   // A new deck invalidates everything measured about the last one. Leaving the
   // tally up made the status bar read "16 blocker" under a deck that had not
-  // been checked.
+  // been checked -- and leaving the chip up (the audit's #42) said "Profile:
+  // falcon" was in force against a deck no house style had been chosen for.
   S.audit = null; S.draft = null; S.slide = 1; S.mode = null; S.edit = null;
-  S.plan = null; S.digest = null; S.approved = false;
+  S.plan = null; S.digest = null; S.approved = false; S.client = null;
   S.lastChange = null; S.canvas = {}; S.canvasVersion++; S.selected = null; S.mark = null;
   $("tally").textContent = "";
+  $("guarantee").textContent = "Offline · nothing leaves this machine";
   $("openreport").disabled = true;
+  $("copynote").disabled = true;
   $("undo").disabled = true;
   $("editstate").textContent = "No corrections made";
   $("tab-style").disabled = !S.client;
@@ -1048,10 +1163,55 @@ async function upload(file) {
   $("doc").textContent = S.deck.filename;
   $("pos").textContent = `Slide 1 of ${S.deck.slide_count}`;
   clearFlash();
+  // Replacing the rail's content does not move its scroll position -- a
+  // second, shorter deck opened after scrolling the first one down otherwise
+  // shows slide 1 selected nowhere on screen, the rail still scrolled to
+  // wherever the previous deck left it (the audit's #43).
+  if ($("rail")) $("rail").scrollTop = 0;
   renderRail(); renderSlide(); renderIntro(); thumbState(); deckPanel();
   loadClients();
   pollThumbs();
   pollDraft();
+  remember();
+}
+
+// The audit's #18: reloading the page stranded the deck and every correction
+// made to it on the server, with "No deck open" and no way back. The server
+// already kept all of it -- the working copy, the log, what was set aside --
+// so what was missing was this tab remembering which deck it had open and
+// against which house style. Kept in the address's fragment, not in browser
+// storage: the page stores nothing in the browser at all (a guarantee
+// test_the_page_never_stores_the_key_in_the_browser holds), a fragment is
+// never sent to any server, and it is per tab by construction. A stale id --
+// the server deletes decks when it stops -- simply starts afresh.
+function remember() {
+  const state = new URLSearchParams();
+  if (S.deck) state.set("deck", S.deck.deck_id);
+  if (S.client) state.set("client", S.client);
+  if (S.audit) state.set("checked", "1");
+  history.replaceState(null, "", location.pathname + (S.deck ? `#${state}` : ""));
+}
+
+async function reattach() {
+  const state = new URLSearchParams(location.hash.slice(1));
+  const saved = {
+    deck_id: state.get("deck"), client: state.get("client"), checked: state.get("checked") === "1",
+  };
+  if (!saved.deck_id) return;
+  try { S.deck = await api(`/api/decks/${encodeURIComponent(saved.deck_id)}`); }
+  catch (_) { history.replaceState(null, "", location.pathname); return; }
+  attachDeck();
+  if (saved.client) {
+    try { S.profile = await api(`/api/profiles/${encodeURIComponent(saved.client)}`); }
+    catch (_) { return paneMessage("warn", `Reopened ${S.deck.filename}, but the ${
+      saved.client} profile could not be loaded. Choose a house style on the Deck tab.`); }
+    S.client = saved.client; onProfile();
+    remember();
+    if (saved.checked) await $("check").onclick();
+  }
+  const kept = (S.audit && S.audit.applied && S.audit.applied.length) || 0;
+  paneMessage("good", `Reopened ${S.deck.filename} as it stood before the reload${
+    kept ? `, with its ${kept} correction${kept === 1 ? "" : "s"}` : ""}.`);
 }
 
 // The house style is derived the moment the deck lands, not when someone asks
@@ -1095,7 +1255,15 @@ async function pollThumbs() {
 async function loadClients() {
   let d;
   try { d = await api("/api/profiles"); } catch (e) { return; }
-  $("client").innerHTML = d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
+  // No option pre-selected: a <select> with none of its own defaults to its
+  // first, and that first one is whichever the server lists first -- a
+  // leftover scratch profile named "Test", ahead of a real client's only
+  // because of case-sensitive ordering. One click on "Use this profile"
+  // audited the deck against the wrong house style, silently (the audit's
+  // #30). The placeholder is disabled so it can never itself be chosen.
+  S.clients = d.clients;
+  $("client").innerHTML = `<option value="" disabled selected>Choose a profile…</option>`
+    + d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
   $("useclient").disabled = !d.clients.length;
 }
 
@@ -1112,7 +1280,12 @@ function setMode(mode) { S.mode = mode; deckPanel(); }
 
 $("pick-existing").onclick = async () => {
   await loadClients();
-  if (!$("client").options.length || !$("client").value)
+  // Counted, not read from the selection: since nothing is pre-selected
+  // (#30), the select's value is always empty here, and testing it refused
+  // every deck the existing-profile path -- the main one -- with "No client
+  // has been onboarded yet" while the list held two. Found by driving the page,
+  // not by reading it.
+  if (!S.clients.length)
     return paneMessage("warn",
       "No client has been onboarded yet. Use Create profile to learn one from an approved deck.");
   clearFlash(); setMode("existing"); $("client").focus();
@@ -1123,7 +1296,7 @@ $("back-new").onclick = () => setMode(null);
 
 $("useclient").onclick = async () => {
   const c = $("client").value;
-  if (!c) return;
+  if (!c) { paneMessage("warn", "Choose a profile from the list first."); return $("client").focus(); }
   busy(`Loading ${c}`);
   try { S.profile = await api(`/api/profiles/${encodeURIComponent(c)}`); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
@@ -1156,6 +1329,7 @@ function onProfile(note) {
   // open since before this point.
   S.canvas = {}; S.canvasVersion++;
   renderSlide();
+  remember();
 }
 
 /* ---------- 2. house style ---------- */
@@ -1193,7 +1367,7 @@ function renderStyle() {
     <div class="block">
       <h3>${outstanding.length} question${outstanding.length === 1 ? "" : "s"} the evidence did not settle</h3>
       ${outstanding.map((q) => `
-        <label class="stack">${esc(q.question)}
+        <label class="stack"><span class="qtext">${esc(q.question)}</span>
           <select data-question="${esc(q.id)}"${draft ? " disabled" : ""}>
             ${(q.options.length ? q.options : [q.default]).map((o) =>
               `<option${o === q.default ? " selected" : ""}>${esc(o)}</option>`).join("")}
@@ -1232,7 +1406,27 @@ function renderStyle() {
          will report that material as wrong.</p>
     </div>`;
 
-  $("pane").innerHTML = preamble + questions + groups + unlearned;
+  const declared = !draft && (p.intended || []).length ? `
+    <div class="slide-head">Declared intentional</div>
+    <div class="block"><p class="hint">Findings someone marked <b>This is intentional</b>.
+      None of them is reported on any deck checked against this profile.</p>
+      ${p.intended.map((d, k) => `<div class="fact"><div class="k mono">${esc(d.rule_id)}</div>
+        <div class="v">${esc(d.example || d.signature)}${d.note ? ` <i>— ${esc(d.note)}</i>` : ""}</div>
+        <button data-withdraw="${k}">Withdraw</button></div>`).join("")}</div>` : "";
+
+  $("pane").innerHTML = preamble + questions + groups + unlearned + declared;
+  $("pane").querySelectorAll("[data-withdraw]").forEach((el) => {
+    el.onclick = async () => {
+      const d = p.intended[Number(el.dataset.withdraw)];
+      try {
+        const res = await api("/api/intended", { method: "POST", body: {
+          client: S.client, withdraw: true, rule_id: d.rule_id, signatures: [d.signature] } });
+        S.profile = res.profile;
+        renderStyle();
+        paneMessage("good", "Withdrawn. It is reported again from the next check.");
+      } catch (e) { paneMessage("bad", e.message); }
+    };
+  });
 
   $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
     b.onchange = () => { b.closest(".fact").classList.toggle("off", !b.checked); setDirty(true); };
@@ -1361,6 +1555,14 @@ $("revert").onclick = async () => {
 $("semantic").onchange = () => {
   $("keygrp").hidden = !$("semantic").checked;
   S.approved = false;
+  // The audit's #31: unticking Content review after "Show what would be
+  // sent" left the redaction preview on screen with no way back to the
+  // review note short of switching tabs and back. Restore it directly,
+  // the same view a plain re-check would show.
+  if (!$("semantic").checked && S.plan) {
+    S.plan = null;
+    if (current() === "review") renderNote();
+  }
 };
 
 // Changing either of these changes the payload, which changes its digest. The
@@ -1423,9 +1625,15 @@ $("check").onclick = async () => {
   if (S.checking) return;
   if (!S.client) return paneMessage("warn",
     "Choose an existing profile or create one on the Deck tab first.");
-  const semantic = $("semantic").checked;
-  if (semantic && !$("apikey").value.trim())
-    return paneMessage("warn", "Content review needs an API key, or turn it off.");
+  // The audit's #50: an optional, off-by-default extra with a missing field
+  // used to take the primary, offline action down with it -- ticking Content
+  // review with no key blocked the mechanical audit too, not only the
+  // review it was actually missing something for. The mechanical check now
+  // always runs; only the semantic pass is skipped, with a warning that says
+  // why the deck still shows no content-review findings.
+  let semantic = $("semantic").checked;
+  const noKey = semantic && !$("apikey").value.trim();
+  if (noKey) semantic = false;
   S.checking = true;
   clearFlash();
   // Drop the previous run before starting this one, so nothing on screen is
@@ -1441,6 +1649,19 @@ $("check").onclick = async () => {
       approved_digest: S.approved ? S.digest : null,
       api_key: semantic ? $("apikey").value.trim() : null,
     }});
+    // The audit's #15: re-running Check deck wiped the note's correction
+    // banner and its fixed/remain block while the ribbon kept reporting the
+    // same correction -- because the ribbon reads deck.log, which a plain
+    // check never touches, and the banner reads S.lastChange, which was
+    // dropped above and nothing repopulated it. The server's own log is
+    // still the record of what happened, so read the last entry back out of
+    // it. Always "fix": undo pops the log rather than appending to it, so a
+    // remaining entry is never one.
+    const corrections = S.audit.corrections || [];
+    if (corrections.length) {
+      const last = corrections[corrections.length - 1];
+      S.lastChange = { what: last.summary, kind: "fix", delta: last.delta };
+    }
   } catch (e) {
     S.checking = false; $("check").disabled = false; busy("");
     renderNote();
@@ -1448,7 +1669,11 @@ $("check").onclick = async () => {
   }
   S.checking = false; $("check").disabled = false; busy("");
   $("openreport").disabled = false;
+  $("copynote").disabled = false;
+  remember();
   tab("review"); renderRail(); renderNote(); editState();
+  if (noKey) paneMessage("warn", "Content review needs an API key, or turn it off. "
+    + "Audited without it.");
 };
 
 /* ---------- the review note ---------- */
@@ -1484,6 +1709,13 @@ function renderNote() {
     : "no findings";
 
   const actions = a.actions || [];
+  // "Things to do" is a work queue, and Set Aside is a decision about the
+  // queue -- so it has to shrink with it, the same way "TieOut can fix"
+  // already does (fixable_count is computed server-side excluding rejected
+  // actions). Before this fix it stayed at the original total regardless of
+  // what had been set aside (the audit's #13): the one count someone reads
+  // as "what's left" never moved as things left it.
+  const toDo = actions.filter((a) => !a.rejected).length;
   const head = `
     <div class="verdict v-${esc(v.state)}">
       <div class="call"><i></i>${esc(v.headline)}</div>
@@ -1491,12 +1723,14 @@ function renderNote() {
       ${s.total ? `<div class="counts">
         ${kinds.map((k) => `<span class="c-${k}"><b>${s[k]}</b><em>${k}</em></span>`).join("")}
       </div>
-      <div class="totals"><b>${actions.length}</b> ${actions.length === 1 ? "thing" : "things"} to do${
+      <div class="totals"><b>${toDo}</b> ${toDo === 1 ? "thing" : "things"} to do${
+        s.total !== actions.length ? `, from <b>${s.total}</b> finding${s.total === 1 ? "" : "s"}` : ""}${
         a.fixable_count ? `<span class="sep">·</span><b>${a.fixable_count}</b> TieOut can fix` : ""}</div>` : ""}
     </div>
     <div class="note-head"><b>${a.slide_count}</b> slides checked against
       <b>${a.rules_run.length}</b> rule${a.rules_run.length === 1 ? "" : "s"}${
       a.suppressed ? `, <b>${a.suppressed}</b> previously accepted` : ""}.</div>
+    ${excusedBlock(a.excused || [])}
     ${deltaBlock()}
     ${reviewBanner(a.review)}`;
 
@@ -1594,11 +1828,12 @@ function byFix(actions) {
     const instances = a.count > 1 || a.instances[0].shape ? `
       <details>
         <summary>${a.count === 1 ? "Where" : `All ${a.count}`}</summary>
-        ${a.instances.map((i, k) => `<div class="inst${i.arrived ? " arrived" : ""}" data-goto="${i.slide}"
+        ${a.instances.map((i, k) => `<div class="inst${
+          i.arrived && S.lastChange?.kind !== "undo" ? " arrived" : ""}" data-goto="${i.slide}"
             data-bbox="${i.bbox_pt ? esc(i.bbox_pt.join(",")) : ""}"
-            data-label="${esc(a.rule_id)}">
+            data-label="${esc(a.rule_id)}"${alsoAttr(i.also)}>
             <span class="at">Slide ${i.slide}${i.shape ? ` · ${esc(i.shape)}` : ""}</span>
-            — ${esc(sentence(i.message))}${
+            — ${linkedSentence(i.message)}${
               a.movable && i.move && !i.move.refused
                 ? ` <button class="mv" data-moveinst="${index}:${k}">Move</button>` : ""}
           </div>`).join("")}
@@ -1606,13 +1841,13 @@ function byFix(actions) {
     const first = a.instances && a.instances[0];
     return `<div class="item${a.rejected ? " turned-down" : ""}"${first
         ? ` data-slide="${first.slide}" data-bbox="${first.bbox_pt
-            ? esc(first.bbox_pt.join(",")) : ""}" data-label="${esc(a.rule_id)}"` : ""}>
+            ? esc(first.bbox_pt.join(",")) : ""}" data-label="${esc(a.rule_id)}"${alsoAttr(first.also)}` : ""}>
       <div class="bar b-${esc(a.severity)}"></div>
       <div class="col">
         <div class="meta">
           <span class="n">${index + 1}. ${esc(a.rule_id)}</span>
           <span class="tag b-${esc(a.severity)}">${esc(a.severity)}</span>
-          ${a.arrived ? `<span class="tag now" title="Not reported before the last correction">${
+          ${a.arrived && S.lastChange?.kind !== "undo" ? `<span class="tag now" title="Not reported before the last correction">${
             a.arrived === a.count ? "new" : `${a.arrived} new`}</span>` : ""}
           ${a.category === "semantic" ? `<span class="tag sem">semantic</span>` : ""}
         </div>
@@ -1641,7 +1876,7 @@ function actionButtons(a, index) {
   // finding someone has looked at and decided about should stop competing for
   // attention with the ones they have not. Session-only, deliberately — see the
   // note on Deck.rejected.
-  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>`;
+  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>${intendButton(a)}`;
   if (a.fixable) {
     return `<div class="acts">
       <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
@@ -1663,19 +1898,43 @@ function actionButtons(a, index) {
     <span class="manual">${esc(whyManual(a))}</span></div>`;
 }
 
-// Named per rule rather than as one sentence, because the reasons are not the
-// same and the difference is the whole basis for the refusal. Where the shape
-// can be picked up, the sentence says what the refusal actually is: TieOut will
-// not choose the position, which is not the same as nothing being possible.
-const GEOMETRY = ["BR-001","BR-002","BR-003","BR-008","LO-001","LO-002","LO-003",
-                  "LO-004","LO-005","LO-006","LO-007","LO-008"];
+// Named per rule rather than as one sentence, because the reasons TieOut will
+// not act are not the same reason, and the difference is the whole basis for
+// the refusal. One sentence covering "an answer nobody can know", "an answer
+// TieOut knows and has no control to write" and "an answer TieOut knows and
+// will not apply" reads as the same excuse for three different situations —
+// LO-007 got "moving shapes satisfies a rule breaks the layout around them"
+// for a *font size*, which is not what a size band is.
+//
+// TieOut resizes nothing: LO-006 (text overflows its box) and LO-007 (a font
+// size out of band) both have a known number and no control to write it.
+// BR-003 is the same for a logo's size, as distinct from BR-002's position,
+// which this editor does move.
+const SIZE_RULES = ["BR-003", "LO-006", "LO-007"];
+// TieOut adds no shape and no text box: BR-001 (logo absent), BR-010 (a
+// required footer line or confidentiality marking absent) and CH-001 (a
+// chart with no title or caption) all have a computed remedy that starts
+// "Add the...", and none of them can be carried out by a control that only
+// moves, resizes or retypes what is already there.
+const CANNOT_ADD = ["BR-001", "BR-010", "CH-001"];
 function whyManual(a) {
   if (a.movable)
     return "Yours to place — TieOut will not choose where it goes.";
   if (a.editable)
     return "Yours to decide — both figures are stated, and only you know which is right.";
-  if (GEOMETRY.includes(a.rule_id))
-    return "Yours to fix: moving shapes to satisfy a rule breaks the layout around them.";
+  if (SIZE_RULES.includes(a.rule_id))
+    return "Yours to fix: TieOut knows the size and does not resize a shape or a font.";
+  // Read from the remedy as well as the rule, because one rule can say both:
+  // BR-006 moves a misplaced page number and *adds* a missing one, and the
+  // second was told "TieOut cannot know what is right" under a remedy naming
+  // the exact position (the audit's #47).
+  const remedy = a.remedy || "";
+  if (CANNOT_ADD.includes(a.rule_id) || /^Add /.test(remedy))
+    return "Yours to fix: TieOut does not add a shape or a text box.";
+  if (/^Recolour /.test(remedy))
+    return "Yours to fix: TieOut knows the colour, and this one sits where it does not write — a chart series, a picture or the theme.";
+  if (/^Set the typeface /.test(remedy))
+    return "Yours to fix: TieOut knows the typeface, and this one sits where it does not write.";
   return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
 }
 
@@ -1773,6 +2032,15 @@ function wireNote() {
         "Correcting the deck");
     };
   });
+  $("pane").querySelectorAll("[data-intend]").forEach((el) => {
+    el.onclick = async (event) => {
+      event.stopPropagation();
+      await correct("/api/intended",
+        { deck_id: S.deck.deck_id, client: S.client, key: el.dataset.intend }, "");
+      const said = S.audit && S.audit.intended;
+      if (said && said.signatures) intendedFlash(said);
+    };
+  });
   $("pane").querySelectorAll("[data-reject],[data-unreject]").forEach((el) => {
     el.onclick = (event) => {
       event.stopPropagation();
@@ -1795,7 +2063,7 @@ function wireNote() {
       event.stopPropagation();
       const action = (S.audit.actions || [])[Number(el.dataset.move)];
       const instance = action && action.instances.find((i) => movableOf(i));
-      if (instance) beginMove(instance.slide, instance);
+      if (instance) beginMove(instance.slide, instance, action.key);
     };
   });
   // Two stated figures disagree: open the run that holds one of them, with the
@@ -1814,8 +2082,9 @@ function wireNote() {
     el.onclick = (event) => {
       event.stopPropagation();
       const [a, k] = el.dataset.moveinst.split(":").map(Number);
-      const instance = ((S.audit.actions || [])[a] || { instances: [] }).instances[k];
-      if (instance) beginMove(instance.slide, instance);
+      const action = (S.audit.actions || [])[a] || { instances: [] };
+      const instance = action.instances[k];
+      if (instance) beginMove(instance.slide, instance, action.key);
     };
   });
   $("pane").querySelectorAll("[data-goto]").forEach((el) => {
@@ -1823,7 +2092,8 @@ function wireNote() {
     el.onclick = (event) => {
       event.stopPropagation();
       const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
-      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "");
+      select(Number(el.dataset.goto), bbox.length === 4 ? bbox : null, el.dataset.label || "",
+        alsoOf(el));
     };
   });
   // Only a card that names a slide navigates. Unifying the two modes onto one
@@ -1835,30 +2105,92 @@ function wireNote() {
       const slide = Number(el.dataset.slide);
       if (!Number.isFinite(slide)) return;
       const bbox = (el.dataset.bbox || "").split(",").filter(Boolean).map(Number);
-      select(slide, bbox.length === 4 ? bbox : null, el.dataset.label || "");
+      select(slide, bbox.length === 4 ? bbox : null, el.dataset.label || "", alsoOf(el));
     };
   });
+}
+
+// The second shape LO-004 names, parsed back off the element `alsoAttr` wrote
+// it onto. A malformed or absent attribute is simply no second outline, never
+// a thrown error over a decoration.
+function alsoOf(el) {
+  if (!el.dataset.also) return null;
+  try {
+    return JSON.parse(el.dataset.also);
+  } catch (_) {
+    return null;
+  }
+}
+
+// The job this finding belongs to, so a by-slide card can offer the same
+// action a by-fix card would -- the audit's #10: "By slide" is the order a
+// deck actually gets corrected in, and used to carry no buttons at all, so
+// acting on anything meant switching views and finding the same finding
+// again. A linear scan over the (at most low hundreds of) actions each time
+// a card renders, rather than a map built once: this pane redraws on every
+// correction anyway, and the action list is exactly what would need
+// rebuilding to keep a map current.
+function actionForFinding(id) {
+  const actions = S.audit?.actions || [];
+  for (let index = 0; index < actions.length; index++) {
+    const k = actions[index].instances.findIndex((i) => i.id === id);
+    if (k >= 0) return { action: actions[index], index, k };
+  }
+  return null;
+}
+
+// actionButtons() addresses "the first instance this action has" (data-move
+// and data-editfig both take only the action's index) -- correct from a
+// by-fix card, which always shows the group. From a by-slide card showing
+// one specific instance, that would silently open a *different* slide's
+// shape when the two disagree about which instance comes first. Fixing and
+// setting aside are unambiguous either way (both act on every instance by
+// design), so those pass straight through the shared behaviour; a move or
+// an edit action shows a button only where this instance is the only one
+// there is, and otherwise falls back to the manual explanation.
+function actionButtonsForInstance(match) {
+  const { action: a, index } = match;
+  if (a.rejected || a.fixable || a.count === 1) return actionButtons(a, index);
+  return `<div class="acts"><button data-reject="${esc(a.key)}">Set aside</button>${
+    intendButton(a)}
+    <span class="manual">${esc(whyManual(a))}</span></div>`;
+}
+
+// "Set aside" is for this deck and this session. "This is intentional" is for
+// the house style: it is written to the client's profile, by what the finding
+// is about rather than which slide it is on, and it is not reported again on
+// any deck checked against that profile. PLAN.md §0 — a false positive that
+// can be dismissed for good in one click is a nuisance; one that comes back
+// every run is why tools get switched off. Semantic findings come from the
+// content review, not from a rule a profile can remember, so they do not get it.
+function intendButton(a) {
+  if (!S.client || a.category === "semantic") return "";
+  return `<button data-intend="${esc(a.key)}" title="Never report this again for ${
+    esc(S.client)}'s house style. Written to the profile; Undo is offered.">This is intentional</button>`;
 }
 
 function item(n, slide, f) {
   const delta = f.measured || f.expected
     ? `<div class="ev">${esc(f.measured || "")}${f.expected
         ? ` <span class="arrow">&rarr;</span> ${esc(f.expected)}` : ""}</div>` : "";
-  return `<div class="item${f.arrived ? " arrived" : ""}" data-slide="${slide.index}"
-    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}">
+  const match = actionForFinding(f.id);
+  return `<div class="item${
+    f.arrived && S.lastChange?.kind !== "undo" ? " arrived" : ""}" data-slide="${slide.index}"
+    data-bbox="${f.bbox_pt ? esc(f.bbox_pt.join(",")) : ""}" data-label="${esc(f.rule_id)}"${alsoAttr(f.also)}>
     <div class="bar b-${f.severity}"></div>
     <div class="col">
       <div class="meta">
         <span class="n">${n}. ${esc(f.rule_id)}</span>
         <span class="tag b-${f.severity}">${esc(f.severity)}</span>
-        ${f.arrived ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
+        ${f.arrived && S.lastChange?.kind !== "undo" ? `<span class="tag now" title="Not reported before the last correction">new</span>` : ""}
         ${f.category === "semantic" ? `<span class="tag sem">semantic</span>` : ""}
         ${f.shape ? `<span class="shape">${esc(f.shape)}</span>` : ""}
       </div>
-      <p class="say">${esc(sentence(f.message))}</p>
+      <p class="say">${linkedSentence(f.message)}</p>
       ${f.remedy ? `<div class="do">${esc(f.remedy)}</div>` : ""}
       ${delta}
       ${f.why ? `<div class="why">${esc(f.why)}</div>` : ""}
+      ${match ? actionButtonsForInstance(match) : ""}
     </div></div>`;
 }
 
@@ -1870,6 +2202,19 @@ function sentence(text) {
   const first = t[0] === t[0].toLowerCase() && /[a-z]/.test(t[0])
     ? t[0].toUpperCase() + t.slice(1) : t;
   return /[.!?]$/.test(first) ? first : first + ".";
+}
+
+// A tie-out finding's own message is where the *other* slide is named --
+// "23.8 here but 37.4 in Table 0 on slide 14" -- and reconciling the two
+// figures means finding that second table by hand (the audit's #38: the
+// card's own slide is a link, the one it disagrees with is not). Escaped
+// first, then linked: "slide" and digits survive escaping untouched, so
+// this never turns escaped markup back into live HTML.
+function linkedSentence(text) {
+  return esc(sentence(text)).replace(
+    /\bslide (\d+)\b/gi,
+    (whole, n) => `<a class="xref" data-goto="${n}">${whole}</a>`
+  );
 }
 
 function fileName(path) { return String(path || "").split("/").pop(); }
@@ -1886,6 +2231,10 @@ function reviewBanner(r) {
 }
 
 $("copynote").onclick = async () => {
+  // The audit's #23: this was clickable before any check had run, and
+  // reported "Note copied" over a pane that still said "Run Check deck" --
+  // there was nothing to copy, and the person believed there was.
+  if (!S.audit) return;
   const text = plainNote();
   try { await navigator.clipboard.writeText(text); busy("Note copied"); setTimeout(() => busy(""), 1600); }
   catch (_) { paneMessage("warn", "The browser refused clipboard access. The HTML report is the other way out."); }
@@ -1968,14 +2317,66 @@ function plainNote() {
 $("undo").onclick = () => correct("/api/undo",
   { deck_id: S.deck.deck_id, client: S.client }, "Undoing");
 
-$("export").onclick = () => {
-  window.open(
-    `/api/export/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`,
-    "_blank", "noopener");
+// Both routes used to be opened by URL, with the session token in the query
+// string -- the audit's #19. The main page substitutes the token into the
+// document and drops it from the address bar on load, exactly to keep it out
+// of history; these two links undid that with a normal button press. Fetched
+// with the header instead and handed to the browser as a local blob, neither
+// route's URL -- carrying no token at all -- ever reaches the address bar or
+// a history entry.
+
+// The filename the server already computed (deck.filename, or "(corrected)"
+// once something has been fixed) -- read back off Content-Disposition rather
+// than reconstructed here, so there is exactly one place that decides it.
+function _filenameFrom(response, fallback) {
+  const header = response.headers.get("content-disposition") || "";
+  const match = header.match(/filename="?([^";]+)"?/);
+  return match ? match[1] : fallback;
+}
+
+async function _downloadBlob(path, fallbackName, openInline) {
+  let response;
+  try {
+    response = await fetch(path, { headers: { "X-TieOut-Token": TOKEN } });
+  } catch (_) {
+    paneMessage("bad", "Could not reach the server.");
+    return false;
+  }
+  if (!response.ok) {
+    paneMessage("bad", `Could not open this: ${response.statusText}`);
+    return false;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  if (openInline) {
+    window.open(url, "_blank", "noopener");
+  } else {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = _filenameFrom(response, fallbackName);
+    a.click();
+  }
+  // Revoked on a delay rather than immediately: a new tab (the report) needs
+  // the URL to still resolve after it opens, and a download needs it to
+  // survive the click that starts the save.
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return true;
+}
+
+$("export").onclick = async () => {
+  // The audit's #22: pressing Export gave no toast, no status line, no change
+  // to the ribbon -- only Chrome's own download bar said anything happened,
+  // and on a machine with that hidden, nothing did.
+  const ok = await _downloadBlob(
+    `/api/export/${encodeURIComponent(S.deck.deck_id)}`,
+    S.deck.filename || "deck.pptx",
+    false
+  );
+  if (ok) paneMessage("good", "Export started — check your downloads.");
 };
 
 $("openreport").onclick = () => {
-  window.open(`/api/report/${encodeURIComponent(S.deck.deck_id)}?t=${encodeURIComponent(TOKEN)}`, "_blank", "noopener");
+  _downloadBlob(`/api/report/${encodeURIComponent(S.deck.deck_id)}`, "report.html", true);
 };
 
 /* ---------- slides ---------- */
@@ -2005,7 +2406,7 @@ function railRowHtml(s, a, thumbs) {
     : `<span class="tally b-ok">&#10003;</span>`;
   const inner = thumbs
     ? `<img loading="lazy" alt="Slide ${s.index}"
-        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}">`
+        src="/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${s.index}?t=${encodeURIComponent(TOKEN)}&v=${S.deck.thumbnails.version || 0}">`
     : `<span class="stub">${esc(a?.title || s.archetype.replace(/_/g, " "))}</span>`;
   return `<span class="n">${s.index}</span><span class="box">${inner}${tally}</span>`;
 }
@@ -2067,7 +2468,19 @@ function paintRail(remeasure) {
     }
     el.style.top = `${i * rowH}px`;
     el.setAttribute("aria-current", String(s.index === S.slide));
-    el.innerHTML = railRowHtml(s, byIndex[s.index], thumbs);
+    // Rewritten only if something about this row actually changed. Every
+    // correction used to rebuild every mounted row unconditionally, which
+    // tore down and recreated every <img> even where nothing about it had --
+    // a brand-new element has no rendered pixels to reuse from the one it
+    // replaced, so the whole rail went blank until each one reloaded (the
+    // audit's #37). The URL itself now carries the render version (paired
+    // with this diff, not on its own: without the diff, a version that
+    // never changes on 19 of 20 rows would still rebuild all 20 for nothing).
+    const html = railRowHtml(s, byIndex[s.index], thumbs);
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
   }
   Object.keys(mounted).forEach((k) => { if (!wanted.has(k)) mounted[k].remove(); });
 }
@@ -2162,6 +2575,28 @@ function renderSlide() {
   }
 }
 
+// Which shapes' text runs past their own box, measured on the page as drawn.
+function markSpills() {
+  document.querySelectorAll("#shapes .shape").forEach((el) => {
+    const text = el.querySelector(":scope > .text");
+    if (!text) return;
+    // At least most of a whole line past the box. A headline set a little
+    // larger than its frame overhangs by a few points on every slide of a
+    // real deck, in PowerPoint too, and a tag on every slide is a tag nobody
+    // reads. And the canvas draws a line taller than PowerPoint does (it does
+    // not have the font's own line metrics), so a measure in pixels would tag
+    // every one-line title; a measure in lines does not, and a paragraph
+    // genuinely written for a bigger box still clears it easily.
+    const p = text.querySelector("p");
+    const style = p ? getComputedStyle(p) : null;
+    const line = style
+      ? (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 || 0) : 0;
+    const spills = line > 0 && text.scrollHeight - text.clientHeight > 0.75 * line;
+    el.classList.toggle("spills", spills);
+    if (spills) el.title = `${el.title.split(" — ")[0]} — its text runs past its box, as drawn here`;
+  });
+}
+
 function renderShapes(view) {
   const bg = view.background;
   const bgCss = bg ? fillCss(bg) : "";
@@ -2189,6 +2624,8 @@ function scaleSlideUnits() {
   if (!slide || !S.deck || !S.deck.width_pt) return;
   const px = slide.clientWidth / S.deck.width_pt;
   if (px > 0) slide.style.setProperty("--pt", `${px}px`);
+  // Measured after the scale lands: whether text spills depends on it.
+  markSpills();
 }
 
 function shapeHtml(shape, slideW, slideH) {
@@ -2249,7 +2686,31 @@ function placeholderHtml(shape) {
     : shape.kind === "smartart" ? "SmartArt" : shape.name || shape.kind;
   const labels = pc.labels && pc.labels.length
     ? `<br>${pc.labels.map(esc).join(" · ")}` : "";
+  const raster = shape.kind === "chart" ? chartRaster(shape) : "";
+  if (raster) {
+    return `<div class="placeholder-box raster" style="${raster}"
+      title="${esc(title)}: a picture of the chart, cut from this slide's render. ${esc(pc.reason)}"><span>picture</span></div>`;
+  }
   return `<div class="placeholder-box"><span><b>${esc(title)}</b>${esc(pc.reason)}${labels}</span></div>`;
+}
+
+// The audit's #33: a chart drew as grey hatching while a rendered picture of
+// the same slide sat in the rail. The render is cut to the chart's own box --
+// scaled so one slide point is one point of the box, and offset so the box
+// shows exactly its own part of the slide -- rather than the canvas inventing
+// a chart it does not model. No render, no picture: the hatching stays.
+function chartRaster(shape) {
+  const th = S.deck && S.deck.thumbnails;
+  const W = S.deck && S.deck.width_pt, H = S.deck && S.deck.height_pt;
+  if (!th || !th.available || !W || !H || !(shape.width_pt > 0) || !(shape.height_pt > 0)) return "";
+  const url = `/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${
+    encodeURIComponent(TOKEN)}&v=${th.version || 0}`;
+  const along = (offset, size, total) =>
+    total === size ? 0 : (offset / (total - size)) * 100;
+  return `background-image:url('${url}');`
+    + `background-size:${(W / shape.width_pt) * 100}% ${(H / shape.height_pt) * 100}%;`
+    + `background-position:${along(shape.left_pt, shape.width_pt, W)}% ${
+      along(shape.top_pt, shape.height_pt, H)}%;`;
 }
 
 //: A rough serif/sans split, since the browser almost never has the exact
@@ -2304,7 +2765,13 @@ function runHtml(r) {
     f.bold ? "font-weight:700" : "",
     f.italic ? "font-style:italic" : "",
     f.underline ? "text-decoration:underline" : "",
-    f.color_hex ? `color:#${f.color_hex}` : "",
+    // color_hex already carries its own "#" -- canvas_view() emits it that
+    // way, same as every other hex field this page reads (fill.hex, line.hex,
+    // both fed straight to hexToRgba below). A second one here built
+    // "color:##fff", which is invalid CSS and is silently dropped, so no run
+    // was ever drawn in its real colour: white-on-navy text rendered as the
+    // fallback dark ink, dark on dark.
+    f.color_hex ? `color:${f.color_hex}` : "",
   ].filter(Boolean).join(";");
   // Runs with no text (an empty run some authoring tool left behind) still
   // need somewhere to click, or an all-empty paragraph could never be
@@ -2386,7 +2853,11 @@ function wireShapes(view) {
     const isDouble = shape.uid === lastClick.uid && now - lastClick.time < DOUBLE_CLICK_MS;
     lastClick = isDouble ? { time: 0, uid: null } : { time: now, uid: shape.uid };
     if (isDouble) {
-      const run = event.target.closest("[data-run]");
+      // The run under the pointer, or failing that the one nearest it. A page
+      // number is a 24pt box with 7pt of inset each side around one digit,
+      // so a double-click on it almost never lands on the digit itself --
+      // and landing beside it did nothing at all (the audit's #26).
+      const run = event.target.closest("[data-run]") || nearestRun(el, event);
       if (!run) return;
       const cell = run.closest("[data-row][data-column]");
       if (cell) {
@@ -2402,6 +2873,21 @@ function wireShapes(view) {
       if (!S.textEdit) openShape(shape);
     }, DOUBLE_CLICK_MS);
   };
+}
+
+// The text run inside ``shapeEl`` closest to the pointer, or null where the
+// shape has none. Measured on the rendered boxes, so it is the run a person
+// would say they were pointing at.
+function nearestRun(shapeEl, event) {
+  let best = null, bestDistance = Infinity;
+  shapeEl.querySelectorAll("[data-run]").forEach((run) => {
+    const r = run.getBoundingClientRect();
+    const dx = Math.max(r.left - event.clientX, 0, event.clientX - r.right);
+    const dy = Math.max(r.top - event.clientY, 0, event.clientY - r.bottom);
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) { best = run; bestDistance = distance; }
+  });
+  return best;
 }
 
 // The one thing a correction changes visually beyond the note and the
@@ -2459,14 +2945,33 @@ function markup() {
   // sit exactly on the tilted box's own corners and edges for free, with no
   // rotation math of this function's own to get wrong.
   const rotate = e && e.rotation ? `transform:rotate(${e.rotation}deg);` : "";
+  // Edge midpoints only where the box is long enough on that side to hold
+  // them clear of the corners: on a page number they sat on the digit itself
+  // (the audit's #26). The corners still resize both ways.
+  const slideRect = $("slide").getBoundingClientRect();
+  const px = slideRect.width / (S.deck.width_pt || 1);
+  const roomy = (pt) => pt * px >= 36;
   const handles = e
-    ? "tl t tr r br b bl l".split(" ").map((h) => `<i class="${h}" data-handle="${h}"></i>`).join("")
+    ? "tl t tr r br b bl l".split(" ")
+        .filter((h) => (h === "t" || h === "b" ? roomy(width) : h === "l" || h === "r" ? roomy(height) : true))
+        .map((h) => `<i class="${h}" data-handle="${h}"></i>`).join("")
     : "";
-  const box = `<div class="mark${e ? " live" : ""}"${e ? ' tabindex="0"' : ""} style="
+  const tiny = width * px < 60 || height * px < 24;
+  const box = `<div class="mark${e ? " live" : ""}${tiny ? " tiny" : ""}"${e ? ' tabindex="0"' : ""} style="
     left:${pc(left, S.deck.width_pt)}; top:${pc(top, S.deck.height_pt)};
     width:${pc(width, S.deck.width_pt)}; height:${pc(height, S.deck.height_pt)}; ${rotate}">
     ${m.label ? `<span>${esc(m.label)}</span>` : ""}${handles}</div>`;
-  return editLayer() + box;
+  // LO-004's second shape -- the one the message names and the canvas used to
+  // leave un-outlined (the audit's #40). Not drawn mid-edit: the editor is
+  // busy with the primary box, and a second outline over it would read as
+  // part of what is being moved.
+  const alsoBox = m.also && m.also.bbox_pt && !e
+    ? (([aleft, atop, awidth, aheight]) => `<div class="mark also" style="
+        left:${pc(aleft, S.deck.width_pt)}; top:${pc(atop, S.deck.height_pt)};
+        width:${pc(awidth, S.deck.width_pt)}; height:${pc(aheight, S.deck.height_pt)};">
+        ${m.also.shape ? `<span>${esc(m.also.shape)}</span>` : ""}</div>`)(m.also.bbox_pt)
+    : "";
+  return editLayer() + box + alsoBox;
 }
 
 /* ---------- the position editor ----------
@@ -2496,12 +3001,22 @@ function movableOf(source) {
   return m && !m.refused && m.x_emu !== undefined ? m : null;
 }
 
-function beginMove(slideIndex, source) {
+// The audit's #45: Move it on a group of eighteen opened the first and left
+// the other seventeen to be found by hand. The editor carries the group it
+// was opened from, says which place of how many this is, offers the next, and
+// opens the next one by itself once a move is applied.
+function groupPlaces(key) {
+  const action = (S.audit && S.audit.actions || []).find((a) => a.key === key);
+  return action ? action.instances.filter((i) => movableOf(i)) : [];
+}
+
+function beginMove(slideIndex, source, groupKey) {
   const m = movableOf(source);
   if (!m) return;
   select(slideIndex, [m.left_pt, m.top_pt, m.width_pt, m.height_pt], m.shape);
   S.edit = {
-    slide: slideIndex, shapeId: m.shape_id, name: m.shape,
+    group: groupKey || null,
+    slide: slideIndex, shapeId: m.shape_id, uid: m.uid, name: m.shape,
     x0: m.x_emu, y0: m.y_emu, x: m.x_emu, y: m.y_emu,
     cx0: m.cx_emu, cy0: m.cy_emu, cx: m.cx_emu, cy: m.cy_emu,
     rotation: m.rotation || 0,
@@ -2581,16 +3096,25 @@ function beginEditFromCanvas(slideIndex, shape) {
   const refused = shape.editable.move_refused || shape.editable.resize_refused;
   if (refused) return paneMessage("warn", refused);
   if (shape.editable.data_mark) {
-    const proceed = window.confirm(
-      `${shape.editable.data_mark_warning}\n\nMove or resize "${shape.name}" anyway?`
+    // Inline, like every other confirmation in the product -- a native
+    // browser dialog here blocked the whole page, not just this shape, until
+    // someone clicked it, and could not be driven through the app's own
+    // automation.
+    paneConfirm(
+      `${shape.editable.data_mark_warning} Move or resize "${shape.name}" anyway?`,
+      () => _placeEditFromCanvas(slideIndex, shape)
     );
-    if (!proceed) return;
+    return;
   }
+  _placeEditFromCanvas(slideIndex, shape);
+}
+
+function _placeEditFromCanvas(slideIndex, shape) {
   select(slideIndex, [shape.left_pt, shape.top_pt, shape.width_pt, shape.height_pt], shape.name);
   const x = Math.round(shape.left_pt * EMU_PT), y = Math.round(shape.top_pt * EMU_PT);
   const cx = Math.round(shape.width_pt * EMU_PT), cy = Math.round(shape.height_pt * EMU_PT);
   S.edit = {
-    slide: slideIndex, shapeId: shape.shape_id, name: shape.name,
+    slide: slideIndex, shapeId: shape.shape_id, uid: shape.uid, name: shape.name,
     x0: x, y0: y, cx0: cx, cy0: cy, x, y, cx, cy,
     rotation: shape.rotation || 0,
     handle: "move",
@@ -2731,8 +3255,14 @@ function posbar() {
   // block re-running -- paintEdit patches both on every pointer event instead
   // of rebuilding this HTML, so the row is always present here and merely
   // hidden when a resize handle is the one currently held.
+  const places = e.group ? groupPlaces(e.group) : [];
+  const at = places.findIndex((i) => i.slide === e.slide && movableOf(i).shape_id === e.shapeId);
+  const progress = places.length > 1 && at >= 0
+    ? `<div><span class="read">Place ${at + 1} of ${places.length} in this job</span>
+        <button id="nextplace">Next place ›</button></div>` : "";
   return `<div class="posbar" id="posbar">
     <div><span class="who">${esc(e.name)}<em> · slide ${e.slide}</em></span></div>
+    ${progress}
     <div><span class="read" id="posread"></span></div>
     ${g ? `<div id="snaprow" style="${e.handle === "move" ? "" : "display:none"}"><label title="Within ${g.snap_pt}pt of a learned grid line, dragging pulls onto it — the same distance LO-003 calls a near miss. Arrow keys always move by exactly the amount shown.">
       <input type="checkbox" id="snaptoggle" ${S.snap ? "checked" : ""}> Snap to grid</label></div>` : ""}
@@ -2757,6 +3287,23 @@ function paintEdit() {
     box.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
     box.style.width = `${(e.cx / (S.deck.width_pt * EMU_PT)) * 100}%`;
     box.style.height = `${(e.cy / (S.deck.height_pt * EMU_PT)) * 100}%`;
+  }
+  // The shape itself, not only the outline over it -- the audit's #2. The
+  // live surface draws every shape from the static tree it fetched, and
+  // nothing before this repainted that element during a drag: the outline
+  // and the readout moved, and "SECTION 03" stayed exactly where it started
+  // until Apply revealed the result. Keyed on uid because that is how the
+  // surface addresses its own shapes; a shape this editor cannot name one
+  // for (should not happen -- every path into S.edit sets it) simply keeps
+  // showing the outline moving alone, which is the previous behaviour.
+  if (e.uid !== undefined) {
+    const live = $("shapes")?.querySelector(`[data-uid="${e.uid}"]`);
+    if (live) {
+      live.style.left = `${(e.x / (S.deck.width_pt * EMU_PT)) * 100}%`;
+      live.style.top = `${(e.y / (S.deck.height_pt * EMU_PT)) * 100}%`;
+      live.style.width = `${(e.cx / (S.deck.width_pt * EMU_PT)) * 100}%`;
+      live.style.height = `${(e.cy / (S.deck.height_pt * EMU_PT)) * 100}%`;
+    }
   }
   $("slide").querySelectorAll(".guide").forEach((el) => {
     const mine = el.dataset.col !== undefined
@@ -2837,6 +3384,24 @@ function wireEdit() {
   };
   box.onpointerup = release;
   box.onpointercancel = release;
+  // The editor's box sits above the shape it holds, so a double-click meant
+  // for the shape's text landed on the box and did nothing (the audit's #26:
+  // a page number held in the editor could not be edited at all). A
+  // double-click on the box hands over to the text editor -- unless the shape
+  // has already been moved or resized, which is a change that must not be
+  // thrown away by a click.
+  box.ondblclick = (event) => {
+    event.stopPropagation();
+    if (e.x !== e.x0 || e.y !== e.y0 || e.cx !== e.cx0 || e.cy !== e.cy0) return;
+    const view = S.canvas[S.slide];
+    const shape = view && view.shapes.find((s) => s.uid === e.uid);
+    const el = $("shapes") && $("shapes").querySelector(`.shape[data-uid="${e.uid}"]`);
+    if (!shape || !el || !shape.editable.text_editable) return;
+    endMove();
+    const shapeEl = $("shapes").querySelector(`.shape[data-uid="${e.uid}"]`) || el;
+    const run = nearestRun(shapeEl, event);
+    if (run) beginTextEdit(shape, run);
+  };
 
   const toggle = $("snaptoggle");
   if (toggle) toggle.onchange = () => {
@@ -2852,6 +3417,16 @@ function wireEdit() {
     paintEdit();
   };
   $("cancelmove").onclick = endMove;
+  const next = $("nextplace");
+  if (next) next.onclick = () => {
+    const places = groupPlaces(e.group);
+    const at = places.findIndex((i) => i.slide === e.slide && movableOf(i).shape_id === e.shapeId);
+    const following = places[(at + 1) % places.length];
+    if (!following) return;
+    const group = e.group;
+    S.edit = null;
+    beginMove(following.slide, following, group);
+  };
   paintEdit();
 }
 
@@ -2948,6 +3523,7 @@ async function applyEdit() {
   S.lastChange = { what: summary, kind: "fix", delta: next.delta };
   S.digest = null; S.approved = false;
   const shapeId = e.shapeId;
+  const group = e.group;
   S.edit = null;
   // The live surface redraws straight from the model -- no LibreOffice
   // conversion between a click and its result, which is the whole reason
@@ -2959,6 +3535,13 @@ async function applyEdit() {
   renderRail(); renderNote(); editState(); renderSlide();
   flashChange(summary, next.delta);
   flashShape(shapeId);
+  // Onwards through the job, if it has more places to move. The re-audit has
+  // already dropped the one just fixed; whatever is left is still to do.
+  const left = group ? groupPlaces(group) : [];
+  if (left.length) {
+    beginMove(left[0].slide, left[0], group);
+    paneMessage("good", `${summary}. ${left.length} still to do in this job — the next is open.`);
+  }
 }
 
 /* ---------- editing text in place ----------
@@ -3113,7 +3696,7 @@ function slideTitle(index) {
   return s ? s.archetype.replace(/_/g, " ") : "";
 }
 
-function select(index, bbox, label) {
+function select(index, bbox, label, also) {
   // Selecting anything else puts the shape down. Nothing has been written, so
   // there is nothing to undo — but an edit abandoned in silence reads as one
   // that was applied and did nothing, so it says so.
@@ -3126,7 +3709,11 @@ function select(index, bbox, label) {
   }
   if (S.textEdit) cancelTextEdit();
   S.slide = index;
-  S.mark = bbox ? { bbox, label: label || "" } : null;
+  // `also` is LO-004's second shape -- present only when the caller has one
+  // and the finding is still on the same slide as `bbox` (an overlap is
+  // always one slide, but nothing enforces that here, so this stays honest
+  // if a future rule reuses the field across two).
+  S.mark = bbox ? { bbox, label: label || "", also: also || null } : null;
   $("pos").textContent = `Slide ${index} of ${S.deck.slide_count}`;
   scrollRailTo(index);
   renderSlide();
@@ -3167,10 +3754,53 @@ function renderIntro() {
 // left two copies of the same error stacked above the content -- the "it
 // repeats itself if you press it twice" defect. Writing to a dedicated node
 // makes that impossible rather than merely unlikely.
+// PLAN.md §0: what was not reported because the deck — or a person — says it
+// was meant. Listed, with the evidence, because a silence on the strength of
+// evidence is only as good as the evidence, and a reader who cannot see it
+// cannot check it.
+function excusedBlock(excused) {
+  if (!excused.length) return "";
+  return `<details class="excused"><summary>${excused.length} not reported because the deck says ${
+    excused.length === 1 ? "it was" : "they were"} meant</summary>${excused.map((e) =>
+    `<div class="inst" data-goto="${e.slide}"><span class="at">Slide ${e.slide} · ${
+      esc(e.rule_id)}</span> — ${esc(e.reason)}</div>`).join("")}</details>`;
+}
+
+// Said once, with the undo beside it, because this one outlives the session:
+// a click here changes what every later check against this profile reports.
+function intendedFlash(said) {
+  const n = said.count;
+  $("flash").innerHTML = `<div class="msg good">${esc(
+    `Marked intentional for ${said.client}'s house style: ${n} finding${n === 1 ? "" : "s"} `
+    + `will not be reported again on any deck checked against it. It is listed under `
+    + `House style, where it can be withdrawn.`)}
+    <div class="acts" style="margin-top:8px"><button id="unintend">Undo</button></div></div>`;
+  $("unintend").onclick = () => correct("/api/intended", {
+    deck_id: S.deck.deck_id, client: S.client, withdraw: true,
+    rule_id: said.rule_id, signatures: said.signatures }, "");
+}
+
 function paneMessage(kind, text) {
   $("flash").innerHTML = `<div class="msg ${kind}">${esc(text)}</div>`;
 }
 function clearFlash() { $("flash").innerHTML = ""; }
+
+// Every confirmation, warning and refusal in the product is inline in the
+// task pane -- except one, until this: the data-mark guardrail raised a
+// native browser dialog, which blocks the whole page (not just the one
+// shape) until it is dismissed, cannot be styled, and could not even be
+// driven through the audit's own automation. `onProceed` runs if the person
+// clicks through; declining just clears the message, same as dismissing any
+// other warning here.
+function paneConfirm(text, onProceed) {
+  $("flash").innerHTML = `<div class="msg warn">${esc(text)}
+    <div class="acts" style="margin-top:8px">
+      <button class="go" id="confirm-proceed">Move or resize anyway</button>
+      <button id="confirm-cancel">Cancel</button>
+    </div></div>`;
+  $("confirm-proceed").onclick = () => { clearFlash(); onProceed(); };
+  $("confirm-cancel").onclick = clearFlash;
+}
 
 renderIntro();
 deckPanel();
@@ -3178,4 +3808,5 @@ setDirty(false);
 // The client list does not depend on a deck being open, and someone arriving at
 // this page usually wants to know which clients are already onboarded.
 loadClients();
+reattach();
 </script>

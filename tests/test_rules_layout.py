@@ -112,7 +112,13 @@ def test_lo001_accounts_for_rotation(clean_deck, reference_profile):
 
 
 def _deck_with_a_bled_graphic(path):
-    """One slide: a decorative graphic off the corner, content in front of it."""
+    """A cover, then a content slide: a decorative graphic off the corner of the
+    content slide, content in front of it.
+
+    The cover comes first so the bleed is on a *content* slide. On a deck of one
+    slide, that slide is the title slide, and a bleed on a title slide is
+    corroborated by where it is (PLAN.md §0.3) -- which is evidence, and these
+    tests need a bleed with none but its own structure."""
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Emu, Pt
@@ -122,6 +128,8 @@ def _deck_with_a_bled_graphic(path):
     presentation = Presentation()
     presentation.slide_width = Emu(960 * 12700)
     presentation.slide_height = Emu(540 * 12700)
+    cover = presentation.slides.add_slide(presentation.slide_layouts[6])
+    cover.shapes.add_textbox(Pt(36), Pt(200), Pt(600), Pt(48)).text_frame.text = "Project"
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     oval = slide.shapes.add_shape(MSO_SHAPE.OVAL, Pt(760), Pt(-100), Pt(374), Pt(374))
     oval.fill.solid()
@@ -129,7 +137,10 @@ def _deck_with_a_bled_graphic(path):
     for index in range(3):
         box = slide.shapes.add_textbox(Pt(36), Pt(100 + index * 40), Pt(400), Pt(30))
         box.name = f"Body {index + 1}"
-        box.text_frame.text = f"Line {index + 1} of the slide's own content"
+        box.text_frame.text = (
+            f"Line {index + 1} of the slide's own content, which runs long enough "
+            "that the slide reads as content rather than as a divider"
+        )
     presentation.save(str(path))
     return load_deck(path)
 
@@ -256,6 +267,18 @@ def test_lo003_clusters_rather_than_reporting_every_pair(dirty_deck, reference_p
 
 def test_lo004_catches_overlapping_text_shapes(dirty_deck, reference_profile):
     _assert_catches(dirty_deck, reference_profile, "LO-004")
+
+
+def test_lo004_names_both_overlapping_shapes(dirty_deck, reference_profile):
+    """``where`` can only ever be one of the two; ``also`` is the other one.
+
+    The audit's #40: the canvas outlined the upper shape and left the lower
+    one -- the one the message also names -- with nothing to point at it.
+    """
+    finding = findings_for(_run(dirty_deck, reference_profile, "LO-004"), "LO-004")[0]
+    assert finding.also is not None
+    assert finding.also.slide_index == finding.where.slide_index
+    assert finding.also.shape_id != finding.where.shape_id
 
 
 def test_lo004_is_silent_on_the_clean_deck(clean_deck, reference_profile):

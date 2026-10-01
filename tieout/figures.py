@@ -107,10 +107,13 @@ from tieout.text import NumberReading, is_numeric_placeholder, parse_number
 __all__ = [
     "Figure",
     "FigureIndex",
+    "Kind",
     "Unit",
     "build_index",
+    "cell_span",
     "comparable",
     "is_specific",
+    "label_kind",
     "normalise_label",
     "parse_period",
     "read_cell_value",
@@ -273,6 +276,41 @@ _PERIOD_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(rf"\bh([12])\s?({_YEAR}|\d{{2}})\b", re.IGNORECASE),
 )
 
+#: A relative window anchored to a month: "LTM Sep-25", "YTD to September 2025".
+#: Kept whole, so two different anchors are two different periods.
+_ANCHORED_WINDOW: Final[re.Pattern[str]] = re.compile(
+    r"\b(ltm|ntm|ttm|ytd|mtd|qtd)\s*(?:to\s+)?"
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s\-'/]*"
+    rf"({_YEAR}|\d{{2}})\b",
+    re.IGNORECASE,
+)
+
+#: A stub period: "9M 2025", "6M FY25", "9M25". Not preceded by a currency or a
+#: digit, so "$9m 2025" -- nine million, in 2025 -- is not read as a stub.
+_STUB: Final[re.Pattern[str]] = re.compile(
+    rf"(?<![\w$£€.,])(1[01]|[1-9])m\s?(?:fy\s?)?({_YEAR}|\d{{2}})\b", re.IGNORECASE
+)
+
+#: A calendar year, kept apart from the fiscal year a bare "2024" reads as.
+_CALENDAR: Final[re.Pattern[str]] = re.compile(
+    rf"\bcy\s?({_YEAR}|\d{{2}})\s?([aefbp]|pf)?\b", re.IGNORECASE
+)
+
+#: A basis written as a word rather than a suffix letter.
+_BASIS_WORDS: Final[dict[str, str]] = {
+    "budget": "B", "bud": "B", "plan": "B",
+    "forecast": "E", "fcst": "E", "estimate": "E", "estimated": "E",
+    "actual": "A", "actuals": "A",
+}
+_BASIS_WORD: Final[str] = "|".join(sorted(_BASIS_WORDS, key=len, reverse=True))
+_YEAR_THEN_BASIS_WORD: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:fy\s?)?({_YEAR}|(?<=fy)\d{{2}}|(?<=fy )\d{{2}})\s+({_BASIS_WORD})\b",
+    re.IGNORECASE,
+)
+_BASIS_WORD_THEN_YEAR: Final[re.Pattern[str]] = re.compile(
+    rf"\b({_BASIS_WORD})\s+(?:fy\s?)?({_YEAR})\b", re.IGNORECASE
+)
+
 #: Periods that name a window rather than a date. They carry no year, so two of
 #: them are the same period only by name -- which is the deck's own convention
 #: and is how a banker reads them.
@@ -361,9 +399,30 @@ def _scan_periods(text: str) -> tuple[list[str], str, list[tuple[int, int, str]]
                 + working[match.end() :]
             )
 
+    # PLAN.md §5.5. Each of these used to read as a *different* period, not as
+    # none: "LTM Sep-25" as bare LTM (so LTM Sep-24 and LTM Sep-25 were one
+    # period), "9M 2025" as the full year FY2025, "2025 Budget" as plain
+    # FY2025. All three compared figures that were never the same fact.
+    take(
+        _ANCHORED_WINDOW,
+        lambda m: f"{m.group(1).upper()}-{m.group(2)[:3].upper()}-{_four_digit(m.group(3))}",
+    )
     for window in sorted(_RELATIVE):
         canonical = window.replace(" ", "-").upper()
         take(re.compile(rf"\b{re.escape(window)}\b"), lambda _m, w=canonical: w)
+    take(_STUB, lambda m: f"{int(m.group(1))}M-{_four_digit(m.group(2))}")
+    take(
+        _CALENDAR,
+        lambda m: f"CY{_four_digit(m.group(1))}{_BASIS.get(m.group(2) or '', '')}",
+    )
+    take(
+        _YEAR_THEN_BASIS_WORD,
+        lambda m: f"FY{_four_digit(m.group(1))}{_BASIS_WORDS[m.group(2)]}",
+    )
+    take(
+        _BASIS_WORD_THEN_YEAR,
+        lambda m: f"FY{_four_digit(m.group(2))}{_BASIS_WORDS[m.group(1)]}",
+    )
 
     def _quarter(match: re.Match[str]) -> str:
         first, second = match.groups()
@@ -583,6 +642,235 @@ def stated_unit(text: str) -> Unit:
 
 
 # --------------------------------------------------------------------------------------
+# Kinds
+# --------------------------------------------------------------------------------------
+#
+# PLAN.md §0. Metric, scope, period and unit say *what* a figure measures and
+# *when*. None of them says what kind of claim it makes about it, and without
+# that "64% of revenue is recurring" and "9% revenue growth" are one fact stated
+# two ways: both fold to revenue, FY2025A, %. They are a share of revenue and a
+# change in it, and neither restates the other.
+#
+# A kind is read, never defaulted where the evidence is missing. An amount says
+# what kind it is by being one -- a plain "1,935" under "Revenue" is revenue --
+# and a multiple is a ratio by its unit. A percentage or a basis point says
+# nothing on its own: it can be a share, a change, a rate or a ratio, and only
+# the words around it or the label above it can tell which. Where they do not,
+# the figure has no kind, is not compared, and the rule that would have compared
+# it says so.
+
+#: What kind of claim a figure makes about its metric.
+#:
+#: * ``level`` -- an amount of it: revenue of $1,935m.
+#: * ``share`` -- a part of it, or of something, as a proportion: 64% of revenue.
+#: * ``change`` -- a movement in it: 9% growth, up $146m, +80bps.
+#: * ``rate`` -- a change per period, or an amount per unit: a CAGR, $2.1m per site.
+#: * ``ratio`` -- it over something else: a margin, a multiple, a conversion.
+#: * ``count`` -- a number of things: headcount, number of sites.
+Kind = Literal["level", "share", "change", "rate", "ratio", "count"]
+
+#: The words in a *label* that say what kind of figure sits under it, in the
+#: order they are tried. Order matters: "EBITDA margin change" is a change in a
+#: margin, and "Revenue CAGR" is a rate even though it is also a growth figure.
+_LABEL_KINDS: Final[tuple[tuple[Kind, re.Pattern[str]], ...]] = (
+    ("rate", re.compile(r"\b(?:cagr|p\.a\.|per annum|annuali[sz]ed)(?!\w)")),
+    (
+        "change",
+        re.compile(
+            r"\b(?:growth|change|chg|increase|decrease|decline|movement|variance|"
+            r"yoy|y/y|y-o-y|year[- ]on[- ]year|uplift|delta|expansion|"
+            r"improvement|contraction)\b|[δΔ]"
+        ),
+    ),
+    (
+        "share",
+        re.compile(
+            r"%\s*of\b|\bper ?cent of\b|\bshare\b|\bmix\b|\bproportion\b|"
+            r"\bcontribution\b|\bweighting\b"
+        ),
+    ),
+    (
+        "ratio",
+        re.compile(
+            r"\b(?:margin|multiple|ratio|yield|conversion|leverage|coverage|payout|"
+            r"return on)\b|[a-z]\s*/\s*[a-z]"
+        ),
+    ),
+    ("count", re.compile(r"\b(?:number of|no\. of|headcount|ftes?)\b|#")),
+    ("rate", re.compile(r"\bper\b")),
+)
+
+
+def label_kind(text: str) -> Kind | None:
+    """The kind a label names, or None where it names none.
+
+    "EBITDA margin" names a ratio and "Revenue CAGR" a rate; "Revenue" names no
+    kind, and an amount under it is a level because it is an amount, not
+    because the label said so.
+    """
+    folded = " ".join(text.split()).casefold()
+    for kind, pattern in _LABEL_KINDS:
+        if pattern.search(folded):
+            return kind
+    return None
+
+
+def unit_kind(unit: Unit) -> Kind | None:
+    """The kind a figure's own unit establishes, or None where it does not.
+
+    An amount is a level and a multiple is a ratio, whatever surrounds them. A
+    percentage and a basis point are dimensionless and could be four kinds, so
+    the unit says nothing about which.
+    """
+    if unit.quantity is None:
+        return "level"
+    if unit.quantity == "x":
+        return "ratio"
+    return None
+
+
+def _cell_kind(row_text: str, column_text: str, unit: Unit) -> tuple[Kind | None, str]:
+    """A table cell's kind, from its two labels and its unit, and where from.
+
+    Either label may name the kind -- "Revenue growth" down the side, or "YoY
+    change" across the top. Where both name one and they differ, the cell is
+    refused rather than either being preferred: "Margin" against "Growth" is a
+    change in a margin or a margin of growth, and the table does not say which.
+    """
+    named = {
+        kind
+        for kind in (label_kind(row_text), label_kind(column_text))
+        if kind is not None
+    }
+    if len(named) > 1:
+        return None, "its row and column name different kinds of figure"
+    if named:
+        (only,) = named
+        return only, "its label"
+    from_unit = unit_kind(unit)
+    if from_unit is not None:
+        return from_unit, "its unit"
+    return None, _UNREAD
+
+
+#: Why a figure has no kind, for the record a refusing rule writes.
+_UNREAD: Final[str] = (
+    "nothing around it says whether it is a share, a change, a rate or a ratio"
+)
+
+#: Words beside a figure in a sentence that make it a change.
+_CHANGE_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "up", "down", "grew", "grow", "grows", "growing", "growth", "rose", "rise",
+        "rises", "rising", "fell", "fall", "falls", "falling", "increase",
+        "increased", "increases", "increasing", "decrease", "decreased",
+        "decreases", "decline", "declined", "declines", "declining",
+        "improvement", "improved", "improving", "expansion", "expanded",
+        "contraction", "contracted", "uplift", "higher", "lower", "by", "yoy",
+        "y/y", "year-on-year", "change", "changed",
+    }
+)
+
+#: Words that make a figure a rate wherever they sit in its clause: a CAGR
+#: stated with "grew" is still a CAGR.
+_RATE_WORDS: Final[frozenset[str]] = frozenset(
+    {"cagr", "p.a.", "pa", "annually", "annualised", "annualized", "per"}
+)
+
+#: Words that end the search backwards from a figure because they say the
+#: figure is a *state*: "grew to $412m" and "up from $1,352m" state a level,
+#: and the "grew" and "up" before them describe the movement, not this figure.
+_STATE_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "to", "from", "reached", "reaching", "totalled", "totaled", "totalling",
+        "totaling", "amounted",
+    }
+)
+
+#: Words that end the search forwards from a figure: what follows them belongs
+#: to the period or the comparison, not to the figure. "Revenue of $1,935m in
+#: FY25A, up from..." -- the "up" is the next clause's.
+_CLAUSE_ENDS: Final[frozenset[str]] = frozenset(
+    {
+        "in", "for", "during", "between", "on", "at", "over", "versus", "vs",
+        "vs.", "against", "than", "compared", "and", "while", "whereas", "but",
+        "which", "with",
+    }
+)
+
+_WORD: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z./-]*[a-z.]|[a-z]|[,;:()]|\d")
+
+#: How far a cue may sit from its figure, in words.
+_CUE_REACH: Final[int] = 4
+
+
+def prose_kind(
+    folded: str, start: int, end: int, unit: Unit, label: str
+) -> tuple[Kind | None, str]:
+    """A figure's kind from the words beside it in a sentence, and where from.
+
+    ``folded`` is the sentence as :func:`_fold_sentence` folds it and
+    ``start``/``end`` are the figure's span in it; ``label`` is the metric the
+    figure was bound to.
+
+    Evidence is taken nearest first:
+
+    1. a rate word anywhere in reach -- "grew at a 19.6% CAGR";
+    2. "of" straight after a percentage -- a share. Where the metric it was
+       bound to is the one after the "of", that metric is the base and the
+       part is unread, so it is refused: "64% of revenue is recurring";
+    3. a change word in reach, backwards until a word saying the figure is a
+       state ("grew *to* $412m") and forwards until the clause turns to a
+       period or a comparison;
+    4. the kind the bound label names -- "EBITDA margin of 24.8%";
+    5. the figure's own unit -- an amount is a level, a multiple a ratio.
+
+    Nothing past that. A percentage none of the five settles is not given a
+    kind, which is the whole of PLAN.md §0's trade.
+    """
+    before = _WORD.findall(folded[:start])[::-1][:_CUE_REACH]
+    after = _WORD.findall(folded[end:])[:_CUE_REACH]
+
+    backward: list[str] = []
+    for word in before:
+        if word in _STATE_WORDS or word in ",;:()" or word.isdigit():
+            break
+        backward.append(word)
+    forward: list[str] = []
+    for word in after:
+        if word in _CLAUSE_ENDS or word in ",;:()" or word.isdigit():
+            break
+        forward.append(word)
+
+    if any(word in _RATE_WORDS for word in (*backward, *forward)):
+        return "rate", "a rate word beside it"
+    if unit.quantity == "%" and after[:1] == ["of"]:
+        if folded[end:].lstrip().removeprefix("of").lstrip().startswith(label):
+            # "64% of revenue is recurring": the metric this figure was bound
+            # to is the *base*, and the part -- recurring -- is not read. Two
+            # such shares of one base are two different facts ("30% of revenue
+            # is European"), and comparing them is the demo's defect again one
+            # level down. "EBITDA at 24.8% of revenue" names its part first and
+            # is not refused.
+            return None, f"it is a share of {label!r} that does not say which part"
+        return "share", "'of' straight after it"
+    for words in zip(backward, forward, strict=False):
+        for word in words:
+            if word in _CHANGE_WORDS:
+                return "change", f"the word {word!r} beside it"
+    for word in backward[len(forward):] + forward[len(backward):]:
+        if word in _CHANGE_WORDS:
+            return "change", f"the word {word!r} beside it"
+    named = label_kind(label)
+    if named is not None:
+        return named, f"the label {label!r}"
+    kind = unit_kind(unit)
+    if kind is not None:
+        return kind, "its unit"
+    return None, _UNREAD
+
+
+# --------------------------------------------------------------------------------------
 # The figure
 # --------------------------------------------------------------------------------------
 
@@ -634,6 +922,20 @@ class Figure:
     #: digits in one run and its marker in the next; rewriting the whole cell
     #: would take the marker with it.
     cell_run: tuple[int, int] = (0, 0)
+    #: Where the figure's characters sit in its paragraph -- the text frame's
+    #: paragraph for prose, the cell's paragraph (``cell_run[0]``) for a table
+    #: -- as ``(start, end)``. What a write needs, because a run is not a
+    #: figure: a sentence is usually one run, so replacing "the run holding the
+    #: figure" replaced the sentence, and a figure split across two runs had no
+    #: single run to replace at all (PLAN.md §5.3). ``None`` where it could not
+    #: be placed, and then the figure is not written.
+    span: tuple[int, int] | None = None
+    #: What kind of claim this figure makes about its metric, or None where
+    #: nothing in the deck says. PLAN.md §0, and :data:`Kind`.
+    kind: Kind | None = None
+    #: Where the kind was read from, or why it could not be, for the record a
+    #: rule writes when it declines to compare a figure with no kind.
+    kind_from: str = ""
 
     @property
     def place(self) -> tuple[int, int]:
@@ -685,9 +987,14 @@ class Figure:
         return self.address[1] if self.source == "chart" else None
 
     @property
-    def key(self) -> tuple[str, str, str | None]:
-        """What makes two figures candidates for comparison at all."""
-        return (self.metric, self.scope, self.unit.quantity)
+    def key(self) -> tuple[str, str, str | None, str]:
+        """What makes two figures candidates for comparison at all.
+
+        The kind is part of it. "64% of revenue" and "9% revenue growth" share
+        metric, scope and quantity and are different facts; without the kind in
+        the key they were gathered as one and reported as a contradiction.
+        """
+        return (self.metric, self.scope, self.unit.quantity, self.kind or "")
 
     @property
     def canonical(self) -> float | None:
@@ -720,6 +1027,13 @@ def comparable(one: Figure, other: Figure) -> str | None:
     rule inherits it rather than re-deriving it and getting it slightly wrong.
     """
     if not (one.comparable and other.comparable):
+        return None
+    if one.kind is None or other.kind is None or one.kind != other.kind:
+        # Before any value is looked at. Two figures of different kinds are
+        # never one fact, and a figure whose kind nothing in the deck states is
+        # not compared at all: comparing it is how a share of revenue came to
+        # contradict a growth in it. :meth:`FigureIndex.unread` is how a rule
+        # says it declined, rather than falling silent.
         return None
     if one.key != other.key:
         return None
@@ -834,6 +1148,11 @@ class FigureIndex:
             if figure.metric in wanted
             and figure.scope == scope
             and figure.unit.quantity is None
+            # An input to a margin or a CAGR is a level of its metric. "Revenue
+            # up $146m in FY25A" is an amount and a change in revenue, and read
+            # as revenue it left two revenues answering to one period, so every
+            # derivation that needed FY25A revenue refused.
+            and figure.kind == "level"
         ]
         candidates = _one_currency(
             [figure for figure in matching if figure.period == period]
@@ -863,19 +1182,47 @@ class FigureIndex:
             return tier[0]
         return f"no figure labelled {' or '.join(sorted(wanted))} for this period"
 
-    def grouped(self) -> dict[tuple[str, str, str | None], list[Figure]]:
+    def grouped(self) -> dict[tuple[str, str, str | None, str], list[Figure]]:
         """Figures gathered by what they claim to measure.
 
-        Only the comparable ones. A group of one is kept: a rule that recomputes
-        a margin from its inputs wants every figure it can find, not only the
-        ones stated twice.
+        Only the comparable ones, and only those whose kind was read: see
+        :meth:`unread` for the rest. A group of one is kept: a rule that
+        recomputes a margin from its inputs wants every figure it can find, not
+        only the ones stated twice.
         """
-        out: dict[tuple[str, str, str | None], list[Figure]] = {}
+        out: dict[tuple[str, str, str | None, str], list[Figure]] = {}
         for figure in self.figures:
-            if figure.comparable:
+            if figure.comparable and figure.kind is not None:
                 out.setdefault(figure.key, []).append(figure)
         for group in out.values():
             group.sort(key=lambda f: (f.slide_index, f.uid, f.address))
+        return out
+
+    def unread(self) -> list[tuple[Figure, int]]:
+        """Figures not compared because their kind could not be read, each with
+        the number of other statements of its metric it would otherwise have
+        been weighed against.
+
+        Only those with something to be weighed against. A percentage stated
+        once and never again was not going to be compared with anything, and a
+        record saying it was not would bury the ones that matter -- the
+        statement that a rule *would* have checked, and did not.
+        """
+        out: list[tuple[Figure, int]] = []
+        for figure in self.figures:
+            if figure.kind is not None or not figure.comparable:
+                continue
+            others = sum(
+                1
+                for other in self.figures
+                if other.place != figure.place
+                and other.comparable
+                and (other.metric, other.scope, other.unit.quantity)
+                == (figure.metric, figure.scope, figure.unit.quantity)
+                and periods_agree(other.period, figure.period)
+            )
+            if others:
+                out.append((figure, others))
         return out
 
 
@@ -919,10 +1266,13 @@ def unwritable(figure: Figure) -> str | None:
 
     * **A chart point.** Its values live in a cached copy and in an embedded
       workbook, and TieOut writes neither.
-    * **A figure split across runs.** "$4" in one run and "12m" in the next is
-      one number to a reader and two places to write. A replacement put into
-      the first leaves the rest of the old figure beside it, so correcting 412
-      to 2,100 produces "2,10012m" in a deck someone is about to send.
+    * **A figure that cannot be placed.** A write replaces the figure's own
+      characters, by their span in the paragraph -- across as many runs as the
+      figure spans, each keeping its formatting (PLAN.md §5.3). A figure
+      without a span has nowhere safe to go. "$4" in one run and "12m" in the
+      next used to be refused outright, because a replacement put into the
+      first run left "12m" beside it; it is written now, because the span
+      reaches the second run too.
     * **A run inside a group is not refused.** ``tieout_fix`` reaches into
       groups for text on purpose -- "no coordinate space stands between an edit
       to a shape's words and the group it happens to sit in" -- so a grouped
@@ -938,11 +1288,10 @@ def unwritable(figure: Figure) -> str | None:
             "a chart's values live in its cached data and in the workbook behind "
             "it, and TieOut writes neither -- correct this in the chart's own data"
         )
-    if figure.split_run:
+    if figure.span is None:
         return (
-            "this figure is split across two runs of formatting, so there is no "
-            "single run to write -- a replacement would land in the first and "
-            "leave the rest of the old figure beside it"
+            "this figure could not be placed exactly within its text, so there is "
+            "nowhere safe to write a replacement"
         )
     return None
 
@@ -1019,6 +1368,7 @@ def build_index(deck: DeckModel) -> FigureIndex:
 
     vocabulary = _vocabulary(table_figures, chart_figures)
     table_figures = _scoped_by_corner(table_figures, corners, vocabulary)
+    grounded = _grounded_kinds(table_figures, chart_figures)
 
     text_figures: list[Figure] = []
     conversions: list[Conversion] = []
@@ -1026,7 +1376,7 @@ def build_index(deck: DeckModel) -> FigureIndex:
         for shape in slide.leaf_shapes():
             if shape.table is not None or shape.chart is not None:
                 continue
-            figures, stated = _text_figures(slide, shape, vocabulary)
+            figures, stated = _text_figures(slide, shape, vocabulary, grounded)
             text_figures.extend(figures)
             conversions.extend(stated)
 
@@ -1092,6 +1442,31 @@ def _scoped_by_corner(
         )
         for figure in figures
     ]
+
+
+def _grounded_kinds(
+    *groups: Sequence[Figure],
+) -> dict[tuple[str, str], tuple[Kind, str]]:
+    """The one kind the deck's tables and charts give each (metric, quantity).
+
+    The same grounding prose metrics get, applied to kinds. Where every
+    percentage the deck tabulates under "Recurring revenue share" is a share,
+    a sentence stating that metric as a percentage, with no word of its own
+    saying what kind, is a share too -- the deck has said so. Where its tables
+    give the metric two kinds, or none, nothing is inferred.
+    """
+    seen: dict[tuple[str, str], set[Kind | None]] = {}
+    for group in groups:
+        for figure in group:
+            if figure.unit.quantity is None or not is_specific(figure.metric):
+                continue
+            seen.setdefault((figure.metric, figure.unit.quantity), set()).add(figure.kind)
+    out: dict[tuple[str, str], tuple[Kind, str]] = {}
+    for key, kinds in seen.items():
+        (only,) = kinds if len(kinds) == 1 else (None,)
+        if only is not None:
+            out[key] = (only, f"the deck's own tables, which state {key[0]!r} that way")
+    return out
 
 
 def _vocabulary(*groups: Sequence[Figure]) -> tuple[str, ...]:
@@ -1230,7 +1605,12 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
             unit = _unit_of(reading).with_inherited(
                 header_units.get(column, Unit()).with_inherited(caption)
             )
+            header_cell = table.cell(0, column)
+            kind, kind_from = _cell_kind(
+                label_cell.text, header_cell.text if header_cell else "", unit
+            )
             inside = _cell_run_holding(cell.paragraphs, reading.raw)
+            placed = cell_span(cell.paragraphs, reading.raw)
             out.append(
                 Figure(
                     reading=reading,
@@ -1249,8 +1629,15 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
                     unit=unit,
                     scope=scope,
                     raw=text.strip(),
-                    cell_run=inside or (0, 0),
+                    cell_run=(
+                        inside
+                        if inside is not None
+                        else ((placed[0], 0) if placed is not None else (0, 0))
+                    ),
                     split_run=inside is None,
+                    span=placed[1] if placed is not None else None,
+                    kind=kind,
+                    kind_from=kind_from,
                 )
             )
     return out, corner
@@ -1278,6 +1665,27 @@ def _cell_run_holding(
         for r_index, run in enumerate(getattr(paragraph, "runs", ())):
             if digits in getattr(run, "text", ""):
                 return (p_index, r_index)
+    return None
+
+
+def cell_span(
+    paragraphs: Sequence[object], value: str
+) -> tuple[int, tuple[int, int]] | None:
+    """The paragraph of a cell holding the figure, and its characters in it.
+
+    Searched in the paragraph's joined text, not run by run, so a figure split
+    across runs still has a place. The first occurrence is taken: a cell holds
+    one figure, and its footnote marker -- the only other digits a cell
+    usually carries -- comes after it.
+    """
+    digits = value.strip()
+    if not digits:
+        return None
+    for p_index, paragraph in enumerate(paragraphs):
+        text = "".join(getattr(run, "text", "") for run in getattr(paragraph, "runs", ()))
+        found = text.find(digits)
+        if found >= 0:
+            return p_index, (found, found + len(digits))
     return None
 
 
@@ -1352,6 +1760,12 @@ def _chart_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
         metric = normalise_label(series.name or "")
         if not is_specific(metric):
             continue
+        # A cache holds bare numbers, so a series is an amount unless its name
+        # says otherwise -- "EBITDA margin" is a ratio plotted as 24.8, not an
+        # EBITDA of 24.8.
+        named = label_kind(series.name or "")
+        kind: Kind | None = named if named is not None else unit_kind(caption)
+        kind_from = "the series name" if named is not None else "its unit"
         for point_index, value in enumerate(series.values):
             if value is None:
                 continue
@@ -1390,6 +1804,8 @@ def _chart_figures(slide: SlideModel, shape: ShapeModel) -> list[Figure]:
                     unit=caption,
                     scope=scope,
                     raw=_format_plain(value),
+                    kind=kind,
+                    kind_from=kind_from,
                 )
             )
     return out
@@ -1569,7 +1985,10 @@ Conversion = tuple[str, str, str | None, frozenset[str]]
 
 
 def _text_figures(
-    slide: SlideModel, shape: ShapeModel, vocabulary: Sequence[str]
+    slide: SlideModel,
+    shape: ShapeModel,
+    vocabulary: Sequence[str],
+    grounded: dict[tuple[str, str], tuple[Kind, str]] | None = None,
 ) -> tuple[list[Figure], list[Conversion]]:
     """Figures stated in prose, grounded in the deck's own metric vocabulary.
 
@@ -1613,6 +2032,7 @@ def _text_figures(
     """
     if not shape.has_text or not vocabulary:
         return [], []
+    grounded = grounded or {}
 
     out: list[Figure] = []
     conversions: list[Conversion] = []
@@ -1651,6 +2071,11 @@ def _text_figures(
                     continue
                 metric, scope = attributed
                 bound.append((match.start(), unit, metric, scope))
+                kind, kind_from = prose_kind(
+                    scanning, match.start(), match.end(), unit, metric
+                )
+                if kind is None and unit.quantity is not None:
+                    kind, kind_from = grounded.get((metric, unit.quantity), (None, kind_from))
 
                 if (
                     previous is not None
@@ -1686,6 +2111,8 @@ def _text_figures(
                 if run_index is None:
                     continue
                 raw = sentence[mapping[match.start()] : mapping[match.end() - 1] + 1]
+                lead = len(raw) - len(raw.lstrip())
+                begin = start + mapping[match.start()] + lead
                 out.append(
                     Figure(
                         reading=reading,
@@ -1701,6 +2128,9 @@ def _text_figures(
                         scope=scope,
                         raw=raw.strip(),
                         split_run=not whole,
+                        span=(begin, begin + len(raw.strip())),
+                        kind=kind,
+                        kind_from=kind_from,
                     )
                 )
     return out, conversions

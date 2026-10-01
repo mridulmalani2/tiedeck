@@ -39,7 +39,9 @@ from typing import ClassVar, Final
 
 from tieout.figures import (
     Figure,
+    FigureIndex,
     build_index,
+    cell_span,
     comparable,
     normalise_label,
     read_cell_value,
@@ -153,6 +155,7 @@ def _edit(other: Figure, first: Figure) -> Correction:
         counterpart=_format(first),
         counterpart_slide=first.slide_index,
         refused=unwritable(other),
+        span=other.span,
     )
 
 
@@ -171,6 +174,18 @@ def _evidence(first: Figure, other: Figure) -> str:
         if figure.source != "table"
     ]
     return f" (matched on {', and '.join(parts)})" if parts else ""
+
+
+def _pair_signature(one: Figure, other: Figure) -> str:
+    """What a disagreement between two figures is about, without the slides.
+
+    The fact both claim to state -- metric, scope, kind, period -- and the two
+    values as written. Declared intentional, it stays quiet for this pair of
+    statements on the next turn of the deck, and speaks again the moment
+    either figure changes, which is when it might have stopped being right.
+    """
+    values = "~".join(sorted((_format(one), _format(other))))
+    return f"{one.metric}|{one.scope}|{one.kind}|{one.period or ''}|{values}"
 
 
 def _spans_two_places(figures: list[Figure]) -> bool:
@@ -202,7 +217,7 @@ def _is_scale_of(a: float, b: float) -> bool:
 
 
 def _disagreements(
-    deck: DeckModel, *, scale: bool
+    index: FigureIndex, *, scale: bool
 ) -> list[tuple[Figure, Figure, str]]:
     """Every pair of figures that claim the same fact and do not agree.
 
@@ -222,7 +237,6 @@ def _disagreements(
     to match a known one, and a dictionary key cannot do that. So the group is
     gathered loosely and every pair inside it is put to ``comparable``.
     """
-    index = build_index(deck)
     out: list[tuple[Figure, Figure, str]] = []
     # Sorted on a key whose third element is ``str | None``. Sorting the raw
     # keys compared None with 'x' the moment a deck stated one metric in two
@@ -232,17 +246,28 @@ def _disagreements(
     # tests passed over it.
     for _, figures in sorted(
         index.grouped().items(),
-        key=lambda item: (item[0][0], item[0][1], item[0][2] or ""),
+        key=lambda item: (item[0][0], item[0][1], item[0][2] or "", item[0][3]),
     ):
         if not _spans_two_places(figures):
             continue
         ordered = sorted(figures, key=lambda f: (f.place, f.address))
+        # Positions already weighed against an earlier baseline. Each of those
+        # is that baseline's to report, so it must not become a baseline itself
+        # and report the same disagreement from the other end. Every figure
+        # *not* yet weighed is a baseline of its own: that is what gives each
+        # period its own earliest statement. Stopping the whole group once the
+        # first baseline had produced a pair -- which is what this replaced --
+        # hid every contradiction in every other period under that metric.
+        weighed: set[int] = set()
         for position, baseline in enumerate(ordered):
+            if position in weighed:
+                continue
             base_value_seen: set[float] = set()
-            for candidate in ordered[position + 1 :]:
+            for offset, candidate in enumerate(ordered[position + 1 :], start=position + 1):
                 confidence = comparable(baseline, candidate)
                 if confidence is None:
                     continue
+                weighed.add(offset)
                 if candidate.place == baseline.place:
                     # Two readings of one figure inside a single shape is that
                     # shape's own layout, not two statements of the same fact.
@@ -255,12 +280,6 @@ def _disagreements(
                     continue
                 base_value_seen.add(right)
                 out.append((baseline, candidate, confidence))
-            if out and out[-1][0] is baseline:
-                # The earliest statement is the baseline for everything after
-                # it, exactly as before. Once it has produced its pairs, a later
-                # figure must not become a second baseline for the same group
-                # and report the same disagreement from the other end.
-                break
     return out
 
 
@@ -312,8 +331,20 @@ class ContradictoryFigure(Rule):
     requires: ClassVar[tuple[str, ...]] = ()
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+        index = build_index(deck)
+        for figure, others in index.unread():
+            # PLAN.md §0: a figure whose kind nothing in the deck states is not
+            # compared, and saying so is the difference between a refusal and
+            # a pass. Recorded here and not in CO-002, which reads the same
+            # pairs: one statement of a declined comparison is enough.
+            self.note_unchecked(
+                figure.ref,
+                f"{figure.raw or figure.reading.raw} for '{figure.metric}' was not "
+                f"compared with the {others} other statement(s) of it: "
+                f"{figure.kind_from}",
+            )
         findings: list[Finding] = []
-        for first, other, _ in _disagreements(deck, scale=False):
+        for first, other, _ in _disagreements(index, scale=False):
             findings.append(
                 self.finding(
                     where=other.ref,
@@ -330,6 +361,7 @@ class ContradictoryFigure(Rule):
                     ),
                     correction=_edit(other, first),
                     bbox_pt=other.bbox_pt,
+                    signature=_pair_signature(first, other),
                 )
             )
         return cluster_findings(findings)
@@ -361,7 +393,7 @@ class ScaleMismatch(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
-        for baseline, other, _ in _disagreements(deck, scale=True):
+        for baseline, other, _ in _disagreements(build_index(deck), scale=True):
             values = dict(zip((baseline, other), _values(baseline, other), strict=True))
             smaller, larger = sorted(values, key=lambda f: abs(values[f]))
             ratio = abs(values[larger]) / abs(values[smaller])
@@ -380,6 +412,7 @@ class ScaleMismatch(Rule):
                     remedy="State both figures in the same scale",
                     correction=_edit(larger, smaller),
                     bbox_pt=larger.bbox_pt,
+                    signature=_pair_signature(smaller, larger),
                 )
             )
         return cluster_findings(findings)
@@ -608,16 +641,19 @@ def _total_correction(
     reading = read_cell_value(cell.text)
     if reading is None:
         return None  # pragma: no cover - a total that did not parse is not reported
+    placed = cell_span(cell.paragraphs, reading.raw)
     return Correction(
         kind="fix",
         source="table",
         shape_id=shape.ref.shape_id,
         uid=shape.ref.uid,
         address=(row, column),
-        cell_paragraph=0,
+        cell_paragraph=placed[0] if placed is not None else 0,
         cell_run=0,
-        current=cell.text.strip(),
+        current=reading.raw if placed is not None else cell.text.strip(),
         replacement=restate(reading, computed),
+        span=placed[1] if placed is not None else None,
+        refused=None if placed is not None else "the total could not be placed in its cell",
     )
 
 

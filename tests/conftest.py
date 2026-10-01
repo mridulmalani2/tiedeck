@@ -236,6 +236,7 @@ def build_reference_profile(spec: ReferenceSpec, logo_sha1: str) -> Profile:
             decimal_places_by_column=spec.typography.decimal_places_by_column,
             date_format=spec.typography.date_format,
             currency_pattern=r"^(US\$|\$)\s?[\d(]",
+            currency_literals=["US$", "$"],
             canon_terms={spec.advisor_mark: []},
         ),
         hygiene=HygieneProfile(

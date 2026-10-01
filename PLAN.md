@@ -10,6 +10,227 @@ against a deck written the way a real one is written, and §10 is what it said.
 It anticipated three things and found ten. A parallel read-only audit of the UI,
 fifty findings driven through the browser, is folded in at §11.
 
+**Amended again, 2026-09-27.** §11 is mostly done: the colour bug, the fix
+affordances, findings that named no object, the report's confidentiality and
+polish, five wording fixes, and the great majority of the interaction/state
+group. §11's own text carries what is still open.
+
+**Amended again, 2026-10-01.** §0 is new and comes before everything in §7: a
+problem the queue did not name, which decides whether the product is usable.
+It is built — precision measured and gated, `kind` on every figure, evidence of
+intent on every shape, "this is intentional" written to the profile — and so is
+the rest of §7: §5.2–§5.5 and §11's remainder, the last re-driven in a real
+browser. That re-drive found three defects no list had, one of them PR #11's
+own; and §5.3 turned out to be hiding a worse one (every derived Fix it in
+prose overwrote the whole sentence).
+
+---
+
+## 0. The missing dimension — before anything in §7
+
+**Every false positive in the latest demo was one defect, and it is not a
+threshold.** Three of them, from a real run:
+
+- A deck said "64% of revenue is recurring" on one slide and "9% revenue
+  growth" on another. CO-001 reported them as a mismatch. Both are correct, and
+  neither restates the other. Reproduced: both index as
+  `revenue / FY2025A / %` and become one fact stated two ways.
+- A decorative shape bled off the slide edge on purpose. LO-001 reported it.
+- A text box sat off the learned grid exactly where the designer put it. LO-003
+  reported it.
+
+The index carries metric, scope, period and unit. It carries nothing for **what
+kind of claim a figure makes**. "64% of revenue" is a share of a base; "9%
+revenue growth" is a change in that base; "24.8% EBITDA margin" is a ratio to
+it. All three fold to metric `revenue`, quantity `%`, and become candidates to
+compare. The layout rules have the same hole: a shape's position carries no
+record of whether anything in the deck suggests the position was chosen.
+
+With no vocabulary for telling these apart, the only lever left is a confidence
+threshold — and a threshold can only trade false positives against silence.
+That is why it felt unattackable. It is a missing dimension, not a tuning
+problem.
+
+**What is built against it, in this order** (the measurement moved first: a
+baseline taken after the change it measures is not a baseline):
+
+1. **Precision as a gate.** A corpus of real-shaped decks with *known* defects
+   and *known* intentional oddities, scoring every tie-out and layout rule on
+   recall and on false positives. Until that number existed every decision in
+   this section was taste. `tests/corpus/`, §0.1.
+2. **A `kind` on every figure** — level, share, change, rate, ratio, count —
+   read from the words around it and from the label, never guessed. Two figures
+   of different kinds are never the same fact, and `comparable()` refuses them
+   before any value is looked at. A figure whose kind cannot be read is not
+   compared, and says so.
+3. **Evidence of intent as a first-class field on a shape** — repeated across
+   slides, aligned to a consistent line the profile did not learn, encoding a
+   value, decorative with no text — unifying the fragments that existed
+   (`data_mark_uids`, furniture detection, the structural bleed) rather than
+   re-deriving them.
+4. **"This is intentional", written to the profile.** A false positive
+   dismissed once, by a signature that does not depend on slide position, never
+   fires again for that house style. One that returns every run is why tools
+   get switched off.
+
+**The trade, stated before it is measured.** Item 2 will make some
+currently-caught defects go quiet: a percentage with no word saying what kind it
+is stops being compared at all. That is the cost of the dimension, and §0.1
+records what it cost rather than arguing it.
+
+### 0.1 The measurement
+
+`tests/corpus.py` builds 16 cases from code: Marlin (§10's deck) clean and once
+per tie-out rule with that rule's defect seeded; the generator's clean and dirty
+reference decks, the dirty one checked against a profile *learned* from the
+clean one; **Heron**, twelve slides of prose against one P&L carrying the demo's
+kind collisions and four same-kind contradictions; **Osprey**, a house style and
+a later deck in it carrying the demo's bleed and off-grid cases beside real
+layout defects; and Kestrel, the real-world constructions deck. Scored over
+CO-001…CO-009 and LO-001…LO-003. `tests/test_precision.py` pins the exact list
+of misses and of false positives, so any change in either direction fails until
+this section and that file are updated together. `python -m tests.corpus`
+prints the table.
+
+Every unlabelled finding on the dirty reference deck was traced by hand to
+another rule's seed seen from a second angle (TY-006's stray decimal makes the
+chart and table genuinely disagree; HY-008's low-resolution logo stops being
+recognised as the logo) and is labelled `echo`: true, not this rule's catch, not
+scored.
+
+| Measured | Defects | Caught | Recall | False positives |
+| --- | --- | --- | --- | --- |
+| Baseline, before §0 items 2–4 | 28 | 27 | 96% | 9 |
+| CO-001 examines every period (below) | 28 | 28 | 100% | 9 |
+| `kind` on every figure (§0.2) | 28 | 27 | 96% | 6 |
+| Intent evidence on every shape (§0.3), with its twin added | 29 | 27 | 93% | 0 |
+
+The baseline's nine false positives are exactly the demo's three, each
+reproduced three ways: CO-001 on a share against a change, a change against a
+share of a base, and a change in revenue against revenue; LO-001 at `info` on a
+decorative oval on the cover and on two dividers; LO-003 on one takeaway box set
+3.5pt inside its column on three slides.
+
+**The corpus found a silence nobody was looking for.** The one miss is not a
+threshold either: CO-001 stops examining a metric the moment its earliest
+statement produces one disagreement — across *every period*, not its own. So
+"64% … in FY25A" against "9% … in FY25A" disagreeing hid "Revenue grew 17% in
+FY24A" against "15% revenue growth in FY24A" entirely. The same shape is
+reachable on any deck where a figure with no period disagrees with an early
+table cell: every later contradiction under that metric goes quiet. Fixed: every
+figure not already weighed against an earlier baseline is a baseline of its own,
+held by `test_a_contradiction_in_one_period_does_not_hide_one_in_another`, which
+fails on the previous code.
+
+### 0.2 `kind` — what it cost, measured
+
+Every figure now carries one of level, share, change, rate, ratio or count, and
+where it was read from (`Figure.kind`, `Figure.kind_from`). `comparable()`
+refuses two kinds, and a missing kind, before any value is looked at;
+`grouped()` and `lookup()` see only figures whose kind was read, and `lookup()`
+only levels — so "Revenue up $146m" no longer leaves FY25A revenue stated two
+ways and every derivation needing it refusing.
+
+How a kind is read, nearest evidence first, and nothing past the last line:
+
+1. a rate word in reach of the figure — "grew at a 19.6% **CAGR**", "per site";
+2. "of" straight after a percentage — "64% **of** revenue" is a share;
+3. a change word, backwards until a word saying the figure is a *state*
+   ("grew **to** $412m", "up **from** $1,352m" are levels) and forwards until the
+   clause turns to a period or a comparison;
+4. the label — "EBITDA **margin**", "Revenue **growth**", "EV**/**EBITDA"; in a
+   table either axis, and two axes naming different kinds refuse the cell;
+5. the deck's own tables, where they state the metric at that quantity one way
+   only — the grounding prose metrics already have;
+6. the unit — an amount is a level, a multiple a ratio. A percentage or a basis
+   point is four kinds, and the unit says nothing about which.
+
+**The result on the corpus:** CO-001's three demo false positives went to
+zero — and a fourth, added while writing this section, stayed at zero: two
+shares of one base ("64% of revenue is recurring", "30% of revenue is from
+Europe") are declined, because the part is not read. It lost exactly the
+defect predicted — "Churn of 4.8%" against a table showing 3.8%, where nothing
+names what kind of figure churn is. It is declined
+on both statements, in words, through `FigureIndex.unread()` and CO-001's
+unchecked record; the gate pins that it is *declined*, not silent. On the
+marlin, reference-clean and reference-dirty decks no figure lost its kind, so
+nothing there went quiet: every table percentage is a margin, a CAGR or a
+movement column, and every prose figure there is an amount, a multiple, a
+labelled margin or a CAGR. That says the generated decks are kind-tidy, not
+that real ones are: a KPI table of bare percentages — churn, retention,
+utilisation, conversion — is the shape that goes quiet, and the next real-deck
+pass is where to measure how common it is.
+
+### 0.3 Intent evidence — what it cost, measured
+
+`placement_intent(deck, profile)` in `tieout/rules/layout.py` gives every shape
+a `Placement`: the evidence (`tieout/model/intent.py`) that its position was
+chosen. The fragments were not re-derived — furniture is `furniture_for`, the
+bleed is `is_decorative_bleed`, and the slide's own alignment lines, evenly
+spaced runs and data marks are LO-003's own helpers, called exactly as LO-003
+called them. LO-001, LO-002 and LO-003 now read that one answer. Every silence
+it causes is written to `AuditResult.excused` with the evidence named, the
+counterpart of `unchecked`: "I looked, and the deck says this was meant".
+
+One piece of evidence is new: **the same element placed identically on
+several slides** — the whole box on two, or both edges of one axis on three,
+within 0.25pt. Copy-paste and layouts land on the same EMU, and a hand nudge
+does not repeat itself to a quarter of a point. At the grid's 2pt a box nudged
+to 493pt on one slide joined a takeaway at 493.5pt on three others, and the one
+real mistake on the deck was excused by its neighbours.
+
+What each rule does with it:
+
+- **LO-001 and LO-002** — a decorative bleed's structure alone still reports at
+  `info`: a misplaced background panel has the same structure. A second piece
+  of evidence excuses it — the reference deck bleeds (as before), the *whole*
+  box recurs at the same place, or it is on a title or divider slide. A panel
+  the width of its column shares that column's edges with every body box and
+  is not excused by them; the corpus caught that one on the first run.
+- **LO-003** — an edge in the near-miss window is excused where aligned,
+  spaced, plotted or repeated evidence accounts for its axis. It used to skip
+  those axes before measuring; it now measures first, so every excused edge is
+  recorded.
+
+**The result on the corpus:** LO-001's three and LO-003's three false
+positives went to zero. The stretched panel stayed reported. And the cost was
+measured rather than argued, by building the takeaway's twin — a callout
+dragged 3.5pt off its column and copied to two more slides. In the file it *is*
+the takeaway: one placement, repeated. It is read as meant, and says so on
+every slide. Repetition cannot tell a copied mistake from a choice, and nothing
+in the file can; that is what §0's item 4 is for, in the other direction.
+
+### 0.4 "This is intentional" — dismissed once, for the house style
+
+Every finding carries a `signature`: what it is about, never which slide. The
+rules §0 is about state their own — LO-001 and LO-002 the shape's kind, whether
+it carries text and its box to the point; LO-003 each edge and the line it
+missed ("left 493pt against 490pt"); CO-001 and CO-002 the fact and both values
+as written. Everything else gets the measurement, the expectation and the box,
+with slide references stripped. A clustered finding carries one line per
+instance and is covered only when all of them are.
+
+`Profile.intended` holds the declarations. `run_rules` moves a covered finding
+to `excused`, naming the declaration and its note, so a wrong declaration is
+findable in every report. They survive `learn` (carried across the overwrite),
+`learn --add` (the union) and the UI's learn. Three ways in: **This is
+intentional** beside Set aside in the note, with Undo; the House style tab's
+"Declared intentional" list, where any one is withdrawn; and
+`tieout check --intended RULE@slideN[:Shape] --intended-note TEXT`.
+
+Measured by construction rather than by the corpus, because the corpus scores
+one deck at a time and this is about the second one: a box declared intended on
+slide 3 of one deck is not reported on slide 6 of another deck in the house
+style, while a box 6pt away from it still is (`tests/test_intended.py`).
+
+**What it does not do.** It cannot help a miss — the copied callout in §0.3 is
+excused by evidence, and no button un-excuses it; that would need a "this is
+*not* intentional", which nothing asks for yet. And a declaration is only as
+narrow as its signature: LO-003's is the edge and the line, so declaring one
+inset box intended excuses every shape with that edge at that position in the
+house style. That is the point for a takeaway column and the wrong answer for a
+one-off, and the House style list is where to see which it was.
+
 ---
 
 ## 1. The one-sentence version
@@ -17,7 +238,8 @@ fifty findings driven through the browser, is folded in at §11.
 **The tie-out now reads figures wherever the deck states them, and it still
 cannot read a sentence.**
 
-Nine consistency rules, all reading one figure index. Three of them compare a
+Nine consistency rules, all reading one figure index, and since §0 every figure
+in it knows what kind of claim it makes. Three of them compare a
 figure with another statement of it — including a headline contradicting the
 table under it, and a chart contradicting the table beside it. Four recompute a
 figure the deck's own numbers determine. Two report how a figure is told rather
@@ -36,9 +258,9 @@ than argument:
    writes one, it crashed and then disagreed with itself nine times — on a deck
    with nothing wrong in it. All ten are fixed; §10 is the account, and the
    reason it is worth reading is that five of the ten were *silent*.
-2. **Detection has outrun action.** A real deck produced twenty findings in the
-   app and ten had no way to resolve them. §5.5 closed two of those ten; §11 is
-   the queue for the rest, and its first item is one character.
+2. **Detection had outrun action.** A real deck produced twenty findings in the
+   app and ten had no way to resolve them. §5.5 closed two of those ten and PR
+   #11 closed most of the rest; §11 carries what is still open.
 
 ---
 
@@ -69,8 +291,8 @@ reason, and always will be: client decks are never committed.
 Measured 2026-09-23 against the generated reference decks.
 
 ```
-rules defined                   52
-rules on by default             50
+rules defined                   53
+rules on by default             51
 consistency rules                9      CO-001 … CO-009
 of those, reading something
 other than a table               6      CO-001 (prose, charts), CO-004…CO-008
@@ -101,10 +323,9 @@ the price of not inventing the other kind of finding.
 | What is not tied today | The error it lets through |
 | --- | --- |
 | A claim with no figure anywhere to check it | "materially ahead of plan" over a table showing 2% |
-| A chart cache against its embedded workbook | The cache is what PowerPoint draws, so it is what is read; a workbook that disagrees is a different and more alarming defect |
 | Cross-references | "see page 12" pointing at page 14 |
 | A figure only ever stated once, in prose, in a deck with no tables | Nothing to tie it to, by construction |
-| Two periods where the deck writes one both ways | "LTM" and "LTM September 2026" do not match, deliberately: conflating them would invent findings between LTM Sep-25 and LTM Sep-26 |
+| Two periods where the deck writes one both ways | "LTM" and "LTM September 2026" do not match, deliberately: conflating them would invent findings between LTM Sep-25 and LTM Sep-26 (§5.5 made "LTM Sep-25" keep its anchor too) |
 | A total labelled after its metric | "Total revenue" under three segments is not read as a total, because "Total addressable market" is a metric and widening it reports every TAM/SAM/SOM slide in banking. §9 |
 | A table scoped only by its headline | The corner cell is read and the headline is not. "Revenue by Segment" names a metric the deck uses and means nothing of the sort. §9 |
 
@@ -178,6 +399,35 @@ switched off with it.
 
 ### 5.2 Record what a derived check could not verify
 
+**Done, 2026-10-01** — all three paths below now record a refusal, and `kind`
+closed a fourth nobody had listed. `tests/test_unchecked_paths.py`; five of its
+six tests fail on the previous code, and the sixth is the guard (a correct
+CAGR in prose stays silent).
+
+- A labelled ratio CO-004 or CO-005 has no derivation for ("Adj. EBITDA
+  margin", "Net debt / EBITDA") is declined once per label, not per cell.
+  Labelled only: a multiple in prose binds to its denominator ("8.7x LTM
+  EBITDA" binds to EBITDA), so its metric says nothing about what was divided.
+- A bare "CAGR" naming no metric is declined.
+- "Nearly a bridge" is defined as one end naming itself as an end ("Opening",
+  "Closing") and the other naming nothing. Declined, never reported.
+- **The fourth:** a CAGR stated in prose — "Revenue grew at a 19.6% CAGR
+  between FY23A and FY25A" — was never recomputed, because CO-006 looked for a
+  growth word in the *label* and prose has none. `kind` now says it is a rate of
+  revenue over that span, and CO-006 recomputes it; a rate in prose stated for
+  one period rather than a span is declined.
+
+**Found while doing it, not fixed:** the Marlin valuation table ("Valuation
+($m) | Low | Mid | High") is indexed with the *case* as the metric — Low, Mid,
+High — and the row as the scope, so its "Implied EV/EBITDA" row is invisible
+to CO-005 and nothing records that. Turning it the right way up is an index
+orientation change (a case column is a scope, not a metric), and doing it
+alone only converts the silence into a refusal: the row's EBITDA is unscoped
+and the case-scoped lookup will not find it. Both halves are the next change
+to `figures.py`, and §10's corpus is where to check it.
+
+The account as it stood before:
+
 **Partly done, and the list was too short.** §10 closed the two that cost most:
 CO-005 now refuses a comparables *statistics* row with a reason, and the
 refusals that came from a mis-folded label and a mis-oriented table stopped
@@ -200,6 +450,27 @@ false positive.
 
 ### 5.3 The edit path a person actually takes
 
+**The write half is done, 2026-10-01, and it was worse than this section
+said.** Every derived **Fix it** addressed its figure by the *run* holding it
+and replaced that run. A sentence is usually one run, so correcting "EBITDA
+margin of 25.8% in FY25A." wrote **"24.8%" over the whole sentence**; no
+test caught it because every derived-fix test corrected a table cell, whose
+run usually is the figure. And a cell reading "26.8%*" with its marker in the
+same run lost the marker. A figure now carries its `span` — its characters in
+its paragraph — and `_write_span` replaces exactly those, across as many runs
+as they cross: the replacement in the first run's formatting, the rest of the
+figure removed from the runs after it, every run keeping its own formatting and
+everything else it held. "$4" + "12m in FY25A" corrected to 2,100 reads
+"$2,100" + "m in FY25A". Before writing, the characters are compared with what
+the check read, and a deck edited in between is refused rather than written by
+position. `tests/test_span_writes.py`; all four fail on the previous code.
+
+A span crossing a line break or a field is refused, with the reason. The canvas
+editor's own text edit still replaces a whole run, which is right there: the
+person typed the run.
+
+What follows is the section as it stood; the second bullet is what is now done.
+
 `Edit it` opens the run with the counterpart beside it. Two things it does not do:
 
 - **It does not offer the counterpart as the answer.** Clicking the chip to write
@@ -220,6 +491,20 @@ false positive.
 
 ### 5.4 Chart values against their workbook
 
+**Done, 2026-10-01, as CH-006.** `tieout/model/workbook.py` reads one range of
+the embedded workbook — the range each series' `c:numRef/c:f` names — with the
+standard library and lxml, and `ChartSeries.workbook_values` carries it beside
+the cache. CH-006 (chart, major) reports every point where the cache and the
+workbook disagree, a gap on one side and a number on the other included,
+naming both and the cell. What to say was the hard part, and the answer is
+not which is right: it is what happens if nothing is done — PowerPoint redraws
+the chart from the workbook the next time anyone opens Edit Data. Driven on
+every real-shaped deck in the corpus first: silent on all of them, with no
+refusals (python-pptx writes the two in agreement). Declined, out loud: data
+linked to a file outside the deck, a range of several areas, a sheet the
+workbook lacks. `tests/test_chart_workbook.py`. The tie-out rules still read
+the cache, which is what the reader sees.
+
 `ChartSeries.values` reads the cache, which is what PowerPoint draws. A cache
 that disagrees with the embedded workbook behind it means the chart shows one
 thing and its own data says another — a worse defect than anything CO-001 finds,
@@ -227,6 +512,27 @@ and invisible to every rule here. The workbook is a `.xlsx` inside the package;
 reading it is not hard. Deciding what to say when they disagree is.
 
 ### 5.5 Periods that are ranges, and periods that are neither
+
+**Done for what was listed, 2026-10-01, and the listing was wrong about the
+direction.** Driven through `parse_period`, three of these did not read as no
+period — they read as a *different* one, which invents findings rather than
+costing them: "9M 2025" and "6M FY25" as the full year FY2025, "2025 Budget"
+as the plain FY2025 it would be compared against, and "LTM Sep-25" as bare LTM,
+so LTM Sep-24 and LTM Sep-25 were one period. Each is now its own: `9M-2025`,
+`FY2025B` (budget, plan), `FY2025E` (forecast, estimate), `FY2025A` (actual),
+`LTM-SEP-2025`, and `CY2024` for a calendar year, never equal to FY2024. "$9m
+2025" is nine million in 2025, not a stub. A column headed only "Budget" still
+reads as no period, because it is. `tests/test_periods.py`; every behavioural
+test fails on the previous code, and one is a gain — "9M25" read as no period,
+so two statements of one stub were never compared.
+
+**Still not handled, deliberately:** a deck stating its fiscal year ends in
+March reads a bare "2024" as FY2024 like any other deck. Re-keying every bare
+year on a year-end the deck states once, in a footnote, is the inference this
+module refuses everywhere else; the real-deck pass is where to find out
+whether decks state it in a way worth reading.
+
+The section as it stood:
 
 `parse_period` handles fiscal years, quarters, halves, relative windows and
 ranges. It does not handle: calendar versus fiscal year-end (a deck whose FY24
@@ -240,8 +546,8 @@ safe direction and costs findings.
 
 **Reading figures**
 - A figure split across runs — read as one number, addressed to the run with the
-  digits, and refused on write with the reason. Both spellings: prose and a table
-  cell. See §5.3 for what is still missing.
+  digits, and written by its span across every run it crosses (§5.3). A span
+  crossing a line break or a field is refused with the reason.
 - A table whose scale is stated in two places that disagree — a caption above
   saying millions and a footnote below saying thousands. The nearest wins, and
   nothing says the two disagreed.
@@ -276,22 +582,27 @@ safe direction and costs findings.
 
 ## 7. Order of work
 
+0. **The missing dimension** (§0) — before everything below. Precision corpus
+   first, then `kind`, then intent evidence, then "this is intentional".
 1. ~~**Drive the tie-out against a real deck** (5.1).~~ **Done** — §10. It found
    a crash, four false positives and five silences, and everything below is
    ordered by what it turned up.
-2. **The UI queue** (§11). This is now first among the outstanding work, and it
-   moved there on evidence rather than on taste: a real deck produced twenty
-   findings in the app and **ten had no resolution path**. §11.1 is one character
-   and stops the canvas — the surface the workflow asks you to judge on — from
-   misrepresenting the deck.
-3. **Record every unchecked path** (5.2). Still open, and §10 sharpened what it
-   means: the recorded refusals were the visible half.
-4. **Writing a figure that spans runs** (5.3). A real deck did show it matters —
-   the executive summary in §10's corpus splits `$1,196m` across two runs — so
-   this is no longer conditional. It is refused safely today.
-5. **The chart cache against its workbook** (5.4).
-6. **Periods** (5.5). §10 supplied one answer already: a sentence naming two
-   periods gives each figure the period next to it, not the range of both.
+2. ~~**The UI queue** (§11).~~ **Done, mostly** — §11.1–11.5 and the great
+   majority of §11.6 landed in PR #11. §11's own "Still open" list is the
+   remainder: #18 (reload recovery), #26 (small-shape resize handles), #33
+   (chart raster), #36 (overflow's visual distinction from chrome), and
+   #45–#47 from the grouped-findings run.
+3. ~~**Record every unchecked path** (5.2).~~ **Done**, with one new silence
+   found and recorded in §5.2 (a Low/Mid/High table's implied multiples).
+4. ~~**Writing a figure that spans runs** (5.3).~~ **Done** — and the same
+   change fixed a worse defect: every derived Fix it in prose overwrote the
+   whole sentence.
+5. ~~**The chart cache against its workbook** (5.4).~~ **Done** — CH-006.
+6. ~~**Periods** (5.5).~~ **Done** — stubs, budgets, anchored LTM windows and
+   calendar years, each of which had been read as a different period.
+7. ~~**§11's remainder**~~ **Done, re-driven in Chromium** — and the
+   re-drive found three defects nobody had listed, one of them PR #11's own
+   (§11).
 
 ---
 
@@ -355,6 +666,14 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
 
 ## 9. Standing limitations to carry forward, not rediscover
 
+* **A percentage nothing names the kind of is not compared** (§0.2). "Churn"
+  stated as 3.8% in a table and 4.8% in a sentence is a real contradiction the
+  tool declines, and says so; inventing the kind is what reported a share of
+  revenue against a growth in it. The same holds one level down: "64% of
+  revenue is recurring" is bound to its *base*, and the part ("recurring") is
+  not read, so it is declined too — otherwise it and "30% of revenue is from
+  Europe" are one fact. A share that names its part first ("EBITDA at 24.8% of
+  revenue", or a table row under a "% of total" header) is compared.
 * **A table's scope comes from its corner cell and from nowhere else.** A
   segment P&L headed "Analytics ($m)" is scoped to Analytics and no longer
   contradicts the group P&L; one headed only "$m", whose slide headline is the
@@ -406,8 +725,14 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
   which over-reports a frame whose text is on the canvas.
 * A logo drawn as text alone, with no badge and no image, is not learned, so its
   position and size go unchecked.
-* Where the reference deck bleeds, a structurally-identified decorative bleed is
-  silent, so a misplaced text-free background graphic is not reported.
+* A structurally-identified decorative bleed is silent where something
+  corroborates it — the reference deck bleeds, the whole box recurs at the same
+  place, or it is on a title or divider slide (§0.3) — so a misplaced
+  text-free background graphic in any of those places is not reported. It is
+  recorded in `excused`, with the evidence.
+* **Repetition reads a copied mistake as a choice** (§0.3). A box dragged off
+  the grid and then copied to two more slides is excused by its own copies.
+  The corpus carries the case and pins the miss.
 * `LOCKUP_PLATE_AREA_RATIO` 4.0, `LOCKUP_GAP_HEIGHTS` 1.0, `TITLE_BAND_SHARE`
   0.5, and every other tuned constant, are fitted to two house styles.
 * Rotated shapes are drawn, selected and resized correctly by construction and by
@@ -499,7 +824,7 @@ nothing is not even a refusal. §8 carries the rule this produced.
 
 ---
 
-## 11. The UI queue, from the read-only audit
+## 11. The UI queue, from the read-only audit — **11.1–11.5 and most of 11.6 done**
 
 A second audit ran in parallel: read-only, driven through the browser as a user
 would, against `falcon_seeded.pptx` (20 slides, 20 findings) and then
@@ -508,95 +833,92 @@ findings collapsed into 24 jobs, which is the only way to see the grouping at
 scale). Fifty findings, on the branch `claude/comprehensive-audit-be2242` as
 `UI_AUDIT.md`. That document is the detail; this is the queue.
 
-It audited commit `4172c99`, which is behind this branch, and §5.5 has landed
-since — `Correction` on the finding, `recell_fix` writing a table cell. **So its
-headline finding is partly answered already**: the audit's #8 and #41 say the
-two tie-out rules have no path at all, and a table cell now has one. The rest
-below stands. Each item says whether it was re-verified against the current head
-on 2026-09-23; **findings that need the app driven were not re-driven, and are
-carried on the auditor's evidence rather than re-measured.**
+It audited commit `4172c99`, which is behind this branch, and §5.5 had already
+landed by the time this section was written — `Correction` on the finding,
+`recell_fix` writing a table cell, closing the audit's #8 and #41. §11.1–11.5
+and the great majority of §11.6 landed in PR #11, on 2026-09-27, without
+re-driving the app: each fix is a source-level correction to a defect the
+audit named exactly, verified by reading the code the bug was in rather than
+by clicking through a browser. No test in this suite drives one yet, so the UI
+changes carry source-level regression tests (a string that must or must not
+appear in the served page) rather than behavioural ones; §11.6's own note on
+that gap is below.
 
-### 11.1 The canvas misrepresents the deck — verified live, one character
+**Re-driven, 2026-10-01, in Chromium** — `tests/test_ui_browser.py` and
+`tests/browser/journey.js`, the first test in this suite that drives a browser.
+It skips without Node, the `playwright` package and a launchable Chromium.
 
-`tieout_ui/static/index.html` builds a run's colour as
-`` `color:#${f.color_hex}` ``, and `canvas_view()` emits `color_hex` **with the
-`#` already on it**. Measured rather than read: `canvas_view()` over a test deck
-returns `['#000000', '#0F2A4A', '#6B7280', '#C9A227']`. Every run is therefore
-styled `color:##0F2A4A`, which is invalid CSS and is dropped, so **no text on
-the live canvas is ever drawn in its real colour.** White-on-navy slides render
-dark on dark and cannot be read. Shape *fills* go through `hexToRgba()`, which
-strips the `#` defensively — which is why the gold logo box is right while the
-text beside it is not.
+**What re-driving found first, and it was not on this list: PR #11's own fix
+for #30 broke the main path.** Leaving no profile pre-selected made
+`$("client").value` empty, and **Use existing profile** guarded on that value —
+so it answered every deck with "No client has been onboarded yet" while the
+list held two, and auditing against an existing house style was unreachable.
+Every source-level test passed. Fixed (the guard counts the profiles), and held
+by the browser test, which fails on the previous page.
 
-First, because the canvas is the surface the workflow asks the user to identify,
-judge and fix defects on, and anything colour-related is unjudgeable while it
-holds. It is one character.
+* ~~**#18**~~ **Done.** The tab remembers `{deck_id, client, checked}` in the
+  address's fragment — not in browser storage, which the page guarantees never
+  to use — and re-attaches on load: the deck, the house style, the
+  audit re-run, and every correction (which the server always kept), with a
+  line saying so. A deck the server no longer has is forgotten quietly. Driven:
+  a Fix it, a reload, and the ribbon still reads "1 correction, 1 fixed".
 
-### 11.2 The fix affordances still do not follow the remedies the rules compute
+**Still open**, in order of what is left to do:
+* ~~**#26**~~ **Done, and it was not the handles.** Driven: a page number is a
+  24pt box with 7pt of inset each side around one digit, so a double-click
+  almost never landed on the digit — and landing beside it did nothing, editor
+  open or not. With the editor open its box covered the digit entirely. A
+  double-click now edits the run nearest the pointer, and a double-click on the
+  editor's own box hands over to text editing unless something was moved. The
+  handles were real too, and smaller: edge midpoints are drawn only where the
+  side can hold them, and a tiny box carries its label underneath. Held by the
+  browser journey, which fails on the previous page.
+* ~~**#33**~~ **Done.** Where the slide has been rendered, a chart is drawn
+  from that render, cut to the chart's own box and badged "picture" so it is
+  never taken for something the canvas models; with no render the hatching
+  stays, because there is nothing honest to draw. Driven with LibreOffice
+  installed (the Marlin revenue chart lines up with its own box), and held by
+  the browser journey wherever the machine renders slides.
+* ~~**#36**~~ **Done.** Text running past its box is still drawn where
+  PowerPoint draws it; the box's own edge is now drawn dashed and a tag says
+  the text runs past it, so nothing reads as clipped and nothing reads as
+  canvas. The threshold took two passes to get right, both on real-shaped
+  decks: a pixel margin tagged every Marlin headline (22pt text in a 30pt
+  frame, which overhangs in PowerPoint too), and a quarter-of-the-box margin
+  still tagged every one-line cover title, because the canvas draws a line
+  about 1.5x the font size where PowerPoint draws about 1.2x. The tag now needs
+  most of a whole line outside the box; swept across every slide of five decks
+  it marks exactly the three real overflows and nothing else.
+* ~~**#45**~~ **Done, and driving it found two defects behind it.** The editor
+  opened from a group says "Place 2 of 12 in this job", offers **Next place**,
+  and opens the next place by itself after a move is applied. Driving it:
+  (1) every button in the editor's toolbar sat inside the slide, whose "click
+  on empty slide puts the shape down" listener did not exclude it — so
+  **Reset** put the shape back and then closed the editor, and Next place
+  opened the next shape and closed it in one click; (2) **BR-006 and BR-007
+  named the wrong shape.** They built `ShapeRef(slide, uid, "Page number")`,
+  the uid in the *shape id* position, so on any slide whose uids and ids
+  differ — most slides of the reference deck — **Move it on a misplaced page
+  number moved the footnote.** Fixed at the rule (`_page_number_ref`), with a
+  test that fails on the previous code.
+* ~~**#46**~~ **Done.** "16 things to do, from 229 findings".
+* ~~**#47**~~ **Done for what was left.** The reason beside a job with no
+  control now reads the remedy as well as the rule: BR-006's "Add the page
+  number at left 900pt…" was told TieOut "cannot know what is right" beside
+  the exact answer; BR-011's series recolour likewise. An "Add …" remedy says
+  TieOut adds no shapes; a "Recolour …" or "Set the typeface …" one says it
+  knows the answer and the thing sits where it does not write.
+* #44 is answered by §11.7 below (deliberate); #48 and #49 were done in §11.5.
 
-Verified in `tieout_ui/view.py`: `MOVABLE_RULES` is `{BR-002, BR-008,
-LO-001…LO-005, LO-008}`.
+All of #45–#47 are held by `tests/browser/groups.js`, which checks the
+26-slide reference deck against a foreign house style, the audit's own setup.
 
-* **BR-006 prints the exact target coordinates** — "Move the page number to left
-  877.18pt, top 509.76pt" — and is not in the set, so it offers only *Set aside*
-  under the caption "TieOut can see this is wrong and cannot know what is
-  right", in the same card that states exactly what is right. The auditor
-  cleared it by hand through the canvas: the capability is there and only the
-  affordance is missing.
-* The same "Yours to fix" sentence covers three different situations: an answer
-  nobody can know, an answer the tool knows and will not apply (BR-006), and an
-  answer the tool knows and has no control for (LO-007 — where the sentence
-  shown is about *moving shapes*, attached to a font size).
-* **Ten of the twenty findings on the seeded deck had no resolution path.** Two
-  of those ten are now answerable by §5.5; the other eight are this queue.
-
-### 11.3 Findings that name no object
-
-* **HY-001 discards the shape it matched.** `tieout/rules/hygiene.py` emits
-  `where=slide.index` only, so a **blocker** — placeholder text left in the deck
-  — navigates to the slide and highlights nothing. Verified live. The rule has
-  the shape in hand when it matches and throws it away before the UI sees it.
-* HY-004 is a property of the file and is attributed to slide 1, badging and
-  then ✓-ing a slide with nothing wrong on it. *Not re-driven.*
-* LO-004 outlines one of the two overlapping shapes. *Not re-driven.*
-
-### 11.4 Confidentiality and polish in the report
-
-* **The HTML report is opened with the session token in the query string**, so
-  the credential authorising reads of live deck material is written into browser
-  history by a normal button press — while the main page does substitute-and-clear
-  exactly as designed. Verified live.
-* **The report is titled with TieOut's internal working copy**, `v1-<name>.pptx`
-  (`tieout/report/html.py`), and prints the absolute temp path in its footer.
-  The artefact meant to be sent to someone else carries machine-local paths.
-  Verified live.
-* Every slide row shows an empty "slide image" box although the app has rendered
-  thumbnails for all of them at that moment. *Not re-driven.*
-
-### 11.5 Wording that argues against the finding it is attached to
-
-* **LO-002's evidence ends "so the rule cannot fail this deck"**
-  (`tieout/learn/derive_layout.py`) and was printed under 13 findings where the
-  rule had just failed. True of the deck the profile was learned from, false of
-  the deck being checked, and nothing says which. Verified live.
-* **TY-007 gives its remedy as a raw regular expression** — "Write it to match
-  the house pattern `^(\$)\s?[\d(]`" (`tieout/rules/typography.py`). Verified
-  live.
-* "Set the size to one of 10.5pt", and a required-boilerplate remedy reading
-  "Add the footer text: 'H'" — the single letter of a logo badge. *Not
-  re-driven.*
-
-### 11.6 Interaction and state — carried on the auditor's evidence
-
-Not re-driven in this session, grouped by what they cost:
-
-| Cost | Findings |
-| --- | --- |
-| You cannot see what you are judging | drag moves only the outline (#2); off-slide content is clipped away on the one rule about off-slide content (#34); overflow is painted onto the app background (#36); charts are grey hatching while a good raster sits 200px away (#33); badges cover the content the finding is about (#11) |
-| You cannot act | resize is silently dead on shapes whose text overflows (#3); a small shape's handles cover its own text so a page number cannot be edited (#26); *By slide* has no buttons at all (#10) |
-| The counts and state lie | *Set aside* leaves "20 things to do" at 20 (#13); undo labels a restored finding **NEW**, which is the product's signal for *newly exposed* (#14); re-running *Check deck* wipes the correction log while the ribbon still claims it (#15); a reload strands the deck and every correction on the server with no way back (#18); the profile chip goes stale on opening a second deck (#42) |
-| Feedback is inconsistent | *Export deck* says nothing; *Copy note* reports success with nothing to copy (#23); a failed resize says nothing. Corrections announce themselves well, which is the standard the rest should meet |
-| Other | a native `window.confirm()` blocks the whole page for the data-mark guardrail, alone among every confirmation in the product (#24, verified live); the profile picker pre-selects the alphabetically first profile, so one click audits against the wrong client (#30, verified live); ticking *Content review* with no key blocks the offline audit too (#50) |
+Everything else the audit numbered — the colour bug, the fix affordances, the
+document-level findings, the report's confidentiality and polish, the wording
+fixes, and the interaction/state group (drag, resize, the native dialog, the
+counts that lied, the profile picker, the rail's blanking, By slide's missing
+buttons, the reachability of off-canvas content) — is done. `git log` on this
+branch names each one by its audit number.
 
 ### 11.7 Deliberate, and to be left alone
 

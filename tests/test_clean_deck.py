@@ -35,7 +35,7 @@ EXPECTED_PER_CATEGORY = {
     "typography": 9,
     "hygiene": 9,
     "consistency": 9,
-    "chart": 5,
+    "chart": 6,
 }
 EXPECTED_RULE_COUNT = sum(EXPECTED_PER_CATEGORY.values())
 
@@ -204,6 +204,7 @@ def test_the_json_report_is_well_formed_and_complete(clean_result):
         "summary",
         "findings",
         "unchecked",
+        "excused",
         "rules_skipped",
         "rules_run",
         "suppressed",

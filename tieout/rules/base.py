@@ -19,9 +19,10 @@ stylistic:
 from __future__ import annotations
 
 import fnmatch
+import re
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import ClassVar, Final
@@ -67,6 +68,16 @@ SEVERITY_GLYPHS: Final[dict[str, str]] = {
     "minor": "▲",
     "info": "·",
 }
+
+#: ``Finding.where`` for a defect that is a property of the file rather than of
+#: any slide -- document metadata, a PowerPoint comment, a font never embedded,
+#: the deck's own canvas size. Slide indices are 1-based (:mod:`tieout.model.loader`
+#: enumerates from 1), so 0 cannot collide with a real slide, and four rules that
+#: used to hardcode ``where=1`` for exactly this reason attributed their finding
+#: to slide 1 -- badging it defective, navigating to it, and ✓-ing it once
+#: "fixed" -- when nothing on that slide was wrong. ``Finding.slide_index`` reads
+#: this straight through; callers that group by slide test for it explicitly.
+DOCUMENT_LEVEL: Final[int] = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +134,10 @@ class Correction:
     counterpart_slide: int | None = None
     #: Why this figure cannot be written back, where it cannot.
     refused: str | None = None
+    #: The figure's characters in its paragraph (``address[0]`` for text,
+    #: ``cell_paragraph`` for a cell), which is what a write replaces -- never
+    #: the whole run. See :attr:`tieout.figures.Figure.span`.
+    span: tuple[int, int] | None = None
 
     @property
     def writable(self) -> bool:
@@ -161,10 +176,23 @@ class Finding:
     #: Set only by the rules that read :mod:`tieout.figures`; ``None``
     #: everywhere else, which is how the page knows not to offer a button.
     correction: Correction | None = None
+    #: A second shape this finding is about, for a rule that names two --
+    #: LO-004 reports one shape overlapping another, and ``where`` can only
+    #: ever be the one the rule leads with. ``None`` everywhere else.
+    also: ShapeRef | None = None
+    #: What this finding is about, in words that do not name a slide: the key
+    #: "this is intentional" is remembered by (PLAN.md §0). One line per
+    #: instance once findings are clustered. See :func:`default_signature`.
+    signature: str = ""
 
     @property
     def slide_index(self) -> int:
         return self.where.slide_index if isinstance(self.where, ShapeRef) else self.where
+
+    @property
+    def is_document_level(self) -> bool:
+        """A defect that is a property of the file, not of any one slide."""
+        return not isinstance(self.where, ShapeRef) and self.where == DOCUMENT_LEVEL
 
     @property
     def shape_name(self) -> str | None:
@@ -194,6 +222,26 @@ class Unchecked:
     LO-006 is the motivating case: text overflow cannot be measured without the
     actual font file, and guessing would produce confident nonsense. Recording
     the skip is the honest alternative.
+    """
+
+    rule_id: str
+    where: ShapeRef | int
+    reason: str
+
+    @property
+    def slide_index(self) -> int:
+        return self.where.slide_index if isinstance(self.where, ShapeRef) else self.where
+
+
+@dataclass(frozen=True, slots=True)
+class Excused:
+    """A position a rule would have reported, and the evidence it was chosen.
+
+    PLAN.md §0. The counterpart of :class:`Unchecked`: that one says "I could
+    not look", this one says "I looked, and the deck says this was meant". Both
+    are silences a reader is owed an account of, because a rule that stopped
+    reporting something on the strength of evidence is only as good as the
+    evidence -- and the evidence is checkable only if it is written down.
     """
 
     rule_id: str
@@ -244,6 +292,7 @@ class Rule(ABC):
 
     def __init__(self) -> None:
         self.unchecked: list[Unchecked] = []
+        self.excused: list[Excused] = []
         self.skipped_reason: str | None = None
 
     # -- the contract ------------------------------------------------------------
@@ -276,6 +325,8 @@ class Rule(ABC):
         confidence: Confidence | None = None,
         remedy: str | None = None,
         correction: Correction | None = None,
+        also: ShapeRef | None = None,
+        signature: str | None = None,
     ) -> Finding:
         """Build a finding, pulling severity, confidence and provenance from the
         profile so a rule cannot forget to.
@@ -307,10 +358,20 @@ class Rule(ABC):
             expected_provenance=provenance,
             bbox_pt=bbox_pt,
             remedy=remedy,
+            also=also,
+            signature=(
+                signature
+                if signature is not None
+                else default_signature(measured, expected, bbox_pt, message)
+            ),
         )
 
     def note_unchecked(self, where: ShapeRef | int, reason: str) -> None:
         self.unchecked.append(Unchecked(rule_id=self.id, where=where, reason=reason))
+
+    def note_excused(self, where: ShapeRef | int, reason: str) -> None:
+        """Record a position this rule read as chosen rather than reporting it."""
+        self.excused.append(Excused(rule_id=self.id, where=where, reason=reason))
 
     def skip(self, reason: str) -> list[Finding]:
         """Record that the rule cannot run and return no findings."""
@@ -324,6 +385,35 @@ class Rule(ABC):
 
 #: Highest confidence first, like :data:`SEVERITY_ORDER`.
 CONFIDENCE_ORDER: Final[dict[str, int]] = {"high": 0, "medium": 1, "low": 2}
+
+
+#: A slide reference inside a measurement or an expectation: "1,935 (slide 3)",
+#: "on slides 4 and 9". Removed from a signature, which must not name a slide.
+_SLIDE_REFERENCE: Final[re.Pattern[str]] = re.compile(
+    r"\s*\(?\bslides?\s+\d+(?:\s*(?:,|and)\s*\d+)*\)?", re.IGNORECASE
+)
+
+
+def default_signature(
+    measured: str | None,
+    expected: str | None,
+    bbox_pt: tuple[float, float, float, float] | None,
+    message: str,
+) -> str:
+    """What a finding is about, without saying which slide it is on.
+
+    The measurement, the expectation and where on the slide the shape sits, to
+    the half point. Every rule gets this unless it states its own, and the
+    rules PLAN.md §0 is about do: a figure's identity is its metric and kind,
+    not the box its table happens to be in. The message stands in only where a
+    rule gives none of the three, with slide references taken out.
+    """
+    parts = [measured or "", expected or ""]
+    if bbox_pt is not None:
+        parts.append(",".join(f"{round(value * 2) / 2:g}" for value in bbox_pt))
+    if not any(parts):
+        parts = [message]
+    return _SLIDE_REFERENCE.sub("", "|".join(parts)).strip()
 
 
 def weakest(*confidences: Confidence) -> Confidence:
@@ -438,9 +528,21 @@ def furniture_for(deck: DeckModel, profile: Profile) -> Furniture:
     return furniture
 
 
+#: Other per-deck memos, registered by the module that owns them so that one
+#: call drops every one. A memo nobody clears survives a profile edited in
+#: place, and answers the next run with the last profile's evidence.
+_OTHER_CACHES: list[Callable[[], None]] = []
+
+
+def register_cache(clear: Callable[[], None]) -> None:
+    _OTHER_CACHES.append(clear)
+
+
 def clear_caches() -> None:
     """Drop memoised state, for tests and for a process auditing many decks."""
     _FURNITURE_CACHE.clear()
+    for clear in _OTHER_CACHES:
+        clear()
 
 
 # --------------------------------------------------------------------------------------
@@ -458,6 +560,8 @@ class AuditResult:
     generated_at: str
     findings: list[Finding] = field(default_factory=list)
     unchecked: list[Unchecked] = field(default_factory=list)
+    #: Positions read as chosen rather than reported. See :class:`Excused`.
+    excused: list[Excused] = field(default_factory=list)
     rules_skipped: list[RuleSkipped] = field(default_factory=list)
     rules_run: list[str] = field(default_factory=list)
     suppressed: list[Finding] = field(default_factory=list)
@@ -597,8 +701,23 @@ def run_rules(
 
         result.rules_run.append(rule_cls.id)
         result.unchecked.extend(rule.unchecked)
+        result.excused.extend(rule.excused)
 
         for finding in findings:
+            declared = profile.intends(finding.rule_id, finding.signature)
+            if declared is not None:
+                # Declared intentional for this house style. Not dropped: an
+                # excuse with its reason, beside the evidence-based ones, so a
+                # declaration that turns out wrong is findable.
+                result.excused.append(
+                    Excused(
+                        rule_id=finding.rule_id,
+                        where=finding.where,
+                        reason="declared intentional for this house style"
+                        + (f": {declared.note}" if declared.note else ""),
+                    )
+                )
+                continue
             shape_name = (
                 finding.where.name if isinstance(finding.where, ShapeRef) else None
             )
@@ -619,6 +738,7 @@ def run_rules(
     result.findings.sort(key=lambda f: f.sort_key)
     result.rules_skipped.sort(key=lambda s: s.rule_id)
     result.unchecked.sort(key=lambda u: (u.slide_index, u.rule_id))
+    result.excused.sort(key=lambda e: (e.slide_index, e.rule_id))
     return result
 
 
@@ -725,6 +845,17 @@ def cluster_findings(
                     key=lambda s: SEVERITY_ORDER.get(s, 9),
                 ),
                 message=f"{first.message} (and {others} more on this slide)",
+                # Every instance's signature, so declaring the cluster
+                # intentional declares each shape in it, and a cluster is only
+                # excused when all of them are. See Profile.intends.
+                signature="\n".join(
+                    dict.fromkeys(
+                        line
+                        for finding in group
+                        for line in finding.signature.split("\n")
+                        if line
+                    )
+                ),
             )
         )
     return sorted(out, key=lambda f: f.sort_key)

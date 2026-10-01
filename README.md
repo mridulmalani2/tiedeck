@@ -511,7 +511,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-52 rules across six categories. Each one is an independent class — rules never
+53 rules across six categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -581,7 +581,7 @@ produce would be measured against a default the client never agreed to.
 | **HY-008** | major | on | Image effective resolution below the profile's floor | not learned; fixed behaviour |
 | **HY-009** | minor | on | Font neither embedded nor a standard system font | not learned; fixed behaviour |
 
-### Chart (5 rules)
+### Chart (6 rules)
 
 Charts get their own category because in a banking deck they carry the
 argument, and because **these expectations are not learned from a reference
@@ -607,6 +607,13 @@ switched off.
 | **CH-003** | major | on | A bar chart's value axis does not start at zero | the craft |
 | **CH-004** | major | on | A multi-series chart gives no way to tell the series apart | the craft |
 | **CH-005** | minor | on | Series in one chart label their values to different precision | the craft |
+| **CH-006** | major | on | A chart draws values its embedded workbook does not hold | the chart's own workbook |
+
+CH-006 is the one chart rule that reads data rather than presentation. A chart
+holds its values twice — the cache PowerPoint draws and the workbook it re-reads
+on **Edit Data** — and where they disagree the slide redraws itself as the
+other number the next time anyone touches it. Data linked to a file outside the
+deck is declined and listed as not checked.
 
 ### Consistency (9 rules)
 
@@ -741,6 +748,32 @@ tieout check deck.pptx --client acme \
 
 A shape-scoped acceptance stops matching if the shape is renamed, which errs
 towards reporting — the safe direction for a check.
+
+### Declaring a finding intentional for the house style
+
+An acceptance is remembered by its slide number and holds for one deck. A false
+positive that comes back on every turn of every deck is why a tool gets switched
+off, so the other kind of dismissal is remembered by what the finding is
+*about* — a position, a pair of figures — and written into the profile:
+
+```bash
+tieout check deck.pptx --client acme \
+  --intended "LO-003@slide5:Takeaway" \
+  --intended-note "the takeaway box is inset on purpose"
+```
+
+The entry names a finding on this deck the way `--accept` does; what is stored
+under `intended:` in `profiles/acme.yaml` is its signature, which never names a
+slide. It is not reported again on any deck checked against the profile, it
+survives `tieout learn` and `learn --add`, and it is listed — never silently
+dropped — under "read as intended" in every report. In the UI it is the
+**This is intentional** button beside **Set aside**, with Undo, and a list under
+House style where any declaration can be withdrawn.
+
+A declaration covers exactly what it names: a box at 493pt declared intended
+says nothing about one at 487pt, a clustered finding is covered only when every
+shape in it is, and a pair of figures declared intended speaks again the moment
+either figure changes.
 
 ---
 
@@ -1515,9 +1548,11 @@ cannot tell the last two apart will eventually wave a bad deck through.
 tieout check draft.pptx --client acme --fail-on major --quiet || exit 1
 ```
 
-For a pipeline, `--format json` gives a stable additive schema with `unchecked`
-and `rules_skipped` at the top level, so a dashboard can show what was *not*
-measured as well as what failed:
+For a pipeline, `--format json` gives a stable additive schema with `unchecked`,
+`excused` and `rules_skipped` at the top level, so a dashboard can show what was
+*not* measured, and what was read as intended, as well as what failed. Each
+finding carries a `signature` — what it is about, without the slide — which is
+the key `--intended` stores:
 
 ```bash
 tieout check draft.pptx --client acme --format json --out findings.json
@@ -1585,6 +1620,7 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
                        [--accept RULE@slideN[:Shape name]] [--accept-note TEXT]
+                       [--intended RULE@slideN[:Shape name]] [--intended-note TEXT]
                        [--fail-on blocker] [--gate-confidence medium] [--quiet]
 
 tieout rules [--client NAME]
@@ -2041,7 +2077,7 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **52 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **53 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
    tested. A fifth category, **consistency** (9 rules), is then added beyond the

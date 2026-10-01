@@ -56,7 +56,9 @@ from tieout.figures import (
     Figure,
     FigureIndex,
     build_index,
+    cell_span,
     is_specific,
+    label_kind,
     normalise_label,
     restate,
     split_period,
@@ -327,10 +329,18 @@ def _fix(stated: Figure, computed: float) -> Correction:
         address=stated.address,
         cell_paragraph=stated.cell_run[0],
         cell_run=stated.cell_run[1],
-        current=_format(stated),
+        current=_format(stated) if stated.span is None else _spanned(stated),
         replacement=restate(stated.reading, computed),
         refused=unwritable(stated),
+        span=stated.span,
     )
+
+
+def _spanned(figure: Figure) -> str:
+    """The characters the span covers, which is what a write checks before it
+    replaces them. For a table cell that is the figure without its footnote
+    marker: "480*" spans "480", and the marker is left where it is."""
+    return figure.reading.raw if figure.source == "table" else _format(figure)
 
 
 # --------------------------------------------------------------------------------------
@@ -356,9 +366,19 @@ class _DerivedRatio(Rule):
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         index = build_index(deck)
         findings: list[Finding] = []
+        unknown: set[tuple[tuple[int, int], str]] = set()
         for stated in index.figures:
             derivation = self._derivation_for(stated)
             if derivation is None:
+                if self._unrecognised(stated) and (stated.place, stated.metric) not in unknown:
+                    # PLAN.md §5.2: a labelled ratio this rule has no
+                    # derivation for. Silent, it read as "checked, and fine".
+                    unknown.add((stated.place, stated.metric))
+                    self.note_unchecked(
+                        stated.ref,
+                        f"'{stated.metric}' is labelled as a ratio, and {self.id} has "
+                        "no derivation for it, so it is not recomputed",
+                    )
                 continue
             outcome = self._check(index, stated, derivation)
             if outcome is None:
@@ -398,6 +418,20 @@ class _DerivedRatio(Rule):
         denominator: Figure,
     ) -> str:  # pragma: no cover - overridden
         raise NotImplementedError
+
+    def _unrecognised(self, figure: Figure) -> bool:
+        """A result this rule might be expected to check and cannot.
+
+        Labelled ones only -- a table row or a chart series whose own label
+        names a ratio. A multiple in a sentence is bound to whatever metric
+        sits beside it ("8.7x LTM EBITDA" binds to EBITDA, its denominator),
+        so its label says nothing about what was divided by what.
+        """
+        return (
+            figure.source != "text"
+            and figure.unit.quantity in self.quantity
+            and label_kind(figure.metric) == "ratio"
+        )
 
     def _derivation_for(self, figure: Figure) -> Derivation | None:
         if figure.unit.quantity not in self.quantity:
@@ -573,6 +607,11 @@ def _base_metric(label: str) -> str | None:
     return None
 
 
+def _names_growth(label: str) -> bool:
+    """Whether a label states a growth rate, with or without saying of what."""
+    return any(label == suffix or label.endswith(f" {suffix}") for suffix in _GROWTH_SUFFIXES)
+
+
 def _years(period: str | None) -> tuple[str, str] | None:
     """The endpoints of a period range, or None if it is not one."""
     if period is None or ".." not in period:
@@ -629,7 +668,29 @@ class GrowthDoesNotMatch(Rule):
             if stated.unit.quantity != "%":
                 continue
             base = _base_metric(stated.metric)
+            if base is None and stated.kind == "rate" and stated.source == "text":
+                # PLAN.md §0.2: "Revenue grew at a 19.6% CAGR between FY23A and
+                # FY25A" is a rate whose metric is revenue -- the kind says what
+                # the label used to have to. Read only in prose: a table row is
+                # labelled, and its label already says.
+                base = stated.metric
+                if _years(stated.period) is None:
+                    self.note_unchecked(
+                        stated.ref,
+                        f"a {base} growth rate is stated for "
+                        f"{stated.period or 'no period'} rather than a span, so there "
+                        "are no endpoints to recompute it from",
+                    )
+                    continue
             if base is None:
+                if _names_growth(stated.metric):
+                    # PLAN.md §5.2: a bare "CAGR" names no series, and
+                    # returning None here looked exactly like a CAGR that tied.
+                    self.note_unchecked(
+                        stated.ref,
+                        f"'{stated.metric}' names no metric, so there is no series to "
+                        "recompute the rate from",
+                    )
                 continue
             outcome = self._check(index, stated, base)
             if outcome is None:
@@ -811,16 +872,22 @@ class BridgeDoesNotCarry(Rule):
         """
         cell = shape.table.cell(*closing.address) if shape.table is not None else None
         reading = parse_number(cell.text) if cell is not None else None
-        if reading is None:
+        if cell is None or reading is None:
             return None
+        placed = cell_span(cell.paragraphs, reading.raw)
         return Correction(
             kind="fix",
             source="table",
             shape_id=shape.ref.shape_id,
             uid=shape.ref.uid,
             address=closing.address,
-            current=cell.text.strip() if cell is not None else "",
+            cell_paragraph=placed[0] if placed is not None else 0,
+            current=reading.raw if placed is not None else cell.text.strip(),
             replacement=restate(reading, computed),
+            span=placed[1] if placed is not None else None,
+            refused=(
+                None if placed is not None else "the closing figure could not be placed in its cell"
+            ),
         )
 
     def _series(self, shape: ShapeModel) -> list[_Step] | None:
@@ -841,7 +908,7 @@ class BridgeDoesNotCarry(Rule):
                 for position, category in enumerate(chart.categories)
                 if position < len(values) and (value := values[position]) is not None
             ]
-            return plotted if self._has_ends(plotted) else None
+            return plotted if self._has_ends(plotted, shape) else None
 
         table = shape.table
         if table is None or table.row_count < 4 or table.column_count < 2:
@@ -864,14 +931,33 @@ class BridgeDoesNotCarry(Rule):
                     (row, 1),
                 )
             )
-        return out if self._has_ends(out) else None
+        return out if self._has_ends(out, shape) else None
 
-    def _has_ends(self, series: Sequence[_Step]) -> bool:
+    def _has_ends(self, series: Sequence[_Step], shape: ShapeModel | None = None) -> bool:
         if len(series) < _MIN_STEPS + 2:
             return False
-        if _marks(series[0].label, _OPENING) and _marks(series[-1].label, _CLOSING):
+        opens = _marks(series[0].label, _OPENING)
+        closes = _marks(series[-1].label, _CLOSING)
+        if opens and closes:
             return True
-        return self._spans_two_periods(series)
+        if self._spans_two_periods(series):
+            return True
+        if shape is not None and opens != closes:
+            # PLAN.md §5.2's "nearly": one end names itself as an end and the
+            # other does not. Not reported -- a table that is not a bridge must
+            # stay silent, and "Opening cash | ... | Net debt" may be exactly
+            # that -- but recorded, because a bridge whose closing row says
+            # "FY25A" and not "Closing" otherwise passes without a word.
+            named, other = (
+                ("first", "last") if opens else ("last", "first")
+            )
+            self.note_unchecked(
+                shape.ref,
+                f"the {named} row reads as a bridge's "
+                f"{'opening' if opens else 'closing'}, but the {other} does not name "
+                "the other end, so the steps were not added up",
+            )
+        return False
 
     def _spans_two_periods(self, series: Sequence[_Step]) -> bool:
         """A bridge whose ends are named by their periods rather than by a word.

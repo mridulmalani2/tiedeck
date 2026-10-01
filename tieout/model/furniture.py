@@ -558,6 +558,20 @@ def _boilerplate(
             normalise_text(entry.text): ()
             for entry in profile.brand.footer.boilerplate
         }
+        # A drawn logo's own monogram or wordmark is repeated text too, and is
+        # excluded from content by ``_lockup_plates`` rather than by anything
+        # here -- but that exclusion runs on ``by_slide.plate``, which this
+        # function supplies. Leave it out and a check pass no longer knows the
+        # monogram repeats, the plate/wordmark grouping never forms, and the
+        # mark gets measured as an ordinary shape against every rule that
+        # excludes furniture. ``footer.boilerplate`` itself does not carry it:
+        # a one-character monogram is not required *boilerplate text* (BR-010),
+        # it is *chrome*, and the two are different findings about the same
+        # string.
+        if profile.brand.logo is not None:
+            declared.update(
+                {normalise_text(text): () for text in profile.brand.logo.lockup_text}
+            )
         if declared:
             occurrences: dict[str, list[int]] = {key: [] for key in declared}
             for slide in deck.slides:

@@ -59,6 +59,7 @@ from tieout.model.inherit import (
 )
 from tieout.model.package import PackageInfo, load_package
 from tieout.model.units import emu_to_pt, ooxml_angle_to_degrees
+from tieout.model.workbook import read_range
 
 #: Default text-frame insets in points, as PowerPoint applies them when ``a:bodyPr``
 #: omits them. 0.1 inch left/right, 0.05 inch top/bottom.
@@ -109,6 +110,7 @@ def load_deck(path: str | Path, *, classify: bool = True) -> DeckModel:
         presentation = Presentation(str(path))
     except Exception as exc:
         raise DeckLoadError(f"cannot open {path.name} as a PowerPoint package: {exc}") from exc
+    _THEME_CACHE.clear()
 
     width_pt = emu_to_pt(presentation.slide_width) or 0.0
     height_pt = emu_to_pt(presentation.slide_height) or 0.0
@@ -189,7 +191,14 @@ def _build_context(slide: Any, default_text_style: etree._Element | None) -> Sli
     )
 
 
-_THEME_CACHE: dict[int, Theme] = {}
+#: ``id(part)`` -> ``(part, theme)``. The part is held beside its theme and
+#: checked on every hit: CPython reuses the address of a collected object, so
+#: keyed on the address alone a deck loaded after another one resolved its
+#: fonts from the *other* deck's theme -- one run's Calibri read as Gill Sans MT
+#: on CI, depending only on test order. Holding the part also keeps its address
+#: from being reused while the entry exists, and :func:`load_deck` empties the
+#: cache on every load so it cannot grow without bound in a long-running server.
+_THEME_CACHE: dict[int, tuple[Any, Theme]] = {}
 
 
 def _theme_for(master: Any) -> Theme:
@@ -200,13 +209,13 @@ def _theme_for(master: Any) -> Theme:
     """
     key = id(master.part)
     cached = _THEME_CACHE.get(key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is master.part:
+        return cached[1]
     theme = Theme.empty()
     with contextlib.suppress(KeyError, AttributeError, etree.XMLSyntaxError, ValueError):
         theme_part = master.part.part_related_by(RT.THEME)
         theme = Theme.parse(theme_part.blob)
-    _THEME_CACHE[key] = theme
+    _THEME_CACHE[key] = (master.part, theme)
     return theme
 
 
@@ -1246,6 +1255,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
     title_text = _chart_text(title_el) if title_el is not None else None
     has_title = title_el is not None and not title_deleted and bool(title_text)
 
+    xlsx, missing = _embedded_workbook(shape)
     series: list[ChartSeries] = []
     for ser in root.findall(".//c:ser", _CHART_NS):
         name_el = ser.find("c:tx", _CHART_NS)
@@ -1269,6 +1279,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
                 fill_hex=_series_fill(ser, context),
                 has_data_labels=_labels_shown(labels, inherited),
                 label_number_format=_label_format(labels) or _label_format(inherited),
+                **_workbook_side(ser, xlsx, missing),
             )
         )
 
@@ -1452,6 +1463,37 @@ def _every_point_overrides(ser: etree._Element) -> bool:
     ]
     declared = max(counts, default=0)
     return declared > 0 and len(overrides) >= declared
+
+
+def _embedded_workbook(shape: Any) -> tuple[bytes | None, str]:
+    """The chart's embedded workbook, or None and why there is none."""
+    try:
+        part = shape.chart.part.chart_workbook.xlsx_part
+    except (AttributeError, KeyError, ValueError):
+        part = None
+    if part is None:
+        return None, (
+            "the chart has no embedded workbook -- its data is linked to a file "
+            "outside the deck, which TieOut does not open"
+        )
+    return bytes(part.blob), ""
+
+
+def _workbook_side(
+    ser: etree._Element, xlsx: bytes | None, missing: str
+) -> dict[str, Any]:
+    """The series' workbook range and what the workbook holds there.
+
+    Nothing for a series of literal values: those have no workbook to disagree
+    with, and saying "not checked" for them would be noise.
+    """
+    formula = ser.findtext("c:val/c:numRef/c:f", namespaces=_CHART_NS)
+    if not formula:
+        return {}
+    if xlsx is None:
+        return {"workbook_ref": formula, "workbook_note": missing}
+    values, note = read_range(xlsx, formula)
+    return {"workbook_ref": formula, "workbook_values": values, "workbook_note": note}
 
 
 def _series_values(ser: etree._Element) -> tuple[float | None, ...]:

@@ -24,7 +24,7 @@ from pptx.util import Emu, Pt
 from tieout.model.loader import load_deck
 from tieout.rules.base import clear_caches, run_rules
 
-CHART_RULE_IDS = ("CH-001", "CH-002", "CH-003", "CH-004", "CH-005")
+CHART_RULE_IDS = ("CH-001", "CH-002", "CH-003", "CH-004", "CH-005", "CH-006")
 
 
 @pytest.fixture(autouse=True)
