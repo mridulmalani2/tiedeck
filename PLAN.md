@@ -15,6 +15,105 @@ affordances, findings that named no object, the report's confidentiality and
 polish, five wording fixes, and the great majority of the interaction/state
 group. §11's own text carries what is still open.
 
+**Amended again, 2026-10-01.** §0 is new and comes before everything in §7: a
+problem the queue did not name, which decides whether the product is usable.
+
+---
+
+## 0. The missing dimension — before anything in §7
+
+**Every false positive in the latest demo was one defect, and it is not a
+threshold.** Three of them, from a real run:
+
+- A deck said "64% of revenue is recurring" on one slide and "9% revenue
+  growth" on another. CO-001 reported them as a mismatch. Both are correct, and
+  neither restates the other. Reproduced: both index as
+  `revenue / FY2025A / %` and become one fact stated two ways.
+- A decorative shape bled off the slide edge on purpose. LO-001 reported it.
+- A text box sat off the learned grid exactly where the designer put it. LO-003
+  reported it.
+
+The index carries metric, scope, period and unit. It carries nothing for **what
+kind of claim a figure makes**. "64% of revenue" is a share of a base; "9%
+revenue growth" is a change in that base; "24.8% EBITDA margin" is a ratio to
+it. All three fold to metric `revenue`, quantity `%`, and become candidates to
+compare. The layout rules have the same hole: a shape's position carries no
+record of whether anything in the deck suggests the position was chosen.
+
+With no vocabulary for telling these apart, the only lever left is a confidence
+threshold — and a threshold can only trade false positives against silence.
+That is why it felt unattackable. It is a missing dimension, not a tuning
+problem.
+
+**What is built against it, in this order** (the measurement moved first: a
+baseline taken after the change it measures is not a baseline):
+
+1. **Precision as a gate.** A corpus of real-shaped decks with *known* defects
+   and *known* intentional oddities, scoring every tie-out and layout rule on
+   recall and on false positives. Until that number existed every decision in
+   this section was taste. `tests/corpus/`, §0.1.
+2. **A `kind` on every figure** — level, share, change, rate, ratio, count —
+   read from the words around it and from the label, never guessed. Two figures
+   of different kinds are never the same fact, and `comparable()` refuses them
+   before any value is looked at. A figure whose kind cannot be read is not
+   compared, and says so.
+3. **Evidence of intent as a first-class field on a shape** — repeated across
+   slides, aligned to a consistent line the profile did not learn, encoding a
+   value, decorative with no text — unifying the fragments that existed
+   (`data_mark_uids`, furniture detection, the structural bleed) rather than
+   re-deriving them.
+4. **"This is intentional", written to the profile.** A false positive
+   dismissed once, by a signature that does not depend on slide position, never
+   fires again for that house style. One that returns every run is why tools
+   get switched off.
+
+**The trade, stated before it is measured.** Item 2 will make some
+currently-caught defects go quiet: a percentage with no word saying what kind it
+is stops being compared at all. That is the cost of the dimension, and §0.1
+records what it cost rather than arguing it.
+
+### 0.1 The measurement
+
+`tests/corpus.py` builds 16 cases from code: Marlin (§10's deck) clean and once
+per tie-out rule with that rule's defect seeded; the generator's clean and dirty
+reference decks, the dirty one checked against a profile *learned* from the
+clean one; **Heron**, twelve slides of prose against one P&L carrying the demo's
+kind collisions and four same-kind contradictions; **Osprey**, a house style and
+a later deck in it carrying the demo's bleed and off-grid cases beside real
+layout defects; and Kestrel, the real-world constructions deck. Scored over
+CO-001…CO-009 and LO-001…LO-003. `tests/test_precision.py` pins the exact list
+of misses and of false positives, so any change in either direction fails until
+this section and that file are updated together. `python -m tests.corpus`
+prints the table.
+
+Every unlabelled finding on the dirty reference deck was traced by hand to
+another rule's seed seen from a second angle (TY-006's stray decimal makes the
+chart and table genuinely disagree; HY-008's low-resolution logo stops being
+recognised as the logo) and is labelled `echo`: true, not this rule's catch, not
+scored.
+
+| Measured | Defects | Caught | Recall | False positives |
+| --- | --- | --- | --- | --- |
+| Baseline, before §0 items 2–4 | 28 | 27 | 96% | 9 |
+| CO-001 examines every period (below) | 28 | 28 | 100% | 9 |
+
+The baseline's nine false positives are exactly the demo's three, each
+reproduced three ways: CO-001 on a share against a change, a change against a
+share of a base, and a change in revenue against revenue; LO-001 at `info` on a
+decorative oval on the cover and on two dividers; LO-003 on one takeaway box set
+3.5pt inside its column on three slides.
+
+**The corpus found a silence nobody was looking for.** The one miss is not a
+threshold either: CO-001 stops examining a metric the moment its earliest
+statement produces one disagreement — across *every period*, not its own. So
+"64% … in FY25A" against "9% … in FY25A" disagreeing hid "Revenue grew 17% in
+FY24A" against "15% revenue growth in FY24A" entirely. The same shape is
+reachable on any deck where a figure with no period disagrees with an early
+table cell: every later contradiction under that metric goes quiet. Fixed: every
+figure not already weighed against an earlier baseline is a baseline of its own,
+held by `test_a_contradiction_in_one_period_does_not_hide_one_in_another`, which
+fails on the previous code.
+
 ---
 
 ## 1. The one-sentence version
@@ -281,6 +380,8 @@ safe direction and costs findings.
 
 ## 7. Order of work
 
+0. **The missing dimension** (§0) — before everything below. Precision corpus
+   first, then `kind`, then intent evidence, then "this is intentional".
 1. ~~**Drive the tie-out against a real deck** (5.1).~~ **Done** — §10. It found
    a crash, four false positives and five silences, and everything below is
    ordered by what it turned up.
