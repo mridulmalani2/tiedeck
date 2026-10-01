@@ -110,8 +110,10 @@ __all__ = [
     "Kind",
     "Unit",
     "build_index",
+    "case_scope",
     "cell_span",
     "comparable",
+    "is_case_scope",
     "is_specific",
     "label_kind",
     "normalise_label",
@@ -243,6 +245,31 @@ def normalise_label(text: str) -> str:
 def is_specific(label: str) -> bool:
     """Whether a label identifies a metric well enough to compare on."""
     return bool(label) and label not in GENERIC_LABELS and len(label) > 2
+
+
+#: The words a valuation or sensitivity table heads its cases with. Closed on
+#: purpose: a table is turned on its side only where *every* value column is
+#: one of these, so a heading nobody listed leaves the table read as it was.
+CASE_WORDS: Final[frozenset[str]] = frozenset(
+    {"low", "mid", "high", "bear", "base", "bull", "downside", "upside", "min", "max"}
+)
+
+
+def case_scope(label: str) -> str | None:
+    """The scope a case column gives its figures -- "Low" and "Low case" are
+    both ``"low case"`` -- or ``None`` where the label is not a case.
+
+    Spelled with "case" so it can never be read as the comparables row of the
+    same name: a "Low" row is a statistic of the companies above it, and a
+    "Low" column is a whole scenario.
+    """
+    word = label.removesuffix(" case")
+    return f"{word} case" if word in CASE_WORDS else None
+
+
+def is_case_scope(scope: str) -> bool:
+    """Whether ``scope`` is one :func:`case_scope` gave."""
+    return case_scope(scope) == scope
 
 
 # --------------------------------------------------------------------------------------
@@ -1154,8 +1181,37 @@ class FigureIndex:
             # derivation that needed FY25A revenue refused.
             and figure.kind == "level"
         ]
+        shared = False
+        if (
+            not matching
+            and is_case_scope(scope)
+            and any(f.scope == scope and f.kind == "level" for f in self.figures)
+        ):
+            # A case states its own enterprise value and borrows the company's
+            # EBITDA: "Mid" is a valuation of one business, not a different
+            # business. So a case with no figure of its own takes the unscoped
+            # one -- the nearest place stating exactly one value, never a wider
+            # place over a nearer one that is ambiguous (see the tiers below).
+            #
+            # Only a case that states some level of its own. "EV/EBITDA | Min |
+            # Max" is a range across the peers, with nothing of its own to
+            # value: borrowing there divides the *target's* EV by its EBITDA
+            # and reports the peers' minimum for not equalling it.
+            shared = True
+            matching = [
+                figure
+                for figure in self.figures
+                if figure.metric in wanted
+                and not figure.scope
+                and figure.unit.quantity is None
+                and figure.kind == "level"
+            ]
         candidates = _one_currency(
-            [figure for figure in matching if figure.period == period]
+            [
+                figure
+                for figure in matching
+                if figure.period == period or (shared and period_optional)
+            ]
         )
         if not candidates and period_optional and scope:
             # A comparables row states an undated EV and an LTM EBITDA, and the
@@ -1174,6 +1230,12 @@ class FigureIndex:
             if not tier:
                 continue
             values = {round(figure.reading.value, 6) for figure in tier}
+            if len(values) > 1 and shared:
+                return (
+                    f"{scope} states no {' or '.join(sorted(wanted))} of its own, "
+                    "and the nearest one it could borrow is stated more than one "
+                    "way, so there is no single figure to compute from"
+                )
             if len(values) > 1:
                 return (
                     f"{' or '.join(sorted(wanted))} is stated more than one way for "
@@ -1535,6 +1597,17 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
         for column in range(1, table.column_count)
     ]
     columns_are_the_period_axis = bool(dated) and all(dated)
+    # A valuation table heads its columns "Low | Mid | High": each column is a
+    # scenario, and each row the metric stated under it. Read the comparables
+    # way, the case became the metric and "Enterprise value" the scope, so its
+    # "Implied EV/EBITDA" row was never found as a multiple at all (PLAN.md
+    # §5.2). Only where every value column is a case, and there are at least
+    # two of them: one column headed "High" is more likely something else.
+    cases = {
+        column: case_scope(headers.get(column, ""))
+        for column in range(1, table.column_count)
+    }
+    columns_are_cases = len(cases) >= 2 and all(cases.values())
     header_units = {
         column: stated_unit(cell.text)
         for column in range(table.column_count)
@@ -1585,7 +1658,9 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
             # row under a generic label where nothing could ever match it. Where
             # the other axis is generic, the naming axis keeps what is left of
             # itself once the period is taken out.
-            if row_period is not None and column_period is None:
+            if columns_are_cases:
+                metric, scope, period = row_metric, cases[column] or "", row_period
+            elif row_period is not None and column_period is None:
                 metric = column_metric if is_specific(column_metric) else row_metric
                 scope, period = "", row_period
             elif column_period is not None and row_period is None:

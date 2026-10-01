@@ -76,6 +76,11 @@ TIE_OUT_RULES = (
     "CO-005", "CO-006", "CO-007", "CO-008", "CO-009",
 )
 
+#: A second CO-005 seed, on the valuation table's Mid case rather than a
+#: comparables row: a Low/Mid/High table's implied multiples were never
+#: recomputed until the table was read the right way up (PLAN.md §5.2).
+VALUATION_MULTIPLE = "CO-005-valuation"
+
 
 # --------------------------------------------------------------------------------------
 # Building a deck in the shape of a real one
@@ -278,7 +283,7 @@ def build(path: Path, *, defect: str | None = None) -> Path:
     _table(valuation, 36, 120, 600, [
         ["Valuation ($m)", "Low", "Mid", "High"],
         ["Enterprise value", "3,840", "4,180", "4,560"],
-        ["Implied EV/EBITDA", "8.0x", "8.7x", "9.5x"],
+        ["Implied EV/EBITDA", "8.0x", seed(VALUATION_MULTIPLE, "8.7x", "9.7x"), "9.5x"],
         ["Implied equity value", "3,210", "3,550", "3,930"],
     ], "Valuation")
     _text(valuation, 36, 330, 880, 20,
@@ -540,6 +545,40 @@ def test_a_segment_table_is_scoped_by_its_own_corner_cell(index) -> None:
     }
     assert scoped[("revenue", "", "FY2025A")] == 1935.0
     assert scoped[("revenue", "analytics", "FY2025A")] == 1196.0
+
+
+def test_a_case_table_is_read_with_the_case_as_its_scope(index) -> None:
+    """"Valuation ($m) | Low | Mid | High": the row is the metric and the case
+    is the scope. The other way up, the case was the metric and "Implied
+    EV/EBITDA" a scope, and CO-005 never saw a multiple to recompute."""
+    mid = {
+        f.metric: (f.period, f.reading.value)
+        for f in index
+        if f.slide_index == 7 and f.scope == "mid case"
+    }
+    assert mid == {
+        "enterprise value": (None, 4180.0),
+        "implied ev ebitda": (None, 8.7),
+        "implied equity value": (None, 3550.0),
+    }
+
+
+def test_a_wrong_implied_multiple_in_a_case_is_reported(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The Mid case's 9.7x, against 4,180 over the LTM EBITDA of $480m the
+    slide states -- the case states no EBITDA of its own and borrows the one
+    nearest it."""
+    path = build(
+        tmp_path_factory.mktemp("marlin-valuation") / "marlin.pptx",
+        defect=VALUATION_MULTIPLE,
+    )
+    clear_caches()
+    deck = load_deck(str(path))
+    profile = learn_from_decks([deck], "marlin").profile
+    result = run_rules(deck, profile, include=["CO-005"])
+    assert [(f.slide_index, f.measured) for f in result.findings] == [(7, "9.7x")]
+    assert "over ebitda $480m (slide 7)" in result.findings[0].message
 
 
 def test_a_comparables_row_is_indexed_one_way_up(index) -> None:

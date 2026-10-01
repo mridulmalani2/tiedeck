@@ -81,7 +81,8 @@ records what it cost rather than arguing it.
 ### 0.1 The measurement
 
 `tests/corpus.py` builds 16 cases from code: Marlin (§10's deck) clean and once
-per tie-out rule with that rule's defect seeded; the generator's clean and dirty
+per tie-out rule with that rule's defect seeded, plus once with a wrong
+implied multiple in its valuation table's Mid case (§5.2); the generator's clean and dirty
 reference decks, the dirty one checked against a profile *learned* from the
 clean one; **Heron**, twelve slides of prose against one P&L carrying the demo's
 kind collisions and four same-kind contradictions; **Osprey**, a house style and
@@ -104,6 +105,7 @@ scored.
 | CO-001 examines every period (below) | 28 | 28 | 100% | 9 |
 | `kind` on every figure (§0.2) | 28 | 27 | 96% | 6 |
 | Intent evidence on every shape (§0.3), with its twin added | 29 | 27 | 93% | 0 |
+| A case table read the right way up (§5.2), with its seed added | 30 | 28 | 93% | 0 |
 
 The baseline's nine false positives are exactly the demo's three, each
 reproduced three ways: CO-001 on a share against a change, a change against a
@@ -298,8 +300,10 @@ of those, reading something
 other than a table               6      CO-001 (prose, charts), CO-004…CO-008
 figures indexed, clean deck     57      46 table, 11 chart, 0 prose
 figures indexed, §10 corpus     72      58 table, 11 text, 3 chart
-tests                        1,714      6 skipped
+tests                        1,862      6 skipped (2026-10-01)
 ```
+
+Every line but the last was measured 2026-09-23 and has not been retaken.
 
 The second figure line is the one that matters. The reference decks index no
 prose at all — their only candidate was a year — so every prose path in the
@@ -417,14 +421,40 @@ CAGR in prose stays silent).
   revenue over that span, and CO-006 recomputes it; a rate in prose stated for
   one period rather than a span is declined.
 
-**Found while doing it, not fixed:** the Marlin valuation table ("Valuation
-($m) | Low | Mid | High") is indexed with the *case* as the metric — Low, Mid,
-High — and the row as the scope, so its "Implied EV/EBITDA" row is invisible
-to CO-005 and nothing records that. Turning it the right way up is an index
-orientation change (a case column is a scope, not a metric), and doing it
-alone only converts the silence into a refusal: the row's EBITDA is unscoped
-and the case-scoped lookup will not find it. Both halves are the next change
-to `figures.py`, and §10's corpus is where to check it.
+**Found while doing it, and fixed 2026-10-01:** the Marlin valuation table
+("Valuation ($m) | Low | Mid | High") was indexed with the *case* as the
+metric and the row as the scope, so its "Implied EV/EBITDA" row was invisible
+to CO-005 and nothing recorded that. Three changes, all needed:
+
+- **Orientation.** Where every value column (at least two) is a case word —
+  low, mid, high, bear, base, bull, downside, upside, min, max, alone or
+  followed by "case" — the row is the metric and the case the scope, spelled
+  `"mid case"` so CO-005's statistics guard cannot read a Low *column* as a
+  comparables Low *row*. The list is closed on purpose: "Management case" or
+  "Sponsor case" leave the table read as before.
+- **Borrowing.** A case with no figure of its own for an input takes the
+  unscoped one, nearest first: the same table, then the slide, then the deck,
+  and the first place stating any must state exactly one value or the
+  multiple is declined in words. Marlin's Mid case borrows the slide's "LTM
+  EBITDA of $480m"; a valuation slide stating no EBITDA, in a deck stating
+  FY24A and FY25A, is declined. Only a case stating some level of its own
+  borrows: "EV/EBITDA | Min | Max" is a range across the peers, and
+  borrowing there divided the *target's* EV by its EBITDA and reported the
+  peers' minimum — a false positive caught by its own test before it shipped.
+- **Vocabulary.** "Implied EV/EBITDA" had no derivation; an "implied" prefix
+  now means the same division.
+
+`tests/test_case_tables.py` and two Marlin tests; five fail on the previous
+code (the peer range among them, which was silent there rather than
+declined), and the two guards — one "High" column, a half-case header — pass
+on both. The corpus gained a seed — Mid at 9.7x — and catches it.
+
+**What it costs and does not cover.** "Enterprise value" is now a metric the
+deck's tables use, so a prose "enterprise value of $4,180m" is indexed — but
+unscoped, so it is never compared with any case's EV; a prose EV that
+contradicts the Mid case is still silent. It also takes the period next to it
+("LTM", from "8.7x LTM EBITDA"), which an EV does not have. Neither produced a
+finding on the corpus.
 
 The account as it stood before:
 
@@ -603,6 +633,16 @@ safe direction and costs findings.
 7. ~~**§11's remainder**~~ **Done, re-driven in Chromium** — and the
    re-drive found three defects nobody had listed, one of them PR #11's own
    (§11).
+8. ~~**A case table's implied multiples**~~ **Done** — the silence §5.2 found
+   while closing the others. Read the right way up, with a case-scoped
+   lookup, and seeded in the corpus.
+9. **One real client deck through the corpus scoring — next.** Every number
+   in §0.1 comes from built decks. Two counts to take: KPI tables of bare
+   percentages (§0.2: never compared) and mistakes copied onto several slides
+   (§0.3: read as intended). The same pass answers §5.5's open question —
+   whether decks state a fiscal year-end in a way worth reading — and whether
+   case headings beyond §5.2's closed list are common. Aggregate counts only
+   in this file; the deck stays out of the repository.
 
 ---
 
@@ -641,9 +681,10 @@ deck. None of them were visible to any test that existed before the rule did.
 
 **Quote a number with the conditions it was measured under.**
 
-The gate is `ruff` **and** `mypy` **and** `pytest` (85% floor, 1,714 tests as at
-2026-09-23; 1,686 before §10 added 22 and the merge with the corrections branch
-brought the rest).
+The gate is `ruff` **and** `mypy` **and** `pytest` (85% floor; 1,862 tests as at
+2026-10-01, 6 skipped, without coverage in about 7 minutes; 1,714 as at
+2026-09-23). `addopts` already carries `-q`, so a second `-q` hides the summary
+line: count with `pytest --collect-only | tail -1`.
 
 ```
 .venv/bin/ruff check . && .venv/bin/mypy . && .venv/bin/python -m pytest
@@ -692,10 +733,11 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
 * **Prose gives up a figure rather than guess what it measures.** A number in a
   sentence is indexed only where a metric the deck's tables use sits immediately
   before or after it, or where an earlier figure in the same sentence is so
-  bound and this one is the same quantity at the same scale. "An enterprise
-  value of $4,180m" is therefore not indexed at all, because "enterprise value"
-  is a scope in that deck and not a metric. That is the intended direction:
-  §10 #3 is what the other one costs.
+  bound and this one is the same quantity at the same scale. Until §5.2's case
+  tables, "An enterprise value of $4,180m" was not indexed at all, because
+  "enterprise value" was a scope in that deck and not a metric; it is now
+  indexed, unscoped, and compared with nothing (§5.2). That is the intended
+  direction: §10 #3 is what the other one costs.
 * **CO-005 refuses on a statistics row** — median, mean, average, high, low and
   their kin — because the arithmetic relating the columns does not hold across
   one. "Total" and "sum" are deliberately not in that set: a total row is

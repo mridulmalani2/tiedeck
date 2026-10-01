@@ -44,6 +44,7 @@ from tests.test_real_world_figures import (
     GREY,
     NAVY,
     TIE_OUT_RULES,
+    VALUATION_MULTIPLE,
     _blank,
     _chrome,
     _deck,
@@ -566,6 +567,10 @@ CASES: tuple[Case, ...] = (
         Case(f"marlin-{rule_id}", _marlin(rule_id), (rule_id,), (_seeded_marlin_label(rule_id),))
         for rule_id in TIE_OUT_RULES
     ),
+    Case("marlin-valuation", _marlin(VALUATION_MULTIPLE), ("CO-005",),
+         (Label("CO-005", 7, "defect",
+                "marlin's Mid case states 9.7x, and 4,180 over the $480m LTM EBITDA "
+                "the slide states is 8.7x"),)),
     Case("reference-clean", _reference("clean"), (*TIE_OUT_RULES, *LAYOUT_RULES)),
     Case("reference-dirty", _reference("dirty"), (*TIE_OUT_RULES, *LAYOUT_RULES),
          _reference_labels()),
