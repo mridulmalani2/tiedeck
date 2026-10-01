@@ -17,6 +17,12 @@ group. §11's own text carries what is still open.
 
 **Amended again, 2026-10-01.** §0 is new and comes before everything in §7: a
 problem the queue did not name, which decides whether the product is usable.
+It is built — precision measured and gated, `kind` on every figure, evidence of
+intent on every shape, "this is intentional" written to the profile — and so is
+the rest of §7: §5.2–§5.5 and §11's remainder, the last re-driven in a real
+browser. That re-drive found three defects no list had, one of them PR #11's
+own; and §5.3 turned out to be hiding a worse one (every derived Fix it in
+prose overwrote the whole sentence).
 
 ---
 
@@ -232,7 +238,8 @@ one-off, and the House style list is where to see which it was.
 **The tie-out now reads figures wherever the deck states them, and it still
 cannot read a sentence.**
 
-Nine consistency rules, all reading one figure index. Three of them compare a
+Nine consistency rules, all reading one figure index, and since §0 every figure
+in it knows what kind of claim it makes. Three of them compare a
 figure with another statement of it — including a headline contradicting the
 table under it, and a chart contradicting the table beside it. Four recompute a
 figure the deck's own numbers determine. Two report how a figure is told rather
