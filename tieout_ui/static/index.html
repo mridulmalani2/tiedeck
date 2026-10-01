@@ -319,6 +319,14 @@
     font-size: var(--t-xs); color: var(--ink-4);
   }
   .note-head b { color: var(--ink-3); font-weight: 500; }
+  /* PLAN.md §0: what was read as intended, listed rather than hidden. */
+  details.excused {
+    padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line);
+    font-size: var(--t-xs); color: var(--ink-3);
+  }
+  details.excused summary { cursor: pointer; }
+  details.excused .inst { padding: var(--s1) 0; color: var(--ink-4); cursor: pointer; }
+  details.excused .inst .at { color: var(--ink-3); }
 
   .modes {
     display: flex; gap: var(--s4); padding: 0 var(--s5);
@@ -975,7 +983,7 @@ if (location.search) history.replaceState(null, "", location.pathname);
 
 const TOKEN = "__TIEOUT_TOKEN__";
 const S = {
-  deck: null, client: null, profile: null, audit: null, plan: null,
+  deck: null, client: null, profile: null, audit: null, plan: null, clients: [],
   // What the last preview showed, named by the digest the server issued for it.
   // The check request echoes the digest back, and the server refuses it if the
   // deck or the term list has moved since — so a stale preview cannot approve a
@@ -1100,6 +1108,12 @@ async function upload(file) {
   try { S.deck = await api("/api/decks", { method: "POST", form }); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
   busy("");
+  attachDeck();
+}
+
+// Everything that follows S.deck changing to a deck the server holds -- a
+// fresh upload, or the same deck re-attached after a reload (#18).
+function attachDeck() {
   // A new deck invalidates everything measured about the last one. Leaving the
   // tally up made the status bar read "16 blocker" under a deck that had not
   // been checked -- and leaving the chip up (the audit's #42) said "Profile:
@@ -1127,6 +1141,43 @@ async function upload(file) {
   loadClients();
   pollThumbs();
   pollDraft();
+  remember();
+}
+
+// The audit's #18: reloading the page stranded the deck and every correction
+// made to it on the server, with "No deck open" and no way back. The server
+// already kept all of it -- the working copy, the log, what was set aside --
+// so what was missing was this tab remembering which deck it had open and
+// against which house style. Per tab, and gone when the tab closes: the server
+// deletes the deck when it stops, and a later tab finding a stale id simply
+// starts afresh.
+const SESSION_KEY = "tieout.session";
+function remember() {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      deck_id: S.deck ? S.deck.deck_id : null, client: S.client || null, checked: !!S.audit,
+    }));
+  } catch (_) { /* storage blocked: a reload starts afresh, as it always did */ }
+}
+
+async function reattach() {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return; }
+  if (!saved || !saved.deck_id) return;
+  try { S.deck = await api(`/api/decks/${encodeURIComponent(saved.deck_id)}`); }
+  catch (_) { try { sessionStorage.removeItem(SESSION_KEY); } catch (__) {} return; }
+  attachDeck();
+  if (saved.client) {
+    try { S.profile = await api(`/api/profiles/${encodeURIComponent(saved.client)}`); }
+    catch (_) { return paneMessage("warn", `Reopened ${S.deck.filename}, but the ${
+      saved.client} profile could not be loaded. Choose a house style on the Deck tab.`); }
+    S.client = saved.client; onProfile();
+    remember();
+    if (saved.checked) await $("check").onclick();
+  }
+  const kept = (S.audit && S.audit.applied && S.audit.applied.length) || 0;
+  paneMessage("good", `Reopened ${S.deck.filename} as it stood before the reload${
+    kept ? `, with its ${kept} correction${kept === 1 ? "" : "s"}` : ""}.`);
 }
 
 // The house style is derived the moment the deck lands, not when someone asks
@@ -1176,6 +1227,7 @@ async function loadClients() {
   // because of case-sensitive ordering. One click on "Use this profile"
   // audited the deck against the wrong house style, silently (the audit's
   // #30). The placeholder is disabled so it can never itself be chosen.
+  S.clients = d.clients;
   $("client").innerHTML = `<option value="" disabled selected>Choose a profile…</option>`
     + d.clients.map((c) => `<option>${esc(c)}</option>`).join("");
   $("useclient").disabled = !d.clients.length;
@@ -1194,7 +1246,12 @@ function setMode(mode) { S.mode = mode; deckPanel(); }
 
 $("pick-existing").onclick = async () => {
   await loadClients();
-  if (!$("client").options.length || !$("client").value)
+  // Counted, not read from the selection: since nothing is pre-selected
+  // (#30), the select's value is always empty here, and testing it refused
+  // every deck the existing-profile path -- the main one -- with "No client
+  // has been onboarded yet" while the list held two. Found by driving the page,
+  // not by reading it.
+  if (!S.clients.length)
     return paneMessage("warn",
       "No client has been onboarded yet. Use Create profile to learn one from an approved deck.");
   clearFlash(); setMode("existing"); $("client").focus();
@@ -1205,7 +1262,7 @@ $("back-new").onclick = () => setMode(null);
 
 $("useclient").onclick = async () => {
   const c = $("client").value;
-  if (!c) return;
+  if (!c) { paneMessage("warn", "Choose a profile from the list first."); return $("client").focus(); }
   busy(`Loading ${c}`);
   try { S.profile = await api(`/api/profiles/${encodeURIComponent(c)}`); }
   catch (e) { busy(""); return paneMessage("bad", e.message); }
@@ -1238,6 +1295,7 @@ function onProfile(note) {
   // open since before this point.
   S.canvas = {}; S.canvasVersion++;
   renderSlide();
+  remember();
 }
 
 /* ---------- 2. house style ---------- */
@@ -1578,6 +1636,7 @@ $("check").onclick = async () => {
   S.checking = false; $("check").disabled = false; busy("");
   $("openreport").disabled = false;
   $("copynote").disabled = false;
+  remember();
   tab("review"); renderRail(); renderNote(); editState();
   if (noKey) paneMessage("warn", "Content review needs an API key, or turn it off. "
     + "Audited without it.");
@@ -3576,4 +3635,5 @@ setDirty(false);
 // The client list does not depend on a deck being open, and someone arriving at
 // this page usually wants to know which clients are already onboarded.
 loadClients();
+reattach();
 </script>

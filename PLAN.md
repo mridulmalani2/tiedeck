@@ -836,14 +836,25 @@ changes carry source-level regression tests (a string that must or must not
 appear in the served page) rather than behavioural ones; §11.6's own note on
 that gap is below.
 
-**Still open**, in order of what is left to do:
+**Re-driven, 2026-10-01, in Chromium** — `tests/test_ui_browser.py` and
+`tests/browser/journey.js`, the first test in this suite that drives a browser.
+It skips without Node, the `playwright` package and a launchable Chromium.
 
-* **#18** — reloading the page strands the deck and every correction on the
-  server, with no way back. The server already holds enough to recover from
-  (`GET /api/decks/{id}` exists, and `deck.rejected` persists there) — what is
-  missing is purely client-side: remembering `{deck_id, client}` across a
-  reload and re-attaching to a deck the server still has, rather than showing
-  "No deck open".
+**What re-driving found first, and it was not on this list: PR #11's own fix
+for #30 broke the main path.** Leaving no profile pre-selected made
+`$("client").value` empty, and **Use existing profile** guarded on that value —
+so it answered every deck with "No client has been onboarded yet" while the
+list held two, and auditing against an existing house style was unreachable.
+Every source-level test passed. Fixed (the guard counts the profiles), and held
+by the browser test, which fails on the previous page.
+
+* ~~**#18**~~ **Done.** The tab remembers `{deck_id, client, checked}` in
+  `sessionStorage` and re-attaches on load: the deck, the house style, the
+  audit re-run, and every correction (which the server always kept), with a
+  line saying so. A deck the server no longer has is forgotten quietly. Driven:
+  a Fix it, a reload, and the ribbon still reads "1 correction, 1 fixed".
+
+**Still open**, in order of what is left to do:
 * **#26** — a small shape's resize handles cover its own text, so a page
   number cannot be edited. Every handle is drawn whenever a shape is in the
   editor, regardless of whether *this* shape's own rules permit that axis;
