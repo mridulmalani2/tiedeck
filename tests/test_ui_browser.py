@@ -147,6 +147,12 @@ def test_a_chart_is_drawn_from_the_slide_render_where_there_is_one(journey) -> N
     assert journey["chartRaster"] == journey["rendered"]
 
 
+def test_text_running_past_its_box_is_told_apart_from_the_canvas(journey) -> None:
+    """The audit's #36: drawn past the box, deliberately, and marked."""
+    assert journey["spills"]["seeded"] >= 1
+    assert journey["spills"]["clean"] == 0
+
+
 def test_a_reload_reopens_the_deck_with_its_corrections(journey) -> None:
     """The audit's #18."""
     assert journey["fixed"]

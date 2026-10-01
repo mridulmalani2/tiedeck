@@ -94,6 +94,18 @@ const [url, deck, client] = process.argv.slice(2);
     if (has) { out.chartFound = true; out.chartRaster = has.raster; }
   }
 
+  // The audit's #36: text running past its box is drawn there, with the box's
+  // own edge and a tag. Slide 7 of the seeded deck carries a long string in a
+  // narrow fixed-size box; slide 3 carries nothing that overflows.
+  out.spills = await page.evaluate(async () => {
+    const at = async (n) => {
+      select(n, null, ""); await loadCanvas(n); renderSlide();
+      await new Promise((r) => setTimeout(r, 300));
+      return document.querySelectorAll("#shapes .shape.spills").length;
+    };
+    return { seeded: await at(7), clean: await at(3) };
+  });
+
   // A correction, then a reload: the deck and the correction come back.
   const fix = await page.$("[data-fix]");
   out.fixed = !!fix;

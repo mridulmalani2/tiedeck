@@ -640,6 +640,18 @@
        paragraph cannot swallow a click meant for whatever it spilled over. */
     pointer-events: none;
   }
+  /* The audit's #36. Text that runs past its box is drawn where PowerPoint
+     draws it -- past the box -- which is right, and it read as part of the
+     canvas, which is not. The box's own edge is drawn, so the reader sees
+     where the shape ends and that the text does not, and a tag says so.
+     Nothing is clipped: clipping would show a deck that does not exist. */
+  .shape.spills { outline: 1px dashed rgba(183,71,42,.75); outline-offset: 0; }
+  .shape.spills::after {
+    content: "text runs past its box"; position: absolute; left: 100%; bottom: 0;
+    margin-left: 4px; white-space: nowrap; pointer-events: none;
+    font: 600 var(--t-micro)/1 var(--mono); color: #fff; background: rgba(183,71,42,.85);
+    padding: 2px 4px; border-radius: 2px;
+  }
   .shape .text.anchor-ctr { justify-content: center; }
   .shape .text.anchor-b { justify-content: flex-end; }
   .shape .text p { margin: 0; white-space: pre-wrap; }
@@ -2544,6 +2556,28 @@ function renderSlide() {
   }
 }
 
+// Which shapes' text runs past their own box, measured on the page as drawn.
+function markSpills() {
+  document.querySelectorAll("#shapes .shape").forEach((el) => {
+    const text = el.querySelector(":scope > .text");
+    if (!text) return;
+    // At least most of a whole line past the box. A headline set a little
+    // larger than its frame overhangs by a few points on every slide of a
+    // real deck, in PowerPoint too, and a tag on every slide is a tag nobody
+    // reads. And the canvas draws a line taller than PowerPoint does (it does
+    // not have the font's own line metrics), so a measure in pixels would tag
+    // every one-line title; a measure in lines does not, and a paragraph
+    // genuinely written for a bigger box still clears it easily.
+    const p = text.querySelector("p");
+    const style = p ? getComputedStyle(p) : null;
+    const line = style
+      ? (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 || 0) : 0;
+    const spills = line > 0 && text.scrollHeight - text.clientHeight > 0.75 * line;
+    el.classList.toggle("spills", spills);
+    if (spills) el.title = `${el.title.split(" — ")[0]} — its text runs past its box, as drawn here`;
+  });
+}
+
 function renderShapes(view) {
   const bg = view.background;
   const bgCss = bg ? fillCss(bg) : "";
@@ -2571,6 +2605,8 @@ function scaleSlideUnits() {
   if (!slide || !S.deck || !S.deck.width_pt) return;
   const px = slide.clientWidth / S.deck.width_pt;
   if (px > 0) slide.style.setProperty("--pt", `${px}px`);
+  // Measured after the scale lands: whether text spills depends on it.
+  markSpills();
 }
 
 function shapeHtml(shape, slideW, slideH) {

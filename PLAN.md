@@ -870,12 +870,16 @@ by the browser test, which fails on the previous page.
   stays, because there is nothing honest to draw. Driven with LibreOffice
   installed (the Marlin revenue chart lines up with its own box), and held by
   the browser journey wherever the machine renders slides.
-* **#36** — overflowing text is drawn correctly outside its shape's own box
-  (deliberate, and right — see the note on `.shape .text` in
-  `tieout_ui/static/index.html`) but with no visual distinction from the
-  canvas it spills onto, so it can read as chrome rather than deck content. A
-  design question (how to mark it without implying it is clipped) more than a
-  bug.
+* ~~**#36**~~ **Done.** Text running past its box is still drawn where
+  PowerPoint draws it; the box's own edge is now drawn dashed and a tag says
+  the text runs past it, so nothing reads as clipped and nothing reads as
+  canvas. The threshold took two passes to get right, both on real-shaped
+  decks: a pixel margin tagged every Marlin headline (22pt text in a 30pt
+  frame, which overhangs in PowerPoint too), and a quarter-of-the-box margin
+  still tagged every one-line cover title, because the canvas draws a line
+  about 1.5x the font size where PowerPoint draws about 1.2x. The tag now needs
+  most of a whole line outside the box; swept across every slide of five decks
+  it marks exactly the three real overflows and nothing else.
 * **#44–#49**, from the 26-slide grouped-findings run: #44 is answered by
   §11.7 below (deliberate); #45 (Move it on a grouped finding opens the first
   place only), #46 (three counts of three different things shown with
