@@ -444,6 +444,27 @@ false positive.
 
 ### 5.3 The edit path a person actually takes
 
+**The write half is done, 2026-10-01, and it was worse than this section
+said.** Every derived **Fix it** addressed its figure by the *run* holding it
+and replaced that run. A sentence is usually one run, so correcting "EBITDA
+margin of 25.8% in FY25A." wrote **"24.8%" over the whole sentence**; no
+test caught it because every derived-fix test corrected a table cell, whose
+run usually is the figure. And a cell reading "26.8%*" with its marker in the
+same run lost the marker. A figure now carries its `span` — its characters in
+its paragraph — and `_write_span` replaces exactly those, across as many runs
+as they cross: the replacement in the first run's formatting, the rest of the
+figure removed from the runs after it, every run keeping its own formatting and
+everything else it held. "$4" + "12m in FY25A" corrected to 2,100 reads
+"$2,100" + "m in FY25A". Before writing, the characters are compared with what
+the check read, and a deck edited in between is refused rather than written by
+position. `tests/test_span_writes.py`; all four fail on the previous code.
+
+A span crossing a line break or a field is refused, with the reason. The canvas
+editor's own text edit still replaces a whole run, which is right there: the
+person typed the run.
+
+What follows is the section as it stood; the second bullet is what is now done.
+
 `Edit it` opens the run with the counterpart beside it. Two things it does not do:
 
 - **It does not offer the counterpart as the answer.** Clicking the chip to write
@@ -484,8 +505,8 @@ safe direction and costs findings.
 
 **Reading figures**
 - A figure split across runs — read as one number, addressed to the run with the
-  digits, and refused on write with the reason. Both spellings: prose and a table
-  cell. See §5.3 for what is still missing.
+  digits, and written by its span across every run it crosses (§5.3). A span
+  crossing a line break or a field is refused with the reason.
 - A table whose scale is stated in two places that disagree — a caption above
   saying millions and a footnote below saying thousands. The nearest wins, and
   nothing says the two disagreed.
@@ -530,11 +551,11 @@ safe direction and costs findings.
    remainder: #18 (reload recovery), #26 (small-shape resize handles), #33
    (chart raster), #36 (overflow's visual distinction from chrome), and
    #45–#47 from the grouped-findings run.
-3. **Record every unchecked path** (5.2). Still open, and §10 sharpened what it
-   means: the recorded refusals were the visible half.
-4. **Writing a figure that spans runs** (5.3). A real deck did show it matters —
-   the executive summary in §10's corpus splits `$1,196m` across two runs — so
-   this is no longer conditional. It is refused safely today.
+3. ~~**Record every unchecked path** (5.2).~~ **Done**, with one new silence
+   found and recorded in §5.2 (a Low/Mid/High table's implied multiples).
+4. ~~**Writing a figure that spans runs** (5.3).~~ **Done** — and the same
+   change fixed a worse defect: every derived Fix it in prose overwrote the
+   whole sentence.
 5. **The chart cache against its workbook** (5.4).
 6. **Periods** (5.5). §10 supplied one answer already: a sentence naming two
    periods gives each figure the period next to it, not the range of both.

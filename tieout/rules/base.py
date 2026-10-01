@@ -134,6 +134,10 @@ class Correction:
     counterpart_slide: int | None = None
     #: Why this figure cannot be written back, where it cannot.
     refused: str | None = None
+    #: The figure's characters in its paragraph (``address[0]`` for text,
+    #: ``cell_paragraph`` for a cell), which is what a write replaces -- never
+    #: the whole run. See :attr:`tieout.figures.Figure.span`.
+    span: tuple[int, int] | None = None
 
     @property
     def writable(self) -> bool:

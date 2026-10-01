@@ -41,6 +41,7 @@ from tieout.figures import (
     Figure,
     FigureIndex,
     build_index,
+    cell_span,
     comparable,
     normalise_label,
     read_cell_value,
@@ -154,6 +155,7 @@ def _edit(other: Figure, first: Figure) -> Correction:
         counterpart=_format(first),
         counterpart_slide=first.slide_index,
         refused=unwritable(other),
+        span=other.span,
     )
 
 
@@ -639,16 +641,19 @@ def _total_correction(
     reading = read_cell_value(cell.text)
     if reading is None:
         return None  # pragma: no cover - a total that did not parse is not reported
+    placed = cell_span(cell.paragraphs, reading.raw)
     return Correction(
         kind="fix",
         source="table",
         shape_id=shape.ref.shape_id,
         uid=shape.ref.uid,
         address=(row, column),
-        cell_paragraph=0,
+        cell_paragraph=placed[0] if placed is not None else 0,
         cell_run=0,
-        current=cell.text.strip(),
+        current=reading.raw if placed is not None else cell.text.strip(),
         replacement=restate(reading, computed),
+        span=placed[1] if placed is not None else None,
+        refused=None if placed is not None else "the total could not be placed in its cell",
     )
 
 

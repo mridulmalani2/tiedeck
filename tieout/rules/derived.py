@@ -56,6 +56,7 @@ from tieout.figures import (
     Figure,
     FigureIndex,
     build_index,
+    cell_span,
     is_specific,
     label_kind,
     normalise_label,
@@ -328,10 +329,18 @@ def _fix(stated: Figure, computed: float) -> Correction:
         address=stated.address,
         cell_paragraph=stated.cell_run[0],
         cell_run=stated.cell_run[1],
-        current=_format(stated),
+        current=_format(stated) if stated.span is None else _spanned(stated),
         replacement=restate(stated.reading, computed),
         refused=unwritable(stated),
+        span=stated.span,
     )
+
+
+def _spanned(figure: Figure) -> str:
+    """The characters the span covers, which is what a write checks before it
+    replaces them. For a table cell that is the figure without its footnote
+    marker: "480*" spans "480", and the marker is left where it is."""
+    return figure.reading.raw if figure.source == "table" else _format(figure)
 
 
 # --------------------------------------------------------------------------------------
@@ -863,16 +872,22 @@ class BridgeDoesNotCarry(Rule):
         """
         cell = shape.table.cell(*closing.address) if shape.table is not None else None
         reading = parse_number(cell.text) if cell is not None else None
-        if reading is None:
+        if cell is None or reading is None:
             return None
+        placed = cell_span(cell.paragraphs, reading.raw)
         return Correction(
             kind="fix",
             source="table",
             shape_id=shape.ref.shape_id,
             uid=shape.ref.uid,
             address=closing.address,
-            current=cell.text.strip() if cell is not None else "",
+            cell_paragraph=placed[0] if placed is not None else 0,
+            current=reading.raw if placed is not None else cell.text.strip(),
             replacement=restate(reading, computed),
+            span=placed[1] if placed is not None else None,
+            refused=(
+                None if placed is not None else "the closing figure could not be placed in its cell"
+            ),
         )
 
     def _series(self, shape: ShapeModel) -> list[_Step] | None:

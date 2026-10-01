@@ -110,6 +110,7 @@ __all__ = [
     "Kind",
     "Unit",
     "build_index",
+    "cell_span",
     "comparable",
     "is_specific",
     "label_kind",
@@ -865,6 +866,14 @@ class Figure:
     #: digits in one run and its marker in the next; rewriting the whole cell
     #: would take the marker with it.
     cell_run: tuple[int, int] = (0, 0)
+    #: Where the figure's characters sit in its paragraph -- the text frame's
+    #: paragraph for prose, the cell's paragraph (``cell_run[0]``) for a table
+    #: -- as ``(start, end)``. What a write needs, because a run is not a
+    #: figure: a sentence is usually one run, so replacing "the run holding the
+    #: figure" replaced the sentence, and a figure split across two runs had no
+    #: single run to replace at all (PLAN.md §5.3). ``None`` where it could not
+    #: be placed, and then the figure is not written.
+    span: tuple[int, int] | None = None
     #: What kind of claim this figure makes about its metric, or None where
     #: nothing in the deck says. PLAN.md §0, and :data:`Kind`.
     kind: Kind | None = None
@@ -1201,10 +1210,13 @@ def unwritable(figure: Figure) -> str | None:
 
     * **A chart point.** Its values live in a cached copy and in an embedded
       workbook, and TieOut writes neither.
-    * **A figure split across runs.** "$4" in one run and "12m" in the next is
-      one number to a reader and two places to write. A replacement put into
-      the first leaves the rest of the old figure beside it, so correcting 412
-      to 2,100 produces "2,10012m" in a deck someone is about to send.
+    * **A figure that cannot be placed.** A write replaces the figure's own
+      characters, by their span in the paragraph -- across as many runs as the
+      figure spans, each keeping its formatting (PLAN.md §5.3). A figure
+      without a span has nowhere safe to go. "$4" in one run and "12m" in the
+      next used to be refused outright, because a replacement put into the
+      first run left "12m" beside it; it is written now, because the span
+      reaches the second run too.
     * **A run inside a group is not refused.** ``tieout_fix`` reaches into
       groups for text on purpose -- "no coordinate space stands between an edit
       to a shape's words and the group it happens to sit in" -- so a grouped
@@ -1220,11 +1232,10 @@ def unwritable(figure: Figure) -> str | None:
             "a chart's values live in its cached data and in the workbook behind "
             "it, and TieOut writes neither -- correct this in the chart's own data"
         )
-    if figure.split_run:
+    if figure.span is None:
         return (
-            "this figure is split across two runs of formatting, so there is no "
-            "single run to write -- a replacement would land in the first and "
-            "leave the rest of the old figure beside it"
+            "this figure could not be placed exactly within its text, so there is "
+            "nowhere safe to write a replacement"
         )
     return None
 
@@ -1543,6 +1554,7 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
                 label_cell.text, header_cell.text if header_cell else "", unit
             )
             inside = _cell_run_holding(cell.paragraphs, reading.raw)
+            placed = cell_span(cell.paragraphs, reading.raw)
             out.append(
                 Figure(
                     reading=reading,
@@ -1561,8 +1573,13 @@ def _table_figures(slide: SlideModel, shape: ShapeModel) -> tuple[list[Figure], 
                     unit=unit,
                     scope=scope,
                     raw=text.strip(),
-                    cell_run=inside or (0, 0),
+                    cell_run=(
+                        inside
+                        if inside is not None
+                        else ((placed[0], 0) if placed is not None else (0, 0))
+                    ),
                     split_run=inside is None,
+                    span=placed[1] if placed is not None else None,
                     kind=kind,
                     kind_from=kind_from,
                 )
@@ -1592,6 +1609,27 @@ def _cell_run_holding(
         for r_index, run in enumerate(getattr(paragraph, "runs", ())):
             if digits in getattr(run, "text", ""):
                 return (p_index, r_index)
+    return None
+
+
+def cell_span(
+    paragraphs: Sequence[object], value: str
+) -> tuple[int, tuple[int, int]] | None:
+    """The paragraph of a cell holding the figure, and its characters in it.
+
+    Searched in the paragraph's joined text, not run by run, so a figure split
+    across runs still has a place. The first occurrence is taken: a cell holds
+    one figure, and its footnote marker -- the only other digits a cell
+    usually carries -- comes after it.
+    """
+    digits = value.strip()
+    if not digits:
+        return None
+    for p_index, paragraph in enumerate(paragraphs):
+        text = "".join(getattr(run, "text", "") for run in getattr(paragraph, "runs", ()))
+        found = text.find(digits)
+        if found >= 0:
+            return p_index, (found, found + len(digits))
     return None
 
 
@@ -2017,6 +2055,8 @@ def _text_figures(
                 if run_index is None:
                     continue
                 raw = sentence[mapping[match.start()] : mapping[match.end() - 1] + 1]
+                lead = len(raw) - len(raw.lstrip())
+                begin = start + mapping[match.start()] + lead
                 out.append(
                     Figure(
                         reading=reading,
@@ -2032,6 +2072,7 @@ def _text_figures(
                         scope=scope,
                         raw=raw.strip(),
                         split_run=not whole,
+                        span=(begin, begin + len(raw.strip())),
                         kind=kind,
                         kind_from=kind_from,
                     )
