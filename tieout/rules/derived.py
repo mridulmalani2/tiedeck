@@ -436,8 +436,11 @@ class _DerivedRatio(Rule):
     def _derivation_for(self, figure: Figure) -> Derivation | None:
         if figure.unit.quantity not in self.quantity:
             return None
+        # "Implied EV/EBITDA" is the EV/EBITDA a valuation implies: the same
+        # division, stated as an output rather than an observation.
+        metric = figure.metric.removeprefix("implied ")
         for derivation in self.derivations:
-            if figure.metric in derivation.result:
+            if metric in derivation.result:
                 return derivation
         return None
 
