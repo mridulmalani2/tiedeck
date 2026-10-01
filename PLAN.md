@@ -856,8 +856,9 @@ list held two, and auditing against an existing house style was unreachable.
 Every source-level test passed. Fixed (the guard counts the profiles), and held
 by the browser test, which fails on the previous page.
 
-* ~~**#18**~~ **Done.** The tab remembers `{deck_id, client, checked}` in
-  `sessionStorage` and re-attaches on load: the deck, the house style, the
+* ~~**#18**~~ **Done.** The tab remembers `{deck_id, client, checked}` in the
+  address's fragment — not in browser storage, which the page guarantees never
+  to use — and re-attaches on load: the deck, the house style, the
   audit re-run, and every correction (which the server always kept), with a
   line saying so. A deck the server no longer has is forgotten quietly. Driven:
   a Fix it, a reload, and the ribbon still reads "1 correction, 1 fixed".
