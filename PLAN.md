@@ -393,6 +393,35 @@ switched off with it.
 
 ### 5.2 Record what a derived check could not verify
 
+**Done, 2026-10-01** — all three paths below now record a refusal, and `kind`
+closed a fourth nobody had listed. `tests/test_unchecked_paths.py`; five of its
+six tests fail on the previous code, and the sixth is the guard (a correct
+CAGR in prose stays silent).
+
+- A labelled ratio CO-004 or CO-005 has no derivation for ("Adj. EBITDA
+  margin", "Net debt / EBITDA") is declined once per label, not per cell.
+  Labelled only: a multiple in prose binds to its denominator ("8.7x LTM
+  EBITDA" binds to EBITDA), so its metric says nothing about what was divided.
+- A bare "CAGR" naming no metric is declined.
+- "Nearly a bridge" is defined as one end naming itself as an end ("Opening",
+  "Closing") and the other naming nothing. Declined, never reported.
+- **The fourth:** a CAGR stated in prose — "Revenue grew at a 19.6% CAGR
+  between FY23A and FY25A" — was never recomputed, because CO-006 looked for a
+  growth word in the *label* and prose has none. `kind` now says it is a rate of
+  revenue over that span, and CO-006 recomputes it; a rate in prose stated for
+  one period rather than a span is declined.
+
+**Found while doing it, not fixed:** the Marlin valuation table ("Valuation
+($m) | Low | Mid | High") is indexed with the *case* as the metric — Low, Mid,
+High — and the row as the scope, so its "Implied EV/EBITDA" row is invisible
+to CO-005 and nothing records that. Turning it the right way up is an index
+orientation change (a case column is a scope, not a metric), and doing it
+alone only converts the silence into a refusal: the row's EBITDA is unscoped
+and the case-scoped lookup will not find it. Both halves are the next change
+to `figures.py`, and §10's corpus is where to check it.
+
+The account as it stood before:
+
 **Partly done, and the list was too short.** §10 closed the two that cost most:
 CO-005 now refuses a comparables *statistics* row with a reason, and the
 refusals that came from a mis-folded label and a mis-oriented table stopped
