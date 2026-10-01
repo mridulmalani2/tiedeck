@@ -33,26 +33,21 @@ KNOWN_MISSES: frozenset[str] = frozenset(
         "CO-001: heron-kinds: 'Churn of 4.8%' contradicts the table's 3.8% -- no word "
         "says what kind of figure churn is, so PLAN.md §0 predicts this one goes quiet "
         "[declined, and said so]",
+        # The cost of repetition as evidence, measured with its own twin: a
+        # mistake copied to three slides is, in the file, a choice made on three.
+        "LO-003: osprey-layout: a callout dragged 3.5pt short of the 490pt column and "
+        "then copied to two more slides -- in the file, the takeaway box's twin "
+        "[read as intended, and said so]",
     }
 )
 
 #: Findings on something labelled intentional, or on nothing labelled at all.
 #: Keyed by rule, case and slide; the message is not pinned, so rewording a
 #: finding does not count as changing what the tool does.
-KNOWN_FALSE_POSITIVES: frozenset[str] = frozenset(
-    {
-        # A decorative bleed in a house style whose reference deck does not
-        # bleed: reported at info, with "Nothing to do unless this was not
-        # intended".
-        "LO-001 osprey-layout slide 1",
-        "LO-001 osprey-layout slide 2",
-        "LO-001 osprey-layout slide 8",
-        # The same off-grid takeaway box on three slides.
-        "LO-003 osprey-layout slide 5",
-        "LO-003 osprey-layout slide 6",
-        "LO-003 osprey-layout slide 7",
-    }
-)
+#:
+#: Empty since PLAN.md §0.2 and §0.3: the baseline's nine were the demo's three
+#: cases, each three ways.
+KNOWN_FALSE_POSITIVES: frozenset[str] = frozenset()
 
 
 @pytest.fixture(scope="module")

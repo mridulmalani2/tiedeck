@@ -21,7 +21,7 @@ from __future__ import annotations
 import fnmatch
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import ClassVar, Final
@@ -225,6 +225,26 @@ class Unchecked:
 
 
 @dataclass(frozen=True, slots=True)
+class Excused:
+    """A position a rule would have reported, and the evidence it was chosen.
+
+    PLAN.md §0. The counterpart of :class:`Unchecked`: that one says "I could
+    not look", this one says "I looked, and the deck says this was meant". Both
+    are silences a reader is owed an account of, because a rule that stopped
+    reporting something on the strength of evidence is only as good as the
+    evidence -- and the evidence is checkable only if it is written down.
+    """
+
+    rule_id: str
+    where: ShapeRef | int
+    reason: str
+
+    @property
+    def slide_index(self) -> int:
+        return self.where.slide_index if isinstance(self.where, ShapeRef) else self.where
+
+
+@dataclass(frozen=True, slots=True)
 class RuleSkipped:
     """A rule that did not run, and why.
 
@@ -263,6 +283,7 @@ class Rule(ABC):
 
     def __init__(self) -> None:
         self.unchecked: list[Unchecked] = []
+        self.excused: list[Excused] = []
         self.skipped_reason: str | None = None
 
     # -- the contract ------------------------------------------------------------
@@ -332,6 +353,10 @@ class Rule(ABC):
 
     def note_unchecked(self, where: ShapeRef | int, reason: str) -> None:
         self.unchecked.append(Unchecked(rule_id=self.id, where=where, reason=reason))
+
+    def note_excused(self, where: ShapeRef | int, reason: str) -> None:
+        """Record a position this rule read as chosen rather than reporting it."""
+        self.excused.append(Excused(rule_id=self.id, where=where, reason=reason))
 
     def skip(self, reason: str) -> list[Finding]:
         """Record that the rule cannot run and return no findings."""
@@ -459,9 +484,21 @@ def furniture_for(deck: DeckModel, profile: Profile) -> Furniture:
     return furniture
 
 
+#: Other per-deck memos, registered by the module that owns them so that one
+#: call drops every one. A memo nobody clears survives a profile edited in
+#: place, and answers the next run with the last profile's evidence.
+_OTHER_CACHES: list[Callable[[], None]] = []
+
+
+def register_cache(clear: Callable[[], None]) -> None:
+    _OTHER_CACHES.append(clear)
+
+
 def clear_caches() -> None:
     """Drop memoised state, for tests and for a process auditing many decks."""
     _FURNITURE_CACHE.clear()
+    for clear in _OTHER_CACHES:
+        clear()
 
 
 # --------------------------------------------------------------------------------------
@@ -479,6 +516,8 @@ class AuditResult:
     generated_at: str
     findings: list[Finding] = field(default_factory=list)
     unchecked: list[Unchecked] = field(default_factory=list)
+    #: Positions read as chosen rather than reported. See :class:`Excused`.
+    excused: list[Excused] = field(default_factory=list)
     rules_skipped: list[RuleSkipped] = field(default_factory=list)
     rules_run: list[str] = field(default_factory=list)
     suppressed: list[Finding] = field(default_factory=list)
@@ -618,6 +657,7 @@ def run_rules(
 
         result.rules_run.append(rule_cls.id)
         result.unchecked.extend(rule.unchecked)
+        result.excused.extend(rule.excused)
 
         for finding in findings:
             shape_name = (
@@ -640,6 +680,7 @@ def run_rules(
     result.findings.sort(key=lambda f: f.sort_key)
     result.rules_skipped.sort(key=lambda s: s.rule_id)
     result.unchecked.sort(key=lambda u: (u.slide_index, u.rule_id))
+    result.excused.sort(key=lambda e: (e.slide_index, e.rule_id))
     return result
 
 

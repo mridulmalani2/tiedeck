@@ -97,6 +97,7 @@ scored.
 | Baseline, before §0 items 2–4 | 28 | 27 | 96% | 9 |
 | CO-001 examines every period (below) | 28 | 28 | 100% | 9 |
 | `kind` on every figure (§0.2) | 28 | 27 | 96% | 6 |
+| Intent evidence on every shape (§0.3), with its twin added | 29 | 27 | 93% | 0 |
 
 The baseline's nine false positives are exactly the demo's three, each
 reproduced three ways: CO-001 on a share against a change, a change against a
@@ -153,6 +154,45 @@ labelled margin or a CAGR. That says the generated decks are kind-tidy, not
 that real ones are: a KPI table of bare percentages — churn, retention,
 utilisation, conversion — is the shape that goes quiet, and the next real-deck
 pass is where to measure how common it is.
+
+### 0.3 Intent evidence — what it cost, measured
+
+`placement_intent(deck, profile)` in `tieout/rules/layout.py` gives every shape
+a `Placement`: the evidence (`tieout/model/intent.py`) that its position was
+chosen. The fragments were not re-derived — furniture is `furniture_for`, the
+bleed is `is_decorative_bleed`, and the slide's own alignment lines, evenly
+spaced runs and data marks are LO-003's own helpers, called exactly as LO-003
+called them. LO-001, LO-002 and LO-003 now read that one answer. Every silence
+it causes is written to `AuditResult.excused` with the evidence named, the
+counterpart of `unchecked`: "I looked, and the deck says this was meant".
+
+One piece of evidence is new: **the same element placed identically on
+several slides** — the whole box on two, or both edges of one axis on three,
+within 0.25pt. Copy-paste and layouts land on the same EMU, and a hand nudge
+does not repeat itself to a quarter of a point. At the grid's 2pt a box nudged
+to 493pt on one slide joined a takeaway at 493.5pt on three others, and the one
+real mistake on the deck was excused by its neighbours.
+
+What each rule does with it:
+
+- **LO-001 and LO-002** — a decorative bleed's structure alone still reports at
+  `info`: a misplaced background panel has the same structure. A second piece
+  of evidence excuses it — the reference deck bleeds (as before), the *whole*
+  box recurs at the same place, or it is on a title or divider slide. A panel
+  the width of its column shares that column's edges with every body box and
+  is not excused by them; the corpus caught that one on the first run.
+- **LO-003** — an edge in the near-miss window is excused where aligned,
+  spaced, plotted or repeated evidence accounts for its axis. It used to skip
+  those axes before measuring; it now measures first, so every excused edge is
+  recorded.
+
+**The result on the corpus:** LO-001's three and LO-003's three false
+positives went to zero. The stretched panel stayed reported. And the cost was
+measured rather than argued, by building the takeaway's twin — a callout
+dragged 3.5pt off its column and copied to two more slides. In the file it *is*
+the takeaway: one placement, repeated. It is read as meant, and says so on
+every slide. Repetition cannot tell a copied mistake from a choice, and nothing
+in the file can; that is what §0's item 4 is for, in the other direction.
 
 ---
 
@@ -562,8 +602,14 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
   which over-reports a frame whose text is on the canvas.
 * A logo drawn as text alone, with no badge and no image, is not learned, so its
   position and size go unchecked.
-* Where the reference deck bleeds, a structurally-identified decorative bleed is
-  silent, so a misplaced text-free background graphic is not reported.
+* A structurally-identified decorative bleed is silent where something
+  corroborates it — the reference deck bleeds, the whole box recurs at the same
+  place, or it is on a title or divider slide (§0.3) — so a misplaced
+  text-free background graphic in any of those places is not reported. It is
+  recorded in `excused`, with the evidence.
+* **Repetition reads a copied mistake as a choice** (§0.3). A box dragged off
+  the grid and then copied to two more slides is excused by its own copies.
+  The corpus carries the case and pins the miss.
 * `LOCKUP_PLATE_AREA_RATIO` 4.0, `LOCKUP_GAP_HEIGHTS` 1.0, `TITLE_BAND_SHARE`
   0.5, and every other tuned constant, are fitted to two house styles.
 * Rotated shapes are drawn, selected and resized correctly by construction and by

@@ -29,15 +29,18 @@ from __future__ import annotations
 import itertools
 import re
 import statistics
+import weakref
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
 from tieout.cluster import cluster_values
+from tieout.model.archetype import SPARSE_ARCHETYPES
 from tieout.model.deck import DeckModel, ShapeModel, ShapeRef, SlideModel, TextParagraph
 from tieout.model.extent import ink_bbox_pt, ink_confidence, ink_extent, is_decorative_bleed
 from tieout.model.fonts import measure_text, resolve_font_path
 from tieout.model.furniture import Furniture, content_shapes, detect_furniture, font_role
+from tieout.model.intent import Evidence, Placement, repeated_placements
 from tieout.model.units import rect_intersection_area_pt2
 from tieout.profile.schema import (
     Box,
@@ -47,7 +50,15 @@ from tieout.profile.schema import (
     RecurringElement,
     Severity,
 )
-from tieout.rules.base import Finding, Rule, cluster_findings, furniture_for, register, weakest
+from tieout.rules.base import (
+    Finding,
+    Rule,
+    cluster_findings,
+    furniture_for,
+    register,
+    register_cache,
+    weakest,
+)
 
 #: Rounding slack for canvas containment. PowerPoint stores EMU, and a shape
 #: dragged flush against the edge routinely lands a fraction of a point outside.
@@ -134,6 +145,110 @@ def _furniture_of(rule: Rule, deck: DeckModel, profile: Profile) -> Furniture:
 
 
 # --------------------------------------------------------------------------------------
+# Evidence of intent
+# --------------------------------------------------------------------------------------
+
+_BOTH: Final[frozenset[str]] = frozenset({"x", "y"})
+
+_INTENT_CACHE: weakref.WeakKeyDictionary[
+    DeckModel, tuple[Profile, dict[tuple[int, int], Placement]]
+] = weakref.WeakKeyDictionary()
+register_cache(_INTENT_CACHE.clear)
+
+
+def placement_intent(deck: DeckModel, profile: Profile) -> dict[tuple[int, int], Placement]:
+    """``(slide, uid)`` -> everything the deck says about why a shape is there.
+
+    PLAN.md §0, and :mod:`tieout.model.intent`. The fragments this gathers each
+    used to be computed inside the rule that needed them, and each rule asked
+    its own question of them; gathered here, LO-001, LO-002 and LO-003 read one
+    answer, and every silence they keep on the strength of it names the
+    evidence. Nothing here is re-derived: furniture is
+    :func:`~tieout.rules.base.furniture_for`, the bleed is
+    :func:`~tieout.model.extent.is_decorative_bleed`, alignment, spacing and
+    plotting are this module's own helpers, called exactly as LO-003 called
+    them. The one new reading is :func:`~tieout.model.intent.repeated_placements`.
+
+    :func:`data_mark_uids` deliberately does not read this. It runs the
+    plotting test over a smaller candidate set -- placeholders excluded, for a
+    reason its docstring gives -- and the editor's guardrail must keep that
+    answer, not this one.
+    """
+    cached = _INTENT_CACHE.get(deck)
+    if cached is not None and cached[0] is profile:
+        return cached[1]
+
+    furniture = furniture_for(deck, profile)
+    grid = profile.layout.grid
+    out: dict[tuple[int, int], Placement] = {}
+    by_slide: dict[int, list[ShapeModel]] = {}
+
+    def add(slide_index: int, uid: int, evidence: Evidence) -> None:
+        key = (slide_index, uid)
+        out[key] = out.get(key, Placement()).with_(evidence)
+
+    for slide in deck.slides:
+        canvas = _canvas(slide, deck)
+        for shape in slide.leaf_shapes():
+            if furniture.is_furniture(slide.index, shape.ref.uid):
+                add(slide.index, shape.ref.uid, Evidence(
+                    "furniture", _BOTH, "it is furniture the deck repeats on every slide"
+                ))
+        content = content_shapes(slide, furniture)
+        by_slide[slide.index] = list(content)
+        shapes: list[ShapeModel] = []
+        for shape in content:
+            if not is_decorative_bleed(shape, slide, canvas):
+                shapes.append(shape)
+                continue
+            add(slide.index, shape.ref.uid, Evidence(
+                "decorative", _BOTH,
+                "it carries no text and sits behind the content, partly off the canvas",
+            ))
+            if slide.archetype in SPARSE_ARCHETYPES:
+                add(slide.index, shape.ref.uid, Evidence(
+                    "sparse_slide", _BOTH,
+                    f"it is on a {slide.archetype.replace('_', ' ')} slide, "
+                    "where decoration is the point",
+                ))
+        local = _local_alignments(shapes, grid.tolerance_pt)
+        spaced = _evenly_spaced_axes(
+            shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
+        )
+        plotted = _data_series_axes(shapes, grid.tolerance_pt, canvas)
+        for shape in shapes:
+            aligned = _aligned_axes(grid, shape, local)
+            if aligned:
+                add(slide.index, shape.ref.uid, Evidence(
+                    "aligned", aligned,
+                    "another of its edges sits on the learned grid or on a line "
+                    "this slide's shapes share",
+                ))
+            if shape.ref.uid in spaced:
+                add(slide.index, shape.ref.uid, Evidence(
+                    "spaced", spaced[shape.ref.uid],
+                    "it is one of an evenly spaced run, placed by the run's pitch",
+                ))
+            if shape.ref.uid in plotted:
+                add(slide.index, shape.ref.uid, Evidence(
+                    "data_mark", plotted[shape.ref.uid],
+                    "its position plots a value",
+                ))
+
+    for key, evidence in repeated_placements(by_slide).items():
+        add(*key, evidence)
+
+    _INTENT_CACHE[deck] = (profile, out)
+    return out
+
+
+def _placement(
+    intent: dict[tuple[int, int], Placement], slide: SlideModel, shape: ShapeModel
+) -> Placement:
+    return intent.get((slide.index, shape.ref.uid), Placement())
+
+
+# --------------------------------------------------------------------------------------
 # LO-001
 # --------------------------------------------------------------------------------------
 
@@ -177,6 +292,7 @@ class ShapeOffCanvas(Rule):
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
         bleeds = bool(profile.layout.decorative_bleed_slides)
+        intent = placement_intent(deck, profile)
         for slide in deck.slides:
             width, height = _canvas(slide, deck)
             if width <= 0 or height <= 0:
@@ -189,8 +305,15 @@ class ShapeOffCanvas(Rule):
                 if not spills:
                     continue
                 kind = _overhang_kind(
-                    shape, slide, (width, height), bleed_is_house_style=bleeds
+                    shape,
+                    slide,
+                    (width, height),
+                    bleed_is_house_style=bleeds,
+                    placement=_placement(intent, slide, shape),
                 )
+                if isinstance(kind, str):
+                    self.note_excused(shape.ref, kind)
+                    continue
                 if kind is None:
                     continue
                 severity, qualifier = kind
@@ -250,8 +373,13 @@ def _overhang_kind(
     canvas: tuple[float, float],
     *,
     bleed_is_house_style: bool,
-) -> tuple[Severity, str] | None:
+    placement: Placement = Placement(),
+) -> tuple[Severity, str] | str | None:
     """The severity a canvas overhang deserves, and how to describe it.
+
+    A string is an *excuse*: the overhang is a decorative bleed and something
+    besides its structure says it was meant, so the caller records why it is
+    silent rather than reporting it.
 
     ``None`` where the overhang is not worth a line in the report. Both cases
     are ones this function has itself established are invisible to a reader, and
@@ -264,17 +392,21 @@ def _overhang_kind(
       is a fact about the frame, not about the slide. The bound is an upper
       bound, so a frame that clears it clears it on any machine -- this is a
       proof rather than a judgement, and it holds on any deck.
-    * **A deliberate bleed, in a house style that bleeds.** Whether a cover
-      device crossing the slide edge is intent or error is not in the file, so
-      the reference deck is asked: ``layout.decorative_bleed_slides`` records
-      where it did. With no such evidence the ``info`` line stays.
+    * **A deliberate bleed, corroborated.** A decorative bleed is structural
+      evidence -- untexted, behind the content, partly on the canvas -- and a
+      misplaced background panel has the same structure, so structure alone
+      keeps the ``info`` line. A second piece of evidence excuses it: the
+      reference deck bleeds (``layout.decorative_bleed_slides``), the same
+      shape sits at the same place on another slide, or it is on a title or
+      divider slide, where a cover device is the point. PLAN.md §0.3.
 
     What is still reported is an overhang that is neither: one carrying text, or
     sitting in front of the content, or wholly off the canvas.
     """
     if is_decorative_bleed(shape, slide, canvas):
-        if bleed_is_house_style:
-            return None
+        excuse = _bleed_excuse(placement, bleed_is_house_style=bleed_is_house_style)
+        if excuse is not None:
+            return excuse
         return (
             "info",
             ", which reads as a deliberate bleed: it carries no text and sits "
@@ -284,6 +416,23 @@ def _overhang_kind(
     if extent is not None and not _canvas_spills(extent.bbox, *canvas):
         return None
     return (ShapeOffCanvas.severity, "")
+
+
+def _bleed_excuse(placement: Placement, *, bleed_is_house_style: bool) -> str | None:
+    """Why a decorative bleed is meant, or None where only its structure says so."""
+    if bleed_is_house_style:
+        return "a decorative bleed, and the reference deck bleeds, so it is house style"
+    # Only a whole box repeated counts here. A background panel the width of
+    # its column shares that column's left and right edges with every body box
+    # on every slide, which is ordinary layout and says nothing about whether
+    # the panel was meant to run off the foot of the slide.
+    corroborated = placement.of_kind("sparse_slide", "declared") or next(
+        (e for e in placement.evidence if e.kind == "repeated" and e.axes == _BOTH),
+        None,
+    )
+    if corroborated is not None:
+        return f"a decorative bleed, and {corroborated.detail}"
+    return None
 
 
 def _overhang_remedy(severity: Severity) -> str:
@@ -297,6 +446,7 @@ def _reported_off_canvas(
     slide: SlideModel,
     canvas: tuple[float, float],
     bleed_is_house_style: bool,
+    placement: Placement = Placement(),
 ) -> bool:
     """Whether LO-001 already has this shape, so LO-002 need not repeat it.
 
@@ -313,11 +463,15 @@ def _reported_off_canvas(
     """
     if not _canvas_spills(shape.visual_bbox_pt, *canvas):
         return False
-    return (
+    return isinstance(
         _overhang_kind(
-            shape, slide, canvas, bleed_is_house_style=bleed_is_house_style
-        )
-        is not None
+            shape,
+            slide,
+            canvas,
+            bleed_is_house_style=bleed_is_house_style,
+            placement=placement,
+        ),
+        tuple,
     )
 
 
@@ -363,6 +517,7 @@ class MarginIntrusion(Rule):
         tolerance = profile.layout.position_tolerance_pt
         furniture = self.furniture(deck, profile)
         bleeds = bool(profile.layout.decorative_bleed_slides)
+        intent = placement_intent(deck, profile)
         findings: list[Finding] = []
 
         for slide in deck.slides:
@@ -378,7 +533,8 @@ class MarginIntrusion(Rule):
             for shape in content_shapes(slide, furniture):
                 if full_bleed > 0 and shape.area_pt2 >= full_bleed:
                     continue
-                if _reported_off_canvas(shape, slide, (width, height), bleeds):
+                placement = _placement(intent, slide, shape)
+                if _reported_off_canvas(shape, slide, (width, height), bleeds, placement):
                     continue
                 left, top, box_width, box_height = ink_bbox_pt(shape)
                 breaches = [
@@ -407,9 +563,13 @@ class MarginIntrusion(Rule):
                 edge, _, measured, limit = breaches[0]
                 described = ", ".join(f"{name} by {by:.1f}pt" for name, by, _, _ in breaches)
                 bleed = is_decorative_bleed(shape, slide, (width, height))
-                if bleed and bleeds:
-                    # House style, established from the reference deck. LO-001
-                    # says why.
+                excuse = (
+                    _bleed_excuse(placement, bleed_is_house_style=bleeds) if bleed else None
+                )
+                if excuse is not None:
+                    # The same corroboration LO-001 asks for, and the same
+                    # record: a silence names its evidence.
+                    self.note_excused(shape.ref, excuse)
                     continue
                 qualifier = (
                     ", which reads as a deliberate bleed rather than misplaced content"
@@ -557,37 +717,37 @@ class NearMissAlignment(Rule):
         window = profile.layout.near_miss_alignment_pt
         furniture = self.furniture(deck, profile)
 
+        intent = placement_intent(deck, profile)
         observed: list[_NearMiss] = []
         for slide in deck.slides:
-            canvas = _canvas(slide, deck)
-            shapes = [
-                shape
-                for shape in content_shapes(slide, furniture)
-                if not is_decorative_bleed(shape, slide, canvas)
-            ]
-            local = _local_alignments(shapes, grid.tolerance_pt)
-            evenly_spaced = _evenly_spaced_axes(
-                shapes, profile.layout.position_tolerance_pt, profile.layout.gutter_stdev_pt
-            )
-            settled = {
-                shape.ref.uid: _aligned_axes(grid, shape, local)
-                | evenly_spaced.get(shape.ref.uid, frozenset())
-                for shape in shapes
-            }
-            plotted = _data_series_axes(shapes, grid.tolerance_pt, canvas)
-            for shape in shapes:
-                aligned = settled[shape.ref.uid] | plotted.get(
-                    shape.ref.uid, frozenset()
-                )
+            excused: set[tuple[int, str]] = set()
+            for shape in content_shapes(slide, furniture):
+                placement = _placement(intent, slide, shape)
+                if placement.of_kind("decorative") is not None:
+                    continue
                 for edge in _edge_values(shape):
-                    if edge.axis in aligned:
-                        continue
                     if _on_grid(grid, edge.axis, edge.value):
                         continue
                     line = _nearest_grid_line(grid, edge.axis, edge.value)
                     if line is None or not window.contains(edge.value - line):
                         continue
                     if _ambiguous(grid, edge.axis, edge.value, line, window.max):
+                        continue
+                    # A near miss, unless the deck says the position was chosen.
+                    # Checked after the miss rather than before so that every
+                    # silence it causes is written down: PLAN.md §0.3.
+                    reason = placement.explains(
+                        edge.axis, "aligned", "spaced", "data_mark", "repeated", "declared"
+                    )
+                    if reason is not None:
+                        if (shape.ref.uid, edge.axis) not in excused:
+                            excused.add((shape.ref.uid, edge.axis))
+                            self.note_excused(
+                                shape.ref,
+                                f"its {edge.label} edge at {edge.value:g}pt is "
+                                f"{abs(edge.value - line):.1f}pt off the {line:g}pt "
+                                f"grid line, and {reason.detail}",
+                            )
                         continue
                     observed.append(
                         _NearMiss(

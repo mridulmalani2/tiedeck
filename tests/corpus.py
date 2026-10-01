@@ -59,7 +59,14 @@ from tieout.learn import learn_from_decks
 from tieout.model.deck import DeckModel
 from tieout.model.loader import load_deck
 from tieout.profile.schema import Profile
-from tieout.rules.base import AuditResult, Finding, clear_caches, run_rules
+from tieout.rules.base import (
+    AuditResult,
+    Excused,
+    Finding,
+    Unchecked,
+    clear_caches,
+    run_rules,
+)
 
 #: ``echo`` is a finding that is true but is another rule's seeded defect seen
 #: from a second angle -- a nudged column that also crosses the margin. It is
@@ -176,9 +183,10 @@ def score(cases: Sequence[Case], directory: Path) -> Report:
         if result.failed_rules:
             raise AssertionError(f"{case.name}: {result.failed_rules}")
         _score_case(case, result, scores)
+        records: list[Unchecked | Excused] = [*result.unchecked, *result.excused]
         declined[case.name] = [
             f"{record.rule_id} slide {record.slide_index}: {record.reason}"
-            for record in [*result.unchecked, *getattr(result, "excused", [])]
+            for record in records
             if record.rule_id in case.rules
         ]
     return Report(scores=scores, declined=declined)
@@ -193,12 +201,18 @@ def _declined(label: Label, result: AuditResult) -> str:
     as "checked, and fine", and is marked so it cannot be mistaken for the
     other.
     """
-    said = any(
-        record.rule_id == label.rule_id
-        and (label.slide is None or record.slide_index == label.slide)
-        for record in result.unchecked
-    )
-    return "[declined, and said so]" if said else "[SILENT]"
+    def on(records: Sequence[Unchecked | Excused]) -> bool:
+        return any(
+            record.rule_id == label.rule_id
+            and (label.slide is None or record.slide_index == label.slide)
+            for record in records
+        )
+
+    if on(result.unchecked):
+        return "[declined, and said so]"
+    if on(result.excused):
+        return "[read as intended, and said so]"
+    return "[SILENT]"
 
 
 def _score_case(case: Case, result: AuditResult, scores: dict[str, Score]) -> None:
@@ -489,6 +503,15 @@ def build_osprey_target(path: Path) -> Path:
     tree.remove(panel._element)
     tree.insert(2, panel._element)
 
+    # 10-12: the takeaway's twin. A callout dragged 3.5pt short of its column
+    # once and then copied to two more slides is, in the file, exactly the
+    # takeaway box above: one placement, repeated. PLAN.md §0.3 -- repetition
+    # cannot tell these apart, and this is the case that says what that costs.
+    for page, title in ((10, "Management"), (11, "Outlook"), (12, "Appendix")):
+        slide = _osprey_content(presentation, page, title, note=None)
+        box = _text(slide, 486.5, 420, 426, 30, f"See {title.lower()} detail.", colour=GOLD)
+        box.name = "Copied callout"
+
     presentation.save(str(path))
     return path
 
@@ -512,6 +535,11 @@ OSPREY_LABELS: tuple[Label, ...] = (
     Label("LO-001", 9, "defect",
           "a background panel stretched off the bottom of a content slide -- "
           "structurally identical to a decorative bleed", shape="Stretched panel"),
+    Label("LO-003", 10, "defect",
+          "a callout dragged 3.5pt short of the 490pt column and then copied to two "
+          "more slides -- in the file, the takeaway box's twin", shape="Copied callout"),
+    Label("LO-003", 11, "echo", "the same copied callout", shape="Copied callout"),
+    Label("LO-003", 12, "echo", "the same copied callout", shape="Copied callout"),
 )
 
 
