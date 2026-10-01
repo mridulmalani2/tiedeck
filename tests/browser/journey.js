@@ -73,6 +73,27 @@ const [url, deck, client] = process.argv.slice(2);
     await page.keyboard.press("Escape"); await page.waitForTimeout(400);
   }
 
+  // The audit's #33: where the slide has been rendered, a chart is drawn from
+  // that render rather than as hatching. Only asserted where this machine
+  // renders slides at all (LibreOffice), which the status bar reports.
+  for (let i = 0; i < 120; i++) {
+    const ready = await page.evaluate(() => S.deck.thumbnails.available || !!S.deck.thumbnails.reason);
+    if (ready) break;
+    await page.waitForTimeout(1000);
+  }
+  out.rendered = await page.evaluate(() => !!S.deck.thumbnails.available);
+  out.chartFound = false;
+  for (let index = 1; index <= 30 && !out.chartFound; index++) {
+    const has = await page.evaluate(async (n) => {
+      if (n > S.deck.slide_count) return null;
+      select(n, null, ""); await loadCanvas(n); renderSlide();
+      const box = document.querySelector(".shape .placeholder-box");
+      return box ? { raster: box.classList.contains("raster"), title: box.title || "" } : false;
+    }, index);
+    if (has === null) break;
+    if (has) { out.chartFound = true; out.chartRaster = has.raster; }
+  }
+
   // A correction, then a reload: the deck and the correction come back.
   const fix = await page.$("[data-fix]");
   out.fixed = !!fix;

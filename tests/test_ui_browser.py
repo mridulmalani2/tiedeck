@@ -139,6 +139,14 @@ def test_a_page_number_can_be_edited_with_or_without_the_editor_open(journey) ->
     assert journey["pageNumberEditableFromEditor"]
 
 
+def test_a_chart_is_drawn_from_the_slide_render_where_there_is_one(journey) -> None:
+    """The audit's #33: hatching beside a rendered picture of the same chart.
+    Where this machine cannot render slides there is no picture to draw, and
+    the hatching is the honest answer."""
+    assert journey["chartFound"]
+    assert journey["chartRaster"] == journey["rendered"]
+
+
 def test_a_reload_reopens_the_deck_with_its_corrections(journey) -> None:
     """The audit's #18."""
     assert journey["fixed"]

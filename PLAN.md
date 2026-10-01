@@ -864,9 +864,12 @@ by the browser test, which fails on the previous page.
   handles were real too, and smaller: edge midpoints are drawn only where the
   side can hold them, and a tiny box carries its label underneath. Held by the
   browser journey, which fails on the previous page.
-* **#33** — charts render as grey hatching while a rendered raster sits 200px
-  away in the rail. Solvable (crop the slide thumbnail to the chart's own
-  bbox) but not attempted.
+* ~~**#33**~~ **Done.** Where the slide has been rendered, a chart is drawn
+  from that render, cut to the chart's own box and badged "picture" so it is
+  never taken for something the canvas models; with no render the hatching
+  stays, because there is nothing honest to draw. Driven with LibreOffice
+  installed (the Marlin revenue chart lines up with its own box), and held by
+  the browser journey wherever the machine renders slides.
 * **#36** — overflowing text is drawn correctly outside its shape's own box
   (deliberate, and right — see the note on `.shape .text` in
   `tieout_ui/static/index.html`) but with no visual distinction from the

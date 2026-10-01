@@ -666,6 +666,17 @@
     font-size: var(--t-xs); color: var(--ink-3); line-height: 1.4;
   }
   .shape .placeholder-box b { display: block; color: var(--ink-2); margin-bottom: 2px; }
+  /* A chart drawn from the slide's own render, cropped to the chart's box
+     (the audit's #33). Marked as a picture so it is never mistaken for
+     something the canvas models and lets you edit. */
+  .shape .placeholder-box.raster {
+    border: 1px dashed rgba(20,22,26,.25); background-repeat: no-repeat;
+    align-items: flex-start; justify-content: flex-end; padding: 2px;
+  }
+  .shape .placeholder-box.raster span {
+    background: rgba(255,255,255,.85); color: var(--ink-3);
+    font-size: var(--t-micro); padding: 1px 4px; border-radius: 2px;
+  }
   .shape img.pic { width: 100%; height: 100%; object-fit: fill; display: block; }
   /* A table is drawn as a real CSS grid rather than <table>: percentage
      column tracks plus row/column spans read exactly as the model measured
@@ -2620,7 +2631,31 @@ function placeholderHtml(shape) {
     : shape.kind === "smartart" ? "SmartArt" : shape.name || shape.kind;
   const labels = pc.labels && pc.labels.length
     ? `<br>${pc.labels.map(esc).join(" · ")}` : "";
+  const raster = shape.kind === "chart" ? chartRaster(shape) : "";
+  if (raster) {
+    return `<div class="placeholder-box raster" style="${raster}"
+      title="${esc(title)}: a picture of the chart, cut from this slide's render. ${esc(pc.reason)}"><span>picture</span></div>`;
+  }
   return `<div class="placeholder-box"><span><b>${esc(title)}</b>${esc(pc.reason)}${labels}</span></div>`;
+}
+
+// The audit's #33: a chart drew as grey hatching while a rendered picture of
+// the same slide sat in the rail. The render is cut to the chart's own box --
+// scaled so one slide point is one point of the box, and offset so the box
+// shows exactly its own part of the slide -- rather than the canvas inventing
+// a chart it does not model. No render, no picture: the hatching stays.
+function chartRaster(shape) {
+  const th = S.deck && S.deck.thumbnails;
+  const W = S.deck && S.deck.width_pt, H = S.deck && S.deck.height_pt;
+  if (!th || !th.available || !W || !H || !(shape.width_pt > 0) || !(shape.height_pt > 0)) return "";
+  const url = `/api/thumbnails/${encodeURIComponent(S.deck.deck_id)}/${S.slide}?t=${
+    encodeURIComponent(TOKEN)}&v=${th.version || 0}`;
+  const along = (offset, size, total) =>
+    total === size ? 0 : (offset / (total - size)) * 100;
+  return `background-image:url('${url}');`
+    + `background-size:${(W / shape.width_pt) * 100}% ${(H / shape.height_pt) * 100}%;`
+    + `background-position:${along(shape.left_pt, shape.width_pt, W)}% ${
+      along(shape.top_pt, shape.height_pt, H)}%;`;
 }
 
 //: A rough serif/sans split, since the browser almost never has the exact
