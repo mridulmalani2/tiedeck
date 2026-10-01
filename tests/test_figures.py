@@ -134,7 +134,7 @@ def test_label_normalisation(raw, expected):
         ("1Q24", "Q1-2024"),
         ("H1 2025", "H1-2025"),
         ("LTM", "LTM"),
-        ("LTM September 2026", "LTM-FY2026"),
+        ("LTM September 2026", "LTM-SEP-2026"),
         ("EBITDA", None),
         ("Fiscal year", None),
         ("Company", None),

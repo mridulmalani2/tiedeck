@@ -276,6 +276,41 @@ _PERIOD_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(rf"\bh([12])\s?({_YEAR}|\d{{2}})\b", re.IGNORECASE),
 )
 
+#: A relative window anchored to a month: "LTM Sep-25", "YTD to September 2025".
+#: Kept whole, so two different anchors are two different periods.
+_ANCHORED_WINDOW: Final[re.Pattern[str]] = re.compile(
+    r"\b(ltm|ntm|ttm|ytd|mtd|qtd)\s*(?:to\s+)?"
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s\-'/]*"
+    rf"({_YEAR}|\d{{2}})\b",
+    re.IGNORECASE,
+)
+
+#: A stub period: "9M 2025", "6M FY25", "9M25". Not preceded by a currency or a
+#: digit, so "$9m 2025" -- nine million, in 2025 -- is not read as a stub.
+_STUB: Final[re.Pattern[str]] = re.compile(
+    rf"(?<![\w$£€.,])(1[01]|[1-9])m\s?(?:fy\s?)?({_YEAR}|\d{{2}})\b", re.IGNORECASE
+)
+
+#: A calendar year, kept apart from the fiscal year a bare "2024" reads as.
+_CALENDAR: Final[re.Pattern[str]] = re.compile(
+    rf"\bcy\s?({_YEAR}|\d{{2}})\s?([aefbp]|pf)?\b", re.IGNORECASE
+)
+
+#: A basis written as a word rather than a suffix letter.
+_BASIS_WORDS: Final[dict[str, str]] = {
+    "budget": "B", "bud": "B", "plan": "B",
+    "forecast": "E", "fcst": "E", "estimate": "E", "estimated": "E",
+    "actual": "A", "actuals": "A",
+}
+_BASIS_WORD: Final[str] = "|".join(sorted(_BASIS_WORDS, key=len, reverse=True))
+_YEAR_THEN_BASIS_WORD: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:fy\s?)?({_YEAR}|(?<=fy)\d{{2}}|(?<=fy )\d{{2}})\s+({_BASIS_WORD})\b",
+    re.IGNORECASE,
+)
+_BASIS_WORD_THEN_YEAR: Final[re.Pattern[str]] = re.compile(
+    rf"\b({_BASIS_WORD})\s+(?:fy\s?)?({_YEAR})\b", re.IGNORECASE
+)
+
 #: Periods that name a window rather than a date. They carry no year, so two of
 #: them are the same period only by name -- which is the deck's own convention
 #: and is how a banker reads them.
@@ -364,9 +399,30 @@ def _scan_periods(text: str) -> tuple[list[str], str, list[tuple[int, int, str]]
                 + working[match.end() :]
             )
 
+    # PLAN.md §5.5. Each of these used to read as a *different* period, not as
+    # none: "LTM Sep-25" as bare LTM (so LTM Sep-24 and LTM Sep-25 were one
+    # period), "9M 2025" as the full year FY2025, "2025 Budget" as plain
+    # FY2025. All three compared figures that were never the same fact.
+    take(
+        _ANCHORED_WINDOW,
+        lambda m: f"{m.group(1).upper()}-{m.group(2)[:3].upper()}-{_four_digit(m.group(3))}",
+    )
     for window in sorted(_RELATIVE):
         canonical = window.replace(" ", "-").upper()
         take(re.compile(rf"\b{re.escape(window)}\b"), lambda _m, w=canonical: w)
+    take(_STUB, lambda m: f"{int(m.group(1))}M-{_four_digit(m.group(2))}")
+    take(
+        _CALENDAR,
+        lambda m: f"CY{_four_digit(m.group(1))}{_BASIS.get(m.group(2) or '', '')}",
+    )
+    take(
+        _YEAR_THEN_BASIS_WORD,
+        lambda m: f"FY{_four_digit(m.group(1))}{_BASIS_WORDS[m.group(2)]}",
+    )
+    take(
+        _BASIS_WORD_THEN_YEAR,
+        lambda m: f"FY{_four_digit(m.group(2))}{_BASIS_WORDS[m.group(1)]}",
+    )
 
     def _quarter(match: re.Match[str]) -> str:
         first, second = match.groups()

@@ -318,7 +318,7 @@ the price of not inventing the other kind of finding.
 | A claim with no figure anywhere to check it | "materially ahead of plan" over a table showing 2% |
 | Cross-references | "see page 12" pointing at page 14 |
 | A figure only ever stated once, in prose, in a deck with no tables | Nothing to tie it to, by construction |
-| Two periods where the deck writes one both ways | "LTM" and "LTM September 2026" do not match, deliberately: conflating them would invent findings between LTM Sep-25 and LTM Sep-26 |
+| Two periods where the deck writes one both ways | "LTM" and "LTM September 2026" do not match, deliberately: conflating them would invent findings between LTM Sep-25 and LTM Sep-26 (§5.5 made "LTM Sep-25" keep its anchor too) |
 | A total labelled after its metric | "Total revenue" under three segments is not read as a total, because "Total addressable market" is a metric and widening it reports every TAM/SAM/SOM slide in banking. §9 |
 | A table scoped only by its headline | The corner cell is read and the headline is not. "Revenue by Segment" names a metric the deck uses and means nothing of the sort. §9 |
 
@@ -506,6 +506,27 @@ reading it is not hard. Deciding what to say when they disagree is.
 
 ### 5.5 Periods that are ranges, and periods that are neither
 
+**Done for what was listed, 2026-10-01, and the listing was wrong about the
+direction.** Driven through `parse_period`, three of these did not read as no
+period — they read as a *different* one, which invents findings rather than
+costing them: "9M 2025" and "6M FY25" as the full year FY2025, "2025 Budget"
+as the plain FY2025 it would be compared against, and "LTM Sep-25" as bare LTM,
+so LTM Sep-24 and LTM Sep-25 were one period. Each is now its own: `9M-2025`,
+`FY2025B` (budget, plan), `FY2025E` (forecast, estimate), `FY2025A` (actual),
+`LTM-SEP-2025`, and `CY2024` for a calendar year, never equal to FY2024. "$9m
+2025" is nine million in 2025, not a stub. A column headed only "Budget" still
+reads as no period, because it is. `tests/test_periods.py`; every behavioural
+test fails on the previous code, and one is a gain — "9M25" read as no period,
+so two statements of one stub were never compared.
+
+**Still not handled, deliberately:** a deck stating its fiscal year ends in
+March reads a bare "2024" as FY2024 like any other deck. Re-keying every bare
+year on a year-end the deck states once, in a footnote, is the inference this
+module refuses everywhere else; the real-deck pass is where to find out
+whether decks state it in a way worth reading.
+
+The section as it stood:
+
 `parse_period` handles fiscal years, quarters, halves, relative windows and
 ranges. It does not handle: calendar versus fiscal year-end (a deck whose FY24
 ends in March against one whose FY24 ends in December), stub periods, or a
@@ -570,8 +591,8 @@ safe direction and costs findings.
    change fixed a worse defect: every derived Fix it in prose overwrote the
    whole sentence.
 5. ~~**The chart cache against its workbook** (5.4).~~ **Done** — CH-006.
-6. **Periods** (5.5). §10 supplied one answer already: a sentence naming two
-   periods gives each figure the period next to it, not the range of both.
+6. ~~**Periods** (5.5).~~ **Done** — stubs, budgets, anchored LTM windows and
+   calendar years, each of which had been read as a different period.
 7. **§11's remainder**, listed in §11 itself — smaller now, and worth clearing
    before the next real-deck pass finds new evidence to reorder against.
 
