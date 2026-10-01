@@ -1005,7 +1005,7 @@
 // from the URL, so it is never in a link. The launcher opens the page with a
 // ?t= query so the browser can carry it in; drop that immediately, or the token
 // stays in the browser's history and in anything the user copies.
-if (location.search) history.replaceState(null, "", location.pathname);
+if (location.search) history.replaceState(null, "", location.pathname + location.hash);
 
 const TOKEN = "__TIEOUT_TOKEN__";
 const S = {
@@ -1179,24 +1179,27 @@ function attachDeck() {
 // made to it on the server, with "No deck open" and no way back. The server
 // already kept all of it -- the working copy, the log, what was set aside --
 // so what was missing was this tab remembering which deck it had open and
-// against which house style. Per tab, and gone when the tab closes: the server
-// deletes the deck when it stops, and a later tab finding a stale id simply
-// starts afresh.
-const SESSION_KEY = "tieout.session";
+// against which house style. Kept in the address's fragment, not in browser
+// storage: the page stores nothing in the browser at all (a guarantee
+// test_the_page_never_stores_the_key_in_the_browser holds), a fragment is
+// never sent to any server, and it is per tab by construction. A stale id --
+// the server deletes decks when it stops -- simply starts afresh.
 function remember() {
-  try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-      deck_id: S.deck ? S.deck.deck_id : null, client: S.client || null, checked: !!S.audit,
-    }));
-  } catch (_) { /* storage blocked: a reload starts afresh, as it always did */ }
+  const state = new URLSearchParams();
+  if (S.deck) state.set("deck", S.deck.deck_id);
+  if (S.client) state.set("client", S.client);
+  if (S.audit) state.set("checked", "1");
+  history.replaceState(null, "", location.pathname + (S.deck ? `#${state}` : ""));
 }
 
 async function reattach() {
-  let saved = null;
-  try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return; }
-  if (!saved || !saved.deck_id) return;
+  const state = new URLSearchParams(location.hash.slice(1));
+  const saved = {
+    deck_id: state.get("deck"), client: state.get("client"), checked: state.get("checked") === "1",
+  };
+  if (!saved.deck_id) return;
   try { S.deck = await api(`/api/decks/${encodeURIComponent(saved.deck_id)}`); }
-  catch (_) { try { sessionStorage.removeItem(SESSION_KEY); } catch (__) {} return; }
+  catch (_) { history.replaceState(null, "", location.pathname); return; }
   attachDeck();
   if (saved.client) {
     try { S.profile = await api(`/api/profiles/${encodeURIComponent(saved.client)}`); }

@@ -110,6 +110,7 @@ def load_deck(path: str | Path, *, classify: bool = True) -> DeckModel:
         presentation = Presentation(str(path))
     except Exception as exc:
         raise DeckLoadError(f"cannot open {path.name} as a PowerPoint package: {exc}") from exc
+    _THEME_CACHE.clear()
 
     width_pt = emu_to_pt(presentation.slide_width) or 0.0
     height_pt = emu_to_pt(presentation.slide_height) or 0.0
@@ -190,7 +191,14 @@ def _build_context(slide: Any, default_text_style: etree._Element | None) -> Sli
     )
 
 
-_THEME_CACHE: dict[int, Theme] = {}
+#: ``id(part)`` -> ``(part, theme)``. The part is held beside its theme and
+#: checked on every hit: CPython reuses the address of a collected object, so
+#: keyed on the address alone a deck loaded after another one resolved its
+#: fonts from the *other* deck's theme -- one run's Calibri read as Gill Sans MT
+#: on CI, depending only on test order. Holding the part also keeps its address
+#: from being reused while the entry exists, and :func:`load_deck` empties the
+#: cache on every load so it cannot grow without bound in a long-running server.
+_THEME_CACHE: dict[int, tuple[Any, Theme]] = {}
 
 
 def _theme_for(master: Any) -> Theme:
@@ -201,13 +209,13 @@ def _theme_for(master: Any) -> Theme:
     """
     key = id(master.part)
     cached = _THEME_CACHE.get(key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is master.part:
+        return cached[1]
     theme = Theme.empty()
     with contextlib.suppress(KeyError, AttributeError, etree.XMLSyntaxError, ValueError):
         theme_part = master.part.part_related_by(RT.THEME)
         theme = Theme.parse(theme_part.blob)
-    _THEME_CACHE[key] = theme
+    _THEME_CACHE[key] = (master.part, theme)
     return theme
 
 

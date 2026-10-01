@@ -861,3 +861,64 @@ def test_a_shape_that_is_not_a_placeholder_inherits_nothing():
         ph_type=None,
         ph_idx=None,
     ) == (60.0, 0.0, 0.0, 0.0)
+
+
+
+def test_a_theme_is_never_taken_from_another_decks_master(clean_path, tmp_path):
+    """The theme cache was keyed on ``id(master.part)``, and CPython reuses the
+    address of a collected object -- so a deck loaded after another one could
+    resolve its fonts from the *other* deck's theme. It surfaced on CI as one
+    run's Calibri reading as Gill Sans MT, depending only on test order.
+
+    Two decks with different themes, loaded alternately with the previous one
+    collected in between, which is exactly when an address comes back.
+    """
+    import gc
+
+    from tests.test_fix import _text_deck
+    from tieout.model.loader import load_deck
+
+    plain = tmp_path / "plain.pptx"
+    _text_deck(plain)
+
+    def major(path) -> str:
+        deck = load_deck(path)
+        runs = [
+            run.font.name
+            for slide in deck.slides
+            for shape in slide.leaf_shapes()
+            for paragraph in shape.text_frame_paragraphs
+            for run in paragraph.runs
+        ]
+        return f"{deck.theme_major_font}|{sorted(set(map(str, runs)))}"
+
+    expected = {clean_path: major(clean_path), plain: major(plain)}
+    assert expected[clean_path] != expected[plain], "the premise: two different themes"
+    for _ in range(40):
+        for path in (clean_path, plain):
+            gc.collect()
+            assert major(path) == expected[path]
+
+
+def test_a_stale_theme_entry_under_a_reused_address_is_not_used(clean_path, tmp_path):
+    """The deterministic half of the test above, which cannot force CPython
+    to reuse an address on demand: an entry left by another deck's master,
+    sitting under this master's address, must not be returned."""
+    from pptx import Presentation
+
+    from tests.test_fix import _text_deck
+    from tieout.model import loader
+    from tieout.model.inherit import Theme
+
+    _text_deck(tmp_path / "other.pptx")
+    other = Presentation(str(tmp_path / "other.pptx")).slide_masters[0]
+    master = Presentation(str(clean_path)).slide_masters[0]
+    stale = loader._theme_for(other)
+    loader._THEME_CACHE.clear()
+    loader._THEME_CACHE[id(master.part)] = (other.part, stale)
+    try:
+        theme = loader._theme_for(master)
+        assert isinstance(theme, Theme)
+        assert theme is not stale
+    finally:
+        loader._THEME_CACHE.clear()
