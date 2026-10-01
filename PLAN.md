@@ -855,11 +855,15 @@ by the browser test, which fails on the previous page.
   a Fix it, a reload, and the ribbon still reads "1 correction, 1 fixed".
 
 **Still open**, in order of what is left to do:
-* **#26** — a small shape's resize handles cover its own text, so a page
-  number cannot be edited. Every handle is drawn whenever a shape is in the
-  editor, regardless of whether *this* shape's own rules permit that axis;
-  narrowing that needs per-axis capability threaded into `S.edit`, which
-  nothing carries today.
+* ~~**#26**~~ **Done, and it was not the handles.** Driven: a page number is a
+  24pt box with 7pt of inset each side around one digit, so a double-click
+  almost never landed on the digit — and landing beside it did nothing, editor
+  open or not. With the editor open its box covered the digit entirely. A
+  double-click now edits the run nearest the pointer, and a double-click on the
+  editor's own box hands over to text editing unless something was moved. The
+  handles were real too, and smaller: edge midpoints are drawn only where the
+  side can hold them, and a tiny box carries its label underneath. Held by the
+  browser journey, which fails on the previous page.
 * **#33** — charts render as grey hatching while a rendered raster sits 200px
   away in the rail. Solvable (crop the slide thumbnail to the chart's own
   bbox) but not attempted.

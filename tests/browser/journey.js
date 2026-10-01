@@ -41,6 +41,38 @@ const [url, deck, client] = process.argv.slice(2);
     { timeout: 60000 });
   out.tallyUndone = await page.$eval("#tally", (el) => el.innerText);
 
+  // The audit's #26: a page number can be edited, straight away or from the
+  // move editor. Its one digit is a few pixels inside a padded box. Slide 1
+  // is the cover, which carries none.
+  let number = null;
+  for (let index = 2; index <= 8 && !number; index++) {
+    await page.evaluate(async (n) => { select(n, null, ""); await loadCanvas(n); renderSlide(); }, index);
+    await page.waitForTimeout(800);
+    number = await page.evaluate(() => {
+      const el = [...document.querySelectorAll(".shape")].find((e) =>
+        e.querySelector("[data-run]")
+        && (/^\d+$/.test(e.innerText.trim()) || /page number|slide number/i.test(e.title)));
+      return el && el.getBoundingClientRect().toJSON();
+    });
+  }
+  out.pageNumberFound = !!number;
+  if (number) {
+    const x = number.x + number.width / 2, y = number.y + number.height / 2;
+    await page.mouse.dblclick(x, y);
+    await page.waitForTimeout(600);
+    out.pageNumberEditable = await page.evaluate(() => !!S.textEdit);
+    await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+    await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+    await page.mouse.click(x, y);
+    await page.waitForTimeout(800);
+    out.editorOpened = await page.evaluate(() => !!S.edit);
+    await page.mouse.dblclick(x, y);
+    await page.waitForTimeout(600);
+    out.pageNumberEditableFromEditor = await page.evaluate(() => !!S.textEdit);
+    await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+    await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  }
+
   // A correction, then a reload: the deck and the correction come back.
   const fix = await page.$("[data-fix]");
   out.fixed = !!fix;

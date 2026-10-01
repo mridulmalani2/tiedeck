@@ -129,6 +129,16 @@ def test_this_is_intentional_takes_a_finding_off_and_undo_puts_it_back(journey) 
     assert journey["tallyUndone"] == journey["tallyChecked"]
 
 
+def test_a_page_number_can_be_edited_with_or_without_the_editor_open(journey) -> None:
+    """The audit's #26. The digit sits a few pixels inside a padded box, so a
+    double-click almost never landed on it -- and once the move editor was
+    open, its box covered the digit entirely."""
+    assert journey["pageNumberFound"]
+    assert journey["pageNumberEditable"]
+    assert journey["editorOpened"]
+    assert journey["pageNumberEditableFromEditor"]
+
+
 def test_a_reload_reopens_the_deck_with_its_corrections(journey) -> None:
     """The audit's #18."""
     assert journey["fixed"]
