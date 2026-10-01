@@ -284,8 +284,8 @@ reason, and always will be: client decks are never committed.
 Measured 2026-09-23 against the generated reference decks.
 
 ```
-rules defined                   52
-rules on by default             50
+rules defined                   53
+rules on by default             51
 consistency rules                9      CO-001 … CO-009
 of those, reading something
 other than a table               6      CO-001 (prose, charts), CO-004…CO-008

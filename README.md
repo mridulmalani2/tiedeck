@@ -1548,9 +1548,11 @@ cannot tell the last two apart will eventually wave a bad deck through.
 tieout check draft.pptx --client acme --fail-on major --quiet || exit 1
 ```
 
-For a pipeline, `--format json` gives a stable additive schema with `unchecked`
-and `rules_skipped` at the top level, so a dashboard can show what was *not*
-measured as well as what failed:
+For a pipeline, `--format json` gives a stable additive schema with `unchecked`,
+`excused` and `rules_skipped` at the top level, so a dashboard can show what was
+*not* measured, and what was read as intended, as well as what failed. Each
+finding carries a `signature` — what it is about, without the slide — which is
+the key `--intended` stores:
 
 ```bash
 tieout check draft.pptx --client acme --format json --out findings.json
