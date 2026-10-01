@@ -1120,6 +1120,11 @@ canvasEl.ondrop = (e) => {
 // are replaced.
 $("slide").addEventListener("click", (event) => {
   if (event.target.closest(".shape") || event.target.closest(".mark")) return;
+  // The editor's own toolbar sits inside the slide too, and a click on one of
+  // its buttons is not a click on empty slide. Without this, Reset put the
+  // shape back and then put the editor away, and Next place opened the next
+  // shape and closed it in the same click.
+  if (event.target.closest("#posbar")) return;
   if (S.mark || S.edit) select(S.slide, null, "");
 });
 // One point of slide space is a different number of pixels at every window
@@ -1716,6 +1721,7 @@ function renderNote() {
         ${kinds.map((k) => `<span class="c-${k}"><b>${s[k]}</b><em>${k}</em></span>`).join("")}
       </div>
       <div class="totals"><b>${toDo}</b> ${toDo === 1 ? "thing" : "things"} to do${
+        s.total !== actions.length ? `, from <b>${s.total}</b> finding${s.total === 1 ? "" : "s"}` : ""}${
         a.fixable_count ? `<span class="sep">·</span><b>${a.fixable_count}</b> TieOut can fix` : ""}</div>` : ""}
     </div>
     <div class="note-head"><b>${a.slide_count}</b> slides checked against
@@ -1915,8 +1921,17 @@ function whyManual(a) {
     return "Yours to decide — both figures are stated, and only you know which is right.";
   if (SIZE_RULES.includes(a.rule_id))
     return "Yours to fix: TieOut knows the size and does not resize a shape or a font.";
-  if (CANNOT_ADD.includes(a.rule_id))
+  // Read from the remedy as well as the rule, because one rule can say both:
+  // BR-006 moves a misplaced page number and *adds* a missing one, and the
+  // second was told "TieOut cannot know what is right" under a remedy naming
+  // the exact position (the audit's #47).
+  const remedy = a.remedy || "";
+  if (CANNOT_ADD.includes(a.rule_id) || /^Add /.test(remedy))
     return "Yours to fix: TieOut does not add a shape or a text box.";
+  if (/^Recolour /.test(remedy))
+    return "Yours to fix: TieOut knows the colour, and this one sits where it does not write — a chart series, a picture or the theme.";
+  if (/^Set the typeface /.test(remedy))
+    return "Yours to fix: TieOut knows the typeface, and this one sits where it does not write.";
   return "Yours to fix: TieOut can see this is wrong and cannot know what is right.";
 }
 
@@ -2045,7 +2060,7 @@ function wireNote() {
       event.stopPropagation();
       const action = (S.audit.actions || [])[Number(el.dataset.move)];
       const instance = action && action.instances.find((i) => movableOf(i));
-      if (instance) beginMove(instance.slide, instance);
+      if (instance) beginMove(instance.slide, instance, action.key);
     };
   });
   // Two stated figures disagree: open the run that holds one of them, with the
@@ -2064,8 +2079,9 @@ function wireNote() {
     el.onclick = (event) => {
       event.stopPropagation();
       const [a, k] = el.dataset.moveinst.split(":").map(Number);
-      const instance = ((S.audit.actions || [])[a] || { instances: [] }).instances[k];
-      if (instance) beginMove(instance.slide, instance);
+      const action = (S.audit.actions || [])[a] || { instances: [] };
+      const instance = action.instances[k];
+      if (instance) beginMove(instance.slide, instance, action.key);
     };
   });
   $("pane").querySelectorAll("[data-goto]").forEach((el) => {
@@ -2982,11 +2998,21 @@ function movableOf(source) {
   return m && !m.refused && m.x_emu !== undefined ? m : null;
 }
 
-function beginMove(slideIndex, source) {
+// The audit's #45: Move it on a group of eighteen opened the first and left
+// the other seventeen to be found by hand. The editor carries the group it
+// was opened from, says which place of how many this is, offers the next, and
+// opens the next one by itself once a move is applied.
+function groupPlaces(key) {
+  const action = (S.audit && S.audit.actions || []).find((a) => a.key === key);
+  return action ? action.instances.filter((i) => movableOf(i)) : [];
+}
+
+function beginMove(slideIndex, source, groupKey) {
   const m = movableOf(source);
   if (!m) return;
   select(slideIndex, [m.left_pt, m.top_pt, m.width_pt, m.height_pt], m.shape);
   S.edit = {
+    group: groupKey || null,
     slide: slideIndex, shapeId: m.shape_id, uid: m.uid, name: m.shape,
     x0: m.x_emu, y0: m.y_emu, x: m.x_emu, y: m.y_emu,
     cx0: m.cx_emu, cy0: m.cy_emu, cx: m.cx_emu, cy: m.cy_emu,
@@ -3226,8 +3252,14 @@ function posbar() {
   // block re-running -- paintEdit patches both on every pointer event instead
   // of rebuilding this HTML, so the row is always present here and merely
   // hidden when a resize handle is the one currently held.
+  const places = e.group ? groupPlaces(e.group) : [];
+  const at = places.findIndex((i) => i.slide === e.slide && movableOf(i).shape_id === e.shapeId);
+  const progress = places.length > 1 && at >= 0
+    ? `<div><span class="read">Place ${at + 1} of ${places.length} in this job</span>
+        <button id="nextplace">Next place ›</button></div>` : "";
   return `<div class="posbar" id="posbar">
     <div><span class="who">${esc(e.name)}<em> · slide ${e.slide}</em></span></div>
+    ${progress}
     <div><span class="read" id="posread"></span></div>
     ${g ? `<div id="snaprow" style="${e.handle === "move" ? "" : "display:none"}"><label title="Within ${g.snap_pt}pt of a learned grid line, dragging pulls onto it — the same distance LO-003 calls a near miss. Arrow keys always move by exactly the amount shown.">
       <input type="checkbox" id="snaptoggle" ${S.snap ? "checked" : ""}> Snap to grid</label></div>` : ""}
@@ -3382,6 +3414,16 @@ function wireEdit() {
     paintEdit();
   };
   $("cancelmove").onclick = endMove;
+  const next = $("nextplace");
+  if (next) next.onclick = () => {
+    const places = groupPlaces(e.group);
+    const at = places.findIndex((i) => i.slide === e.slide && movableOf(i).shape_id === e.shapeId);
+    const following = places[(at + 1) % places.length];
+    if (!following) return;
+    const group = e.group;
+    S.edit = null;
+    beginMove(following.slide, following, group);
+  };
   paintEdit();
 }
 
@@ -3478,6 +3520,7 @@ async function applyEdit() {
   S.lastChange = { what: summary, kind: "fix", delta: next.delta };
   S.digest = null; S.approved = false;
   const shapeId = e.shapeId;
+  const group = e.group;
   S.edit = null;
   // The live surface redraws straight from the model -- no LibreOffice
   // conversion between a click and its result, which is the whole reason
@@ -3489,6 +3532,13 @@ async function applyEdit() {
   renderRail(); renderNote(); editState(); renderSlide();
   flashChange(summary, next.delta);
   flashShape(shapeId);
+  // Onwards through the job, if it has more places to move. The re-audit has
+  // already dropped the one just fixed; whatever is left is still to do.
+  const left = group ? groupPlaces(group) : [];
+  if (left.length) {
+    beginMove(left[0].slide, left[0], group);
+    paneMessage("good", `${summary}. ${left.length} still to do in this job — the next is open.`);
+  }
 }
 
 /* ---------- editing text in place ----------

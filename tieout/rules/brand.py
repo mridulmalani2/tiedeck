@@ -658,6 +658,22 @@ class UnapprovedTypeface(Rule):
 # --------------------------------------------------------------------------------------
 
 
+def _page_number_ref(deck: DeckModel, slide_index: int, uid: int) -> ShapeRef:
+    """The page number's own ref, found by the uid furniture detection keys on.
+
+    BR-006 and BR-007 built ``ShapeRef(slide, uid, "Page number")`` -- the uid
+    in the *shape id* position. On any slide whose uids and ids differ the
+    finding named another shape, and **Move it** moved the footnote. Falls back
+    to an id no shape has, which the move path refuses rather than guesses at.
+    """
+    slide = deck.slide(slide_index)
+    if slide is not None:
+        for shape in slide.all_shapes():
+            if shape.ref.uid == uid:
+                return shape.ref
+    return ShapeRef(slide_index, -1, "Page number", uid=uid)
+
+
 @register
 class PageNumber(Rule):
     """Reports a page number that is missing, malformed, or out of position.
@@ -724,7 +740,7 @@ class PageNumber(Rule):
                 continue
             findings.append(
                 self.finding(
-                    where=ShapeRef(slide.index, observation.uid, "Page number"),
+                    where=_page_number_ref(deck, observation.slide_index, observation.uid),
                     message="; ".join(messages),
                     profile=profile,
                     provenance_path="brand.footer.page_number",
@@ -836,7 +852,7 @@ class PageNumberSequence(Rule):
                 continue
             return [
                 self.finding(
-                    where=ShapeRef(current.slide_index, current.uid, "Page number"),
+                    where=_page_number_ref(deck, current.slide_index, current.uid),
                     message=(
                         f"page number {current.value} does not follow {previous.value} on "
                         f"slide {previous.slide_index}: the sequence stops ascending here"

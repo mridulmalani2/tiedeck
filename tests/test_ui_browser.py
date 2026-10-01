@@ -25,6 +25,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,6 +36,7 @@ from tieout.model.loader import load_deck
 from tieout.rules.base import clear_caches
 
 JOURNEY = Path(__file__).parent / "browser" / "journey.js"
+GROUPS = Path(__file__).parent / "browser" / "groups.js"
 
 
 def _node_with_playwright() -> str | None:
@@ -65,10 +67,15 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def journey(tmp_path_factory: pytest.TempPathFactory):
+def site(tmp_path_factory: pytest.TempPathFactory):
+    """The decks, two house styles, and a server: falcon is the reference
+    deck's own, osprey a foreign one, so the clean deck checked against it
+    produces hundreds of findings in a few jobs."""
     node = _node_with_playwright()
     if node is None:
         pytest.skip("needs node with the playwright package")
+    from tests.corpus import build_osprey_reference
+
     directory = Path(tmp_path_factory.mktemp("browser"))
     built = build_all(directory / "decks")
     clear_caches()
@@ -77,6 +84,9 @@ def journey(tmp_path_factory: pytest.TempPathFactory):
         learn_from_decks([load_deck(str(built.clean))], "falcon").profile,
         profiles / "falcon.yaml",
     )
+    clear_caches()
+    osprey = load_deck(str(build_osprey_reference(directory / "osprey.pptx")))
+    write_profile(learn_from_decks([osprey], "osprey").profile, profiles / "osprey.yaml")
     port = _free_port()
     server = subprocess.Popen(
         [sys.executable, "-m", "tieout_ui.cli", "--no-open", "--port", str(port)],
@@ -92,24 +102,40 @@ def journey(tmp_path_factory: pytest.TempPathFactory):
                 break
             except OSError:
                 time.sleep(0.2)
-        run = subprocess.run(
-            [node, str(JOURNEY), url, str(built.dirty), "falcon"],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            env={**os.environ, "NODE_PATH": _node_path()},
-            check=False,
-        )
-        lines = [line for line in run.stdout.splitlines() if line.startswith("{")]
-        if not lines:
-            pytest.fail(f"the journey printed nothing:\n{run.stdout}\n{run.stderr}")
-        result = json.loads(lines[-1])
-        if "crashed" in result and "Executable doesn't exist" in result["crashed"]:
-            pytest.skip("playwright has no browser it can launch here")
-        return result
+        yield node, url, built
     finally:
         server.terminate()
         server.wait(timeout=10)
+
+
+def _drive(node: str, script: Path, *args: str) -> dict[str, Any]:
+    run = subprocess.run(
+        [node, str(script), *args],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={**os.environ, "NODE_PATH": _node_path()},
+        check=False,
+    )
+    lines = [line for line in run.stdout.splitlines() if line.startswith("{")]
+    if not lines:
+        pytest.fail(f"{script.name} printed nothing:\n{run.stdout}\n{run.stderr}")
+    result: dict[str, Any] = json.loads(lines[-1])
+    if "crashed" in result and "Executable doesn't exist" in result["crashed"]:
+        pytest.skip("playwright has no browser it can launch here")
+    return result
+
+
+@pytest.fixture(scope="module")
+def journey(site):
+    node, url, built = site
+    return _drive(node, JOURNEY, url, str(built.dirty), "falcon")
+
+
+@pytest.fixture(scope="module")
+def groups(site):
+    node, url, built = site
+    return _drive(node, GROUPS, url, str(built.clean), "osprey")
 
 
 def test_the_page_raised_nothing(journey) -> None:
@@ -158,3 +184,35 @@ def test_a_reload_reopens_the_deck_with_its_corrections(journey) -> None:
     assert journey["fixed"]
     assert journey["ribbonAfter"] == journey["ribbonBefore"]
     assert "Reopened" in journey["flashAfterReload"]
+
+
+# -- the 26-slide deck against a foreign house style ---------------------------
+
+
+def test_the_note_says_how_many_findings_its_jobs_collapse(groups) -> None:
+    """The audit's #46: "16 things to do" beside "By slide (229)" and nothing
+    relating the two."""
+    assert groups["findings"] > groups["jobs"]
+    assert f"from {groups['findings']} findings" in groups["totals"]
+
+
+def test_a_job_no_control_can_do_is_given_its_real_reason(groups) -> None:
+    """The audit's #47: "Add the page number at left 900pt..." was told TieOut
+    "cannot know what is right" beside the exact answer."""
+    for reason in groups["reasons"]:
+        if reason["remedy"].startswith("Add "):
+            assert "does not add a shape" in reason["why"], reason
+        if reason["remedy"].startswith("Recolour "):
+            assert "knows the colour" in reason["why"], reason
+
+
+def test_move_it_walks_a_group_and_moves_the_right_shape(groups) -> None:
+    """The audit's #45, and what driving it found behind it: the page-number
+    findings named the wrong shape, so the walk moved the footnote."""
+    assert groups["errors"] == []
+    assert groups["groupFound"]
+    assert "Place 1 of" in groups["first"]
+    assert "Place 2 of" in groups["second"]
+    assert groups["afterApply"].startswith(f"Move {groups['secondShape']} ")
+    assert "still to do in this job" in groups["afterApply"]
+    assert groups["editorAfterApply"]

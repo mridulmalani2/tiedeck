@@ -593,8 +593,9 @@ safe direction and costs findings.
 5. ~~**The chart cache against its workbook** (5.4).~~ **Done** — CH-006.
 6. ~~**Periods** (5.5).~~ **Done** — stubs, budgets, anchored LTM windows and
    calendar years, each of which had been read as a different period.
-7. **§11's remainder**, listed in §11 itself — smaller now, and worth clearing
-   before the next real-deck pass finds new evidence to reorder against.
+7. ~~**§11's remainder**~~ **Done, re-driven in Chromium** — and the
+   re-drive found three defects nobody had listed, one of them PR #11's own
+   (§11).
 
 ---
 
@@ -880,13 +881,29 @@ by the browser test, which fails on the previous page.
   about 1.5x the font size where PowerPoint draws about 1.2x. The tag now needs
   most of a whole line outside the box; swept across every slide of five decks
   it marks exactly the three real overflows and nothing else.
-* **#44–#49**, from the 26-slide grouped-findings run: #44 is answered by
-  §11.7 below (deliberate); #45 (Move it on a grouped finding opens the first
-  place only), #46 (three counts of three different things shown with
-  nothing relating them) and part of #47 (a remedy phrased as an instruction
-  to TieOut for a rule this queue's §11.2 wording fix does not cover) are
-  still open. #48 (`FontRole.describe()`'s "one of" phrasing) and #49
-  (LO-002's evidence) are done, in §11.5.
+* ~~**#45**~~ **Done, and driving it found two defects behind it.** The editor
+  opened from a group says "Place 2 of 12 in this job", offers **Next place**,
+  and opens the next place by itself after a move is applied. Driving it:
+  (1) every button in the editor's toolbar sat inside the slide, whose "click
+  on empty slide puts the shape down" listener did not exclude it — so
+  **Reset** put the shape back and then closed the editor, and Next place
+  opened the next shape and closed it in one click; (2) **BR-006 and BR-007
+  named the wrong shape.** They built `ShapeRef(slide, uid, "Page number")`,
+  the uid in the *shape id* position, so on any slide whose uids and ids
+  differ — most slides of the reference deck — **Move it on a misplaced page
+  number moved the footnote.** Fixed at the rule (`_page_number_ref`), with a
+  test that fails on the previous code.
+* ~~**#46**~~ **Done.** "16 things to do, from 229 findings".
+* ~~**#47**~~ **Done for what was left.** The reason beside a job with no
+  control now reads the remedy as well as the rule: BR-006's "Add the page
+  number at left 900pt…" was told TieOut "cannot know what is right" beside
+  the exact answer; BR-011's series recolour likewise. An "Add …" remedy says
+  TieOut adds no shapes; a "Recolour …" or "Set the typeface …" one says it
+  knows the answer and the thing sits where it does not write.
+* #44 is answered by §11.7 below (deliberate); #48 and #49 were done in §11.5.
+
+All of #45–#47 are held by `tests/browser/groups.js`, which checks the
+26-slide reference deck against a foreign house style, the audit's own setup.
 
 Everything else the audit numbered — the colour bug, the fix affordances, the
 document-level findings, the report's confidentiality and polish, the wording
