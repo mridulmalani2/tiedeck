@@ -59,6 +59,7 @@ from tieout.model.inherit import (
 )
 from tieout.model.package import PackageInfo, load_package
 from tieout.model.units import emu_to_pt, ooxml_angle_to_degrees
+from tieout.model.workbook import read_range
 
 #: Default text-frame insets in points, as PowerPoint applies them when ``a:bodyPr``
 #: omits them. 0.1 inch left/right, 0.05 inch top/bottom.
@@ -1246,6 +1247,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
     title_text = _chart_text(title_el) if title_el is not None else None
     has_title = title_el is not None and not title_deleted and bool(title_text)
 
+    xlsx, missing = _embedded_workbook(shape)
     series: list[ChartSeries] = []
     for ser in root.findall(".//c:ser", _CHART_NS):
         name_el = ser.find("c:tx", _CHART_NS)
@@ -1269,6 +1271,7 @@ def _load_chart(shape: Any, *, context: SlideContext) -> ChartModel | None:
                 fill_hex=_series_fill(ser, context),
                 has_data_labels=_labels_shown(labels, inherited),
                 label_number_format=_label_format(labels) or _label_format(inherited),
+                **_workbook_side(ser, xlsx, missing),
             )
         )
 
@@ -1452,6 +1455,37 @@ def _every_point_overrides(ser: etree._Element) -> bool:
     ]
     declared = max(counts, default=0)
     return declared > 0 and len(overrides) >= declared
+
+
+def _embedded_workbook(shape: Any) -> tuple[bytes | None, str]:
+    """The chart's embedded workbook, or None and why there is none."""
+    try:
+        part = shape.chart.part.chart_workbook.xlsx_part
+    except (AttributeError, KeyError, ValueError):
+        part = None
+    if part is None:
+        return None, (
+            "the chart has no embedded workbook -- its data is linked to a file "
+            "outside the deck, which TieOut does not open"
+        )
+    return bytes(part.blob), ""
+
+
+def _workbook_side(
+    ser: etree._Element, xlsx: bytes | None, missing: str
+) -> dict[str, Any]:
+    """The series' workbook range and what the workbook holds there.
+
+    Nothing for a series of literal values: those have no workbook to disagree
+    with, and saying "not checked" for them would be noise.
+    """
+    formula = ser.findtext("c:val/c:numRef/c:f", namespaces=_CHART_NS)
+    if not formula:
+        return {}
+    if xlsx is None:
+        return {"workbook_ref": formula, "workbook_note": missing}
+    values, note = read_range(xlsx, formula)
+    return {"workbook_ref": formula, "workbook_values": values, "workbook_note": note}
 
 
 def _series_values(ser: etree._Element) -> tuple[float | None, ...]:

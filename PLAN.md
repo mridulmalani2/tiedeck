@@ -316,7 +316,6 @@ the price of not inventing the other kind of finding.
 | What is not tied today | The error it lets through |
 | --- | --- |
 | A claim with no figure anywhere to check it | "materially ahead of plan" over a table showing 2% |
-| A chart cache against its embedded workbook | The cache is what PowerPoint draws, so it is what is read; a workbook that disagrees is a different and more alarming defect |
 | Cross-references | "see page 12" pointing at page 14 |
 | A figure only ever stated once, in prose, in a deck with no tables | Nothing to tie it to, by construction |
 | Two periods where the deck writes one both ways | "LTM" and "LTM September 2026" do not match, deliberately: conflating them would invent findings between LTM Sep-25 and LTM Sep-26 |
@@ -485,6 +484,20 @@ What follows is the section as it stood; the second bullet is what is now done.
 
 ### 5.4 Chart values against their workbook
 
+**Done, 2026-10-01, as CH-006.** `tieout/model/workbook.py` reads one range of
+the embedded workbook — the range each series' `c:numRef/c:f` names — with the
+standard library and lxml, and `ChartSeries.workbook_values` carries it beside
+the cache. CH-006 (chart, major) reports every point where the cache and the
+workbook disagree, a gap on one side and a number on the other included,
+naming both and the cell. What to say was the hard part, and the answer is
+not which is right: it is what happens if nothing is done — PowerPoint redraws
+the chart from the workbook the next time anyone opens Edit Data. Driven on
+every real-shaped deck in the corpus first: silent on all of them, with no
+refusals (python-pptx writes the two in agreement). Declined, out loud: data
+linked to a file outside the deck, a range of several areas, a sheet the
+workbook lacks. `tests/test_chart_workbook.py`. The tie-out rules still read
+the cache, which is what the reader sees.
+
 `ChartSeries.values` reads the cache, which is what PowerPoint draws. A cache
 that disagrees with the embedded workbook behind it means the chart shows one
 thing and its own data says another — a worse defect than anything CO-001 finds,
@@ -556,7 +569,7 @@ safe direction and costs findings.
 4. ~~**Writing a figure that spans runs** (5.3).~~ **Done** — and the same
    change fixed a worse defect: every derived Fix it in prose overwrote the
    whole sentence.
-5. **The chart cache against its workbook** (5.4).
+5. ~~**The chart cache against its workbook** (5.4).~~ **Done** — CH-006.
 6. **Periods** (5.5). §10 supplied one answer already: a sentence naming two
    periods gives each figure the period next to it, not the range of both.
 7. **§11's remainder**, listed in §11 itself — smaller now, and worth clearing

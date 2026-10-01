@@ -511,7 +511,7 @@ without you reading the file.
 
 ## The rule catalogue
 
-52 rules across six categories. Each one is an independent class — rules never
+53 rules across six categories. Each one is an independent class — rules never
 import each other, and none may touch `python-pptx` — with a docstring stating
 exactly what it measures and its known false-positive mode. `tieout rules`
 prints this table for your own installation, including which rules your client's
@@ -581,7 +581,7 @@ produce would be measured against a default the client never agreed to.
 | **HY-008** | major | on | Image effective resolution below the profile's floor | not learned; fixed behaviour |
 | **HY-009** | minor | on | Font neither embedded nor a standard system font | not learned; fixed behaviour |
 
-### Chart (5 rules)
+### Chart (6 rules)
 
 Charts get their own category because in a banking deck they carry the
 argument, and because **these expectations are not learned from a reference
@@ -607,6 +607,13 @@ switched off.
 | **CH-003** | major | on | A bar chart's value axis does not start at zero | the craft |
 | **CH-004** | major | on | A multi-series chart gives no way to tell the series apart | the craft |
 | **CH-005** | minor | on | Series in one chart label their values to different precision | the craft |
+| **CH-006** | major | on | A chart draws values its embedded workbook does not hold | the chart's own workbook |
+
+CH-006 is the one chart rule that reads data rather than presentation. A chart
+holds its values twice — the cache PowerPoint draws and the workbook it re-reads
+on **Edit Data** — and where they disagree the slide redraws itself as the
+other number the next time anyone touches it. Data linked to a file outside the
+deck is declined and listed as not checked.
 
 ### Consistency (9 rules)
 
@@ -2068,7 +2075,7 @@ itself.
 
 Recorded for review rather than buried:
 
-1. **52 rules, not 27.** Section 9's header and section 14 both say 27, but the
+1. **53 rules, not 27.** Section 9's header and section 14 both say 27, but the
    catalogue itself lists 36 (brand 10, layout 8, typography 9, hygiene 9). The
    catalogue is treated as authoritative and all 36 are implemented, seeded and
    tested. A fifth category, **consistency** (9 rules), is then added beyond the

@@ -33,7 +33,7 @@ from __future__ import annotations
 import re
 from typing import ClassVar, Final
 
-from tieout.model.deck import ChartModel, DeckModel, ShapeModel, SlideModel
+from tieout.model.deck import ChartModel, ChartSeries, DeckModel, ShapeModel, SlideModel
 from tieout.model.furniture import Furniture
 from tieout.profile.schema import Confidence, Profile, Severity
 from tieout.rules.base import Finding, Rule, register
@@ -508,3 +508,125 @@ def _decimals(format_code: str) -> str:
     """Decimal places a number format declares, as a string for grouping."""
     match = re.search(r"\.(0+)", format_code)
     return str(len(match.group(1))) if match else "0"
+
+
+# --------------------------------------------------------------------------------------
+# CH-006
+# --------------------------------------------------------------------------------------
+
+#: Two numbers closer than this, relative to their size, are one number written
+#: twice. The cache stores the workbook's value as text, so they agree exactly
+#: unless they disagree; the slack is only for a round trip through a float.
+_SAME_VALUE: Final[float] = 1e-9
+
+
+def _same(one: float, other: float) -> bool:
+    return abs(one - other) <= _SAME_VALUE * max(1.0, abs(one), abs(other))
+
+
+@register
+class ChartCacheDisagreesWithWorkbook(Rule):
+    """Reports a chart that draws one value while its own data holds another.
+
+    PLAN.md §5.4. A chart holds its values twice: a cache in the chart part,
+    which PowerPoint draws, and the workbook embedded behind it, which
+    PowerPoint re-reads the next time anyone opens **Edit Data**. Where the two
+    disagree the slide shows one number today, and redraws itself as the other
+    the moment someone touches the chart -- after every check has passed, and
+    usually after the deck has been signed off. Every tie-out rule reads the
+    cache, because that is what the reader sees; none of them can see this.
+
+    Measures: for each series that points at a range in an embedded workbook,
+    each point's cached value against the workbook cell it was read from. A
+    gap on one side and a number on the other is a disagreement too.
+
+    Not a judgement on which is right. The finding names both, and the remedy
+    says what will happen if nothing is done.
+
+    Declines, and says so, where the workbook cannot be read: data linked to a
+    file outside the deck, a range spanning several areas, a sheet the
+    workbook does not have. Literal values have no workbook, and nothing is
+    said about them.
+
+    Known false-positive mode: none seen. A deck whose charts were pasted as
+    pictures has no chart to check; one whose workbook was deliberately left
+    stale -- an old scenario kept for reference -- will be reported, and is
+    the case the remedy's warning is for.
+    """
+
+    id: ClassVar[str] = "CH-006"
+    category: ClassVar[str] = "chart"
+    severity: ClassVar[Severity] = "major"
+    confidence: ClassVar[Confidence] = "high"
+    summary: ClassVar[str] = "A chart draws values its embedded workbook does not hold"
+
+    def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+        findings: list[Finding] = []
+        for _slide, shape in _charts(deck, self.furniture(deck, profile)):
+            chart = shape.chart
+            assert chart is not None
+            differences: list[str] = []
+            for series in chart.series:
+                if series.workbook_ref is None:
+                    continue
+                if series.workbook_values is None:
+                    self.note_unchecked(
+                        shape.ref,
+                        f"{series.name or 'a series'}: {series.workbook_note}",
+                    )
+                    continue
+                differences.extend(self._differences(chart, series))
+            if not differences:
+                continue
+            first = differences[0]
+            more = (
+                f", and {len(differences) - 1} more point(s)"
+                if len(differences) > 1
+                else ""
+            )
+            findings.append(
+                self.finding(
+                    where=shape.ref,
+                    profile=profile,
+                    message=(
+                        f"the chart draws values its own workbook does not hold: "
+                        f"{first}{more}"
+                    ),
+                    measured=f"{len(differences)} point(s) differ",
+                    expected="the drawn values equal the workbook behind them",
+                    remedy=(
+                        "Open the chart's data (Edit Data) and correct whichever is "
+                        "wrong: PowerPoint redraws the chart from the workbook the "
+                        "next time it is edited"
+                    ),
+                    bbox_pt=shape.bbox_pt,
+                    signature="\n".join(differences),
+                )
+            )
+        return findings
+
+    @staticmethod
+    def _differences(chart: ChartModel, series: ChartSeries) -> list[str]:
+        cached = series.values
+        stored = series.workbook_values or ()
+        name = series.name or "a series"
+        reference = series.workbook_ref or ""
+        out: list[str] = []
+        for position in range(min(len(cached), len(stored))):
+            drawn, held = cached[position], stored[position]
+            if drawn is None and held is None:
+                continue
+            if drawn is not None and held is not None and _same(drawn, held):
+                continue
+            category = (
+                chart.categories[position] if position < len(chart.categories) else ""
+            )
+            out.append(
+                f"'{name}'{f' for {category}' if category else ''} draws "
+                f"{_plain(drawn)} where {reference} holds {_plain(held)}"
+            )
+        return out
+
+
+def _plain(value: float | None) -> str:
+    return "nothing" if value is None else f"{value:,.10g}"
