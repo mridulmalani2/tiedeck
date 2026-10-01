@@ -39,6 +39,7 @@ from typing import ClassVar, Final
 
 from tieout.figures import (
     Figure,
+    FigureIndex,
     build_index,
     comparable,
     normalise_label,
@@ -202,7 +203,7 @@ def _is_scale_of(a: float, b: float) -> bool:
 
 
 def _disagreements(
-    deck: DeckModel, *, scale: bool
+    index: FigureIndex, *, scale: bool
 ) -> list[tuple[Figure, Figure, str]]:
     """Every pair of figures that claim the same fact and do not agree.
 
@@ -222,7 +223,6 @@ def _disagreements(
     to match a known one, and a dictionary key cannot do that. So the group is
     gathered loosely and every pair inside it is put to ``comparable``.
     """
-    index = build_index(deck)
     out: list[tuple[Figure, Figure, str]] = []
     # Sorted on a key whose third element is ``str | None``. Sorting the raw
     # keys compared None with 'x' the moment a deck stated one metric in two
@@ -232,7 +232,7 @@ def _disagreements(
     # tests passed over it.
     for _, figures in sorted(
         index.grouped().items(),
-        key=lambda item: (item[0][0], item[0][1], item[0][2] or ""),
+        key=lambda item: (item[0][0], item[0][1], item[0][2] or "", item[0][3]),
     ):
         if not _spans_two_places(figures):
             continue
@@ -317,8 +317,20 @@ class ContradictoryFigure(Rule):
     requires: ClassVar[tuple[str, ...]] = ()
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
+        index = build_index(deck)
+        for figure, others in index.unread():
+            # PLAN.md §0: a figure whose kind nothing in the deck states is not
+            # compared, and saying so is the difference between a refusal and
+            # a pass. Recorded here and not in CO-002, which reads the same
+            # pairs: one statement of a declined comparison is enough.
+            self.note_unchecked(
+                figure.ref,
+                f"{figure.raw or figure.reading.raw} for '{figure.metric}' was not "
+                f"compared with the {others} other statement(s) of it: "
+                f"{figure.kind_from}",
+            )
         findings: list[Finding] = []
-        for first, other, _ in _disagreements(deck, scale=False):
+        for first, other, _ in _disagreements(index, scale=False):
             findings.append(
                 self.finding(
                     where=other.ref,
@@ -366,7 +378,7 @@ class ScaleMismatch(Rule):
 
     def run(self, deck: DeckModel, profile: Profile) -> list[Finding]:
         findings: list[Finding] = []
-        for baseline, other, _ in _disagreements(deck, scale=True):
+        for baseline, other, _ in _disagreements(build_index(deck), scale=True):
             values = dict(zip((baseline, other), _values(baseline, other), strict=True))
             smaller, larger = sorted(values, key=lambda f: abs(values[f]))
             ratio = abs(values[larger]) / abs(values[smaller])

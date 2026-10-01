@@ -96,6 +96,7 @@ scored.
 | --- | --- | --- | --- | --- |
 | Baseline, before §0 items 2–4 | 28 | 27 | 96% | 9 |
 | CO-001 examines every period (below) | 28 | 28 | 100% | 9 |
+| `kind` on every figure (§0.2) | 28 | 27 | 96% | 6 |
 
 The baseline's nine false positives are exactly the demo's three, each
 reproduced three ways: CO-001 on a share against a change, a change against a
@@ -113,6 +114,45 @@ table cell: every later contradiction under that metric goes quiet. Fixed: every
 figure not already weighed against an earlier baseline is a baseline of its own,
 held by `test_a_contradiction_in_one_period_does_not_hide_one_in_another`, which
 fails on the previous code.
+
+### 0.2 `kind` — what it cost, measured
+
+Every figure now carries one of level, share, change, rate, ratio or count, and
+where it was read from (`Figure.kind`, `Figure.kind_from`). `comparable()`
+refuses two kinds, and a missing kind, before any value is looked at;
+`grouped()` and `lookup()` see only figures whose kind was read, and `lookup()`
+only levels — so "Revenue up $146m" no longer leaves FY25A revenue stated two
+ways and every derivation needing it refusing.
+
+How a kind is read, nearest evidence first, and nothing past the last line:
+
+1. a rate word in reach of the figure — "grew at a 19.6% **CAGR**", "per site";
+2. "of" straight after a percentage — "64% **of** revenue" is a share;
+3. a change word, backwards until a word saying the figure is a *state*
+   ("grew **to** $412m", "up **from** $1,352m" are levels) and forwards until the
+   clause turns to a period or a comparison;
+4. the label — "EBITDA **margin**", "Revenue **growth**", "EV**/**EBITDA"; in a
+   table either axis, and two axes naming different kinds refuse the cell;
+5. the deck's own tables, where they state the metric at that quantity one way
+   only — the grounding prose metrics already have;
+6. the unit — an amount is a level, a multiple a ratio. A percentage or a basis
+   point is four kinds, and the unit says nothing about which.
+
+**The result on the corpus:** CO-001's three demo false positives went to
+zero — and a fourth, added while writing this section, stayed at zero: two
+shares of one base ("64% of revenue is recurring", "30% of revenue is from
+Europe") are declined, because the part is not read. It lost exactly the
+defect predicted — "Churn of 4.8%" against a table showing 3.8%, where nothing
+names what kind of figure churn is. It is declined
+on both statements, in words, through `FigureIndex.unread()` and CO-001's
+unchecked record; the gate pins that it is *declined*, not silent. On the
+marlin, reference-clean and reference-dirty decks no figure lost its kind, so
+nothing there went quiet: every table percentage is a margin, a CAGR or a
+movement column, and every prose figure there is an amount, a multiple, a
+labelled margin or a CAGR. That says the generated decks are kind-tidy, not
+that real ones are: a KPI table of bare percentages — churn, retention,
+utilisation, conversion — is the shape that goes quiet, and the next real-deck
+pass is where to measure how common it is.
 
 ---
 
@@ -463,6 +503,14 @@ Client decks are never committed; CI asserts no `.pptx` is tracked.
 
 ## 9. Standing limitations to carry forward, not rediscover
 
+* **A percentage nothing names the kind of is not compared** (§0.2). "Churn"
+  stated as 3.8% in a table and 4.8% in a sentence is a real contradiction the
+  tool declines, and says so; inventing the kind is what reported a share of
+  revenue against a growth in it. The same holds one level down: "64% of
+  revenue is recurring" is bound to its *base*, and the part ("recurring") is
+  not read, so it is declined too — otherwise it and "30% of revenue is from
+  Europe" are one fact. A share that names its part first ("EBITDA at 24.8% of
+  revenue", or a table row under a "% of total" header) is compared.
 * **A table's scope comes from its corner cell and from nowhere else.** A
   segment P&L headed "Analytics ($m)" is scoped to Analytics and no longer
   contradicts the group P&L; one headed only "$m", whose slide headline is the

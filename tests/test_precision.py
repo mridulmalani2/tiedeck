@@ -23,19 +23,24 @@ from tests.corpus import CASES, Report, score
 
 #: Defects in the corpus the tool does not report, and why each one is missed.
 #:
-#: Empty since the baseline's one miss -- CO-001 abandoning a metric after its
-#: first disagreement, in every period -- was fixed (PLAN.md §0.1).
-KNOWN_MISSES: frozenset[str] = frozenset()
+#: The baseline's one miss -- CO-001 abandoning a metric after its first
+#: disagreement, in every period -- was fixed (PLAN.md §0.1). The one here is
+#: the cost of ``kind``, predicted before it was measured: a percentage nothing
+#: names the kind of is not compared. It is declined out loud, which the
+#: ``[declined, and said so]`` pins.
+KNOWN_MISSES: frozenset[str] = frozenset(
+    {
+        "CO-001: heron-kinds: 'Churn of 4.8%' contradicts the table's 3.8% -- no word "
+        "says what kind of figure churn is, so PLAN.md §0 predicts this one goes quiet "
+        "[declined, and said so]",
+    }
+)
 
 #: Findings on something labelled intentional, or on nothing labelled at all.
 #: Keyed by rule, case and slide; the message is not pinned, so rewording a
 #: finding does not count as changing what the tool does.
 KNOWN_FALSE_POSITIVES: frozenset[str] = frozenset(
     {
-        # PLAN.md §0: a share, a change and a level of one metric, all compared.
-        "CO-001 heron-kinds slide 4",
-        "CO-001 heron-kinds slide 6",
-        "CO-001 heron-kinds slide 7",
         # A decorative bleed in a house style whose reference deck does not
         # bleed: reported at info, with "Nothing to do unless this was not
         # intended".

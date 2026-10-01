@@ -184,6 +184,23 @@ def score(cases: Sequence[Case], directory: Path) -> Report:
     return Report(scores=scores, declined=declined)
 
 
+def _declined(label: Label, result: AuditResult) -> str:
+    """Whether a missed defect was declined out loud or passed in silence.
+
+    PLAN.md §8: a refusal is not a pass, and five of §10's ten defects were
+    silent. A miss the rule recorded as unchecked, on the slide it would have
+    reported, is the honest kind; a miss with no record is the kind that reads
+    as "checked, and fine", and is marked so it cannot be mistaken for the
+    other.
+    """
+    said = any(
+        record.rule_id == label.rule_id
+        and (label.slide is None or record.slide_index == label.slide)
+        for record in result.unchecked
+    )
+    return "[declined, and said so]" if said else "[SILENT]"
+
+
 def _score_case(case: Case, result: AuditResult, scores: dict[str, Score]) -> None:
     for rule_id in case.rules:
         scores.setdefault(rule_id, Score())
@@ -198,7 +215,7 @@ def _score_case(case: Case, result: AuditResult, scores: dict[str, Score]) -> No
                 score_.caught += 1
                 claimed.update(hits)
             else:
-                score_.missed.append(f"{case.name}: {label.why}")
+                score_.missed.append(f"{case.name}: {label.why} {_declined(label, result)}")
     for position, finding in enumerate(findings):
         if position in claimed:
             continue
@@ -287,7 +304,7 @@ REFERENCE_ECHOES: tuple[Label, ...] = (
 
 
 def build_kinds(path: Path) -> Path:
-    """Twelve slides of prose against one P&L, all of it correct except the
+    """Thirteen slides of prose against one P&L, all of it correct except the
     four defects labelled in :data:`KINDS_LABELS`.
 
     Revenue 1,388 / 1,624 / 1,770 grows 17.0% then 9.0%; EBITDA 312 / 389 / 439
@@ -321,6 +338,7 @@ def build_kinds(path: Path) -> Path:
         "EBITDA margin of 25.8% in FY25A.",               # 10 ratio, WRONG
         "Revenue of $1,790m in FY25A.",                   # 11 level, WRONG
         "Churn of 4.8% in FY25A.",                        # 12 no word says what kind
+        "30% of revenue is from Europe in FY25A.",        # 13 another share of revenue
     )
     for page, sentence in enumerate(statements, start=3):
         slide = _blank(presentation)
@@ -345,6 +363,9 @@ KINDS_LABELS: tuple[Label, ...] = (
           "'EBITDA margin of 25.8%' contradicts the table's 24.8%"),
     Label("CO-001", 11, "defect",
           "'Revenue of $1,790m' contradicts the table's 1,770"),
+    Label("CO-001", 13, "intentional",
+          "'30% of revenue is from Europe' and '64% of revenue is recurring' are "
+          "shares of one base and different parts of it"),
     Label("CO-001", 12, "defect",
           "'Churn of 4.8%' contradicts the table's 3.8% -- no word says what kind of "
           "figure churn is, so PLAN.md §0 predicts this one goes quiet"),
