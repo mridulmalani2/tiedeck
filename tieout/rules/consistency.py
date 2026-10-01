@@ -237,12 +237,23 @@ def _disagreements(
         if not _spans_two_places(figures):
             continue
         ordered = sorted(figures, key=lambda f: (f.place, f.address))
+        # Positions already weighed against an earlier baseline. Each of those
+        # is that baseline's to report, so it must not become a baseline itself
+        # and report the same disagreement from the other end. Every figure
+        # *not* yet weighed is a baseline of its own: that is what gives each
+        # period its own earliest statement. Stopping the whole group once the
+        # first baseline had produced a pair -- which is what this replaced --
+        # hid every contradiction in every other period under that metric.
+        weighed: set[int] = set()
         for position, baseline in enumerate(ordered):
+            if position in weighed:
+                continue
             base_value_seen: set[float] = set()
-            for candidate in ordered[position + 1 :]:
+            for offset, candidate in enumerate(ordered[position + 1 :], start=position + 1):
                 confidence = comparable(baseline, candidate)
                 if confidence is None:
                     continue
+                weighed.add(offset)
                 if candidate.place == baseline.place:
                     # Two readings of one figure inside a single shape is that
                     # shape's own layout, not two statements of the same fact.
@@ -255,12 +266,6 @@ def _disagreements(
                     continue
                 base_value_seen.add(right)
                 out.append((baseline, candidate, confidence))
-            if out and out[-1][0] is baseline:
-                # The earliest statement is the baseline for everything after
-                # it, exactly as before. Once it has produced its pairs, a later
-                # figure must not become a second baseline for the same group
-                # and report the same disagreement from the other end.
-                break
     return out
 
 

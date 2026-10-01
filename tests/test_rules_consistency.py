@@ -839,3 +839,43 @@ def test_a_figure_stated_in_two_scales_that_agree_is_not_a_contradiction(
     drift = findings_for(_run(deck, reference_profile, "CO-008"), "CO-008")
     assert drift, "the same figure in millions and in billions is CO-008's subject"
     assert "millions" in drift[0].message and "billions" in drift[0].message
+
+
+def test_a_contradiction_in_one_period_does_not_hide_one_in_another(
+    tmp_path, reference_profile
+):
+    """PLAN.md §0.1: the precision corpus's one miss.
+
+    The earliest statement of a metric is the baseline, and once it had produced
+    a disagreement the whole metric stopped being examined -- every period, not
+    only its own. So a deck restating FY2024A revenue wrongly on one slide had
+    its wrong FY2025A revenue on the next slide pass without a word, because the
+    FY2025A cell was never allowed to be a baseline.
+    """
+    deck = _deck_with_slides(
+        tmp_path / "periods.pptx",
+        [
+            [[["Fiscal year", "Revenue"], ["2024A", "1,624"], ["2025A", "1,770"]]],
+            [[["Fiscal year", "Revenue"], ["2024A", "1,600"]]],
+            [[["Fiscal year", "Revenue"], ["2025A", "1,800"]]],
+        ],
+    )
+    result = _run(deck, reference_profile, "CO-001")
+
+    assert {f.slide_index for f in result.findings} == {2, 3}, [
+        f.message for f in result.findings
+    ]
+
+
+def test_a_figure_already_compared_is_not_a_second_baseline(
+    tmp_path, reference_profile
+):
+    """The guard the fix above must keep: 263 against 275 is one contradiction,
+    and reported once -- not again from 275's end as a baseline of its own."""
+    deck = _deck_with_slides(
+        tmp_path / "once.pptx",
+        [[_ebitda("263")], [_ebitda("275")], [_ebitda("275")]],
+    )
+    result = _run(deck, reference_profile, "CO-001")
+
+    assert len(result.findings) == 1, [f.message for f in result.findings]
