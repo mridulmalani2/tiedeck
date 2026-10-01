@@ -742,6 +742,32 @@ tieout check deck.pptx --client acme \
 A shape-scoped acceptance stops matching if the shape is renamed, which errs
 towards reporting — the safe direction for a check.
 
+### Declaring a finding intentional for the house style
+
+An acceptance is remembered by its slide number and holds for one deck. A false
+positive that comes back on every turn of every deck is why a tool gets switched
+off, so the other kind of dismissal is remembered by what the finding is
+*about* — a position, a pair of figures — and written into the profile:
+
+```bash
+tieout check deck.pptx --client acme \
+  --intended "LO-003@slide5:Takeaway" \
+  --intended-note "the takeaway box is inset on purpose"
+```
+
+The entry names a finding on this deck the way `--accept` does; what is stored
+under `intended:` in `profiles/acme.yaml` is its signature, which never names a
+slide. It is not reported again on any deck checked against the profile, it
+survives `tieout learn` and `learn --add`, and it is listed — never silently
+dropped — under "read as intended" in every report. In the UI it is the
+**This is intentional** button beside **Set aside**, with Undo, and a list under
+House style where any declaration can be withdrawn.
+
+A declaration covers exactly what it names: a box at 493pt declared intended
+says nothing about one at 487pt, a clustered finding is covered only when every
+shape in it is, and a pair of figures declared intended speaks again the moment
+either figure changes.
+
 ---
 
 ## Optional: semantic review
@@ -1585,6 +1611,7 @@ tieout check DECK.pptx --client NAME [--profile PATH]
                        [--severity blocker|major|minor|info]
                        [--rules BR-*,LO-003] [--exclude TY-009]
                        [--accept RULE@slideN[:Shape name]] [--accept-note TEXT]
+                       [--intended RULE@slideN[:Shape name]] [--intended-note TEXT]
                        [--fail-on blocker] [--gate-confidence medium] [--quiet]
 
 tieout rules [--client NAME]

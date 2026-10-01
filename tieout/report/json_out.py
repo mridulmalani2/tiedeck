@@ -49,6 +49,15 @@ def build(result: AuditResult) -> dict[str, Any]:
             }
             for entry in result.unchecked
         ],
+        "excused": [
+            {
+                "rule_id": entry.rule_id,
+                "slide_index": entry.slide_index,
+                "shape": _where(entry.where),
+                "reason": entry.reason,
+            }
+            for entry in result.excused
+        ],
         "rules_skipped": [
             {"rule_id": entry.rule_id, "reason": entry.reason, "failed": entry.failed}
             for entry in result.rules_skipped
@@ -67,6 +76,7 @@ def _finding(finding: Any) -> dict[str, Any]:
         "category": finding.category,
         "severity": finding.severity,
         "confidence": finding.confidence,
+        "signature": finding.signature,
         "slide_index": finding.slide_index,
         "shape": _where(finding.where),
         "message": finding.message,

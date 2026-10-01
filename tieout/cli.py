@@ -24,16 +24,18 @@ from tieout.learn import learn as learn_profile
 from tieout.learn.emit import iter_provenance
 from tieout.learn.emit import write as write_profile
 from tieout.learn.interview import Prompter
+from tieout.model.deck import DeckModel
 from tieout.model.loader import DeckLoadError, load_deck
 from tieout.profile.loader import (
     ProfileError,
+    keep_declarations,
     load_for_client,
     load_suppressions,
     profile_path,
     suppression_path,
     write_suppressions,
 )
-from tieout.profile.schema import DeferredQuestion, Suppression
+from tieout.profile.schema import DeferredQuestion, Profile, Suppression
 from tieout.report import console as console_report
 from tieout.report import html as html_report
 from tieout.report import json_out
@@ -143,8 +145,14 @@ def learn(
         return
 
     target = out or profile_path(client)
+    carried = keep_declarations(result.profile, target)
     write_profile(result.profile, target, questions_deferred=len(result.interview.deferred))
     _report_learned(result, target)
+    if carried:
+        _out.print(
+            f"[dim]Kept {carried} finding(s) previously declared intentional for "
+            f"this house style.[/dim]"
+        )
 
 
 def _report_learned(result: object, target: Path) -> None:
@@ -322,6 +330,19 @@ def check(
             "--accept in the same run.",
         ),
     ] = "",
+    intended: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--intended",
+            help="Declare a finding intentional for this house style, as RULE@slideN "
+            "or RULE@slideN:Shape name. Written to the profile by what the finding is "
+            "about, not where, so it is not reported again on any deck.",
+        ),
+    ] = None,
+    intended_note: Annotated[
+        str,
+        typer.Option("--intended-note", help="Why, recorded with each --intended."),
+    ] = "",
     fail_on: Annotated[
         str, typer.Option("--fail-on", help="Exit 1 at this severity or worse.")
     ] = "blocker",
@@ -354,6 +375,16 @@ def check(
         _fail("--accept-note has nothing to annotate: pass --accept as well")
     if accept:
         _accept(client or loaded_profile.client, accept, accept_note)
+    if intended_note and not intended:
+        _fail("--intended-note has nothing to annotate: pass --intended as well")
+    if intended:
+        _declare_intended(
+            loaded_profile,
+            profile if profile is not None else profile_path(client or loaded_profile.client),
+            deck,
+            intended,
+            intended_note,
+        )
 
     suppressions = load_suppressions(client or loaded_profile.client)
     clear_caches()
@@ -440,26 +471,7 @@ def _accept(client: str, entries: list[str], note: str = "") -> None:
     """
     suppressions = load_suppressions(client)
     for entry in entries:
-        rule_id, _, rest = entry.partition("@")
-        rule_id = rule_id.strip()
-        if not rule_id:
-            _fail(f"cannot read --accept {entry!r}: expected {_ACCEPT_FORM}")
-        # A shape may be named after the slide, which narrows the acceptance to
-        # that shape. Without it the acceptance covers the whole slide, which is
-        # what the bare form asks for but rarely what the user means.
-        slide, _, shape_name = rest.partition(":")
-        shape_name = shape_name.strip()
-        slide_index: int | None = None
-        if slide.strip():
-            digits = slide.strip().lower().removeprefix("slide")
-            if not digits.isdigit():
-                _fail(f"cannot read --accept {entry!r}: expected {_ACCEPT_FORM}")
-            slide_index = int(digits)
-        if shape_name and slide_index is None:
-            _fail(
-                f"cannot read --accept {entry!r}: a shape needs a slide, "
-                f"as {_ACCEPT_FORM}"
-            )
+        rule_id, slide_index, shape_name = _parse_entry(entry, "--accept")
 
         existing = next(
             (
@@ -487,6 +499,66 @@ def _accept(client: str, entries: list[str], note: str = "") -> None:
                 existing.note = f"{existing.note}; {note}" if existing.note else note
     suppressions.client = client
     write_suppressions(suppressions, suppression_path(client))
+
+
+def _parse_entry(entry: str, flag: str) -> tuple[str, int | None, str]:
+    """``RULE@slideN:Shape`` as (rule, slide, shape); the last two optional."""
+    rule_id, _, rest = entry.partition("@")
+    rule_id = rule_id.strip()
+    if not rule_id:
+        _fail(f"cannot read {flag} {entry!r}: expected {_ACCEPT_FORM}")
+    # A shape may be named after the slide, which narrows the entry to that
+    # shape. Without it the entry covers the whole slide, which is what the
+    # bare form asks for but rarely what the user means.
+    slide, _, shape_name = rest.partition(":")
+    shape_name = shape_name.strip()
+    slide_index: int | None = None
+    if slide.strip():
+        digits = slide.strip().lower().removeprefix("slide")
+        if not digits.isdigit():
+            _fail(f"cannot read {flag} {entry!r}: expected {_ACCEPT_FORM}")
+        slide_index = int(digits)
+    if shape_name and slide_index is None:
+        _fail(f"cannot read {flag} {entry!r}: a shape needs a slide, as {_ACCEPT_FORM}")
+    return rule_id, slide_index, shape_name
+
+
+def _declare_intended(
+    profile: Profile, target: Path, deck: DeckModel, entries: list[str], note: str
+) -> None:
+    """Write what each ``--intended`` entry names into the profile, by signature.
+
+    PLAN.md §0. ``--accept`` remembers a finding by its slide number, in a file
+    beside the profile, and so holds for exactly one deck; this remembers what
+    the finding is *about* -- a position, a pair of figures -- in the profile
+    itself, so it holds for every deck in the house style. The entry names
+    findings on this deck the way ``--accept`` does; what is stored is their
+    signatures, never the slide.
+    """
+    clear_caches()
+    current = run_rules(deck, profile)
+    added = 0
+    for entry in entries:
+        rule_id, slide_index, shape_name = _parse_entry(entry, "--intended")
+        matches = [
+            finding
+            for finding in current.findings
+            if finding.rule_id == rule_id
+            and (slide_index is None or finding.slide_index == slide_index)
+            and (not shape_name or finding.shape_name == shape_name)
+        ]
+        if not matches:
+            _fail(f"--intended {entry!r} names no finding on this deck")
+        for finding in matches:
+            added += profile.declare_intended(
+                finding.rule_id, finding.signature, note=note, example=finding.message
+            )
+    write_profile(profile, target)
+    _out.print(
+        f"[green]Declared {added} finding(s) intentional[/green] for "
+        f"{profile.client}'s house style, in {target}. They will not be reported "
+        f"again on any deck checked against it."
+    )
 
 
 def _suggest_relearn(suppressions: object, client: str) -> None:

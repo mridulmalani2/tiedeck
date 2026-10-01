@@ -118,6 +118,11 @@ def merge(existing: Profile, incoming: Profile) -> MergeResult:
     _merge_typography(merged, existing, incoming, result)
     _merge_archetypes(merged, incoming, result)
     _merge_not_learned(merged, existing, incoming)
+    # Declarations are a person's, not a deck's: the union, never a vote.
+    for entry in incoming.intended:
+        merged.declare_intended(
+            entry.rule_id, entry.signature, note=entry.note, example=entry.example
+        )
     return result
 
 

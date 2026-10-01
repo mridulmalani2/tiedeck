@@ -174,6 +174,18 @@ def _evidence(first: Figure, other: Figure) -> str:
     return f" (matched on {', and '.join(parts)})" if parts else ""
 
 
+def _pair_signature(one: Figure, other: Figure) -> str:
+    """What a disagreement between two figures is about, without the slides.
+
+    The fact both claim to state -- metric, scope, kind, period -- and the two
+    values as written. Declared intentional, it stays quiet for this pair of
+    statements on the next turn of the deck, and speaks again the moment
+    either figure changes, which is when it might have stopped being right.
+    """
+    values = "~".join(sorted((_format(one), _format(other))))
+    return f"{one.metric}|{one.scope}|{one.kind}|{one.period or ''}|{values}"
+
+
 def _spans_two_places(figures: list[Figure]) -> bool:
     """Whether these figures come from at least two distinct shapes.
 
@@ -347,6 +359,7 @@ class ContradictoryFigure(Rule):
                     ),
                     correction=_edit(other, first),
                     bbox_pt=other.bbox_pt,
+                    signature=_pair_signature(first, other),
                 )
             )
         return cluster_findings(findings)
@@ -397,6 +410,7 @@ class ScaleMismatch(Rule):
                     remedy="State both figures in the same scale",
                     correction=_edit(larger, smaller),
                     bbox_pt=larger.bbox_pt,
+                    signature=_pair_signature(smaller, larger),
                 )
             )
         return cluster_findings(findings)

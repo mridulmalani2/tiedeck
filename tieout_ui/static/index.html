@@ -1314,7 +1314,27 @@ function renderStyle() {
          will report that material as wrong.</p>
     </div>`;
 
-  $("pane").innerHTML = preamble + questions + groups + unlearned;
+  const declared = !draft && (p.intended || []).length ? `
+    <div class="slide-head">Declared intentional</div>
+    <div class="block"><p class="hint">Findings someone marked <b>This is intentional</b>.
+      None of them is reported on any deck checked against this profile.</p>
+      ${p.intended.map((d, k) => `<div class="fact"><div class="k mono">${esc(d.rule_id)}</div>
+        <div class="v">${esc(d.example || d.signature)}${d.note ? ` <i>— ${esc(d.note)}</i>` : ""}</div>
+        <button data-withdraw="${k}">Withdraw</button></div>`).join("")}</div>` : "";
+
+  $("pane").innerHTML = preamble + questions + groups + unlearned + declared;
+  $("pane").querySelectorAll("[data-withdraw]").forEach((el) => {
+    el.onclick = async () => {
+      const d = p.intended[Number(el.dataset.withdraw)];
+      try {
+        const res = await api("/api/intended", { method: "POST", body: {
+          client: S.client, withdraw: true, rule_id: d.rule_id, signatures: [d.signature] } });
+        S.profile = res.profile;
+        renderStyle();
+        paneMessage("good", "Withdrawn. It is reported again from the next check.");
+      } catch (e) { paneMessage("bad", e.message); }
+    };
+  });
 
   $("pane").querySelectorAll('.fact input[type=checkbox]').forEach((b) => {
     b.onchange = () => { b.closest(".fact").classList.toggle("off", !b.checked); setDirty(true); };
@@ -1616,6 +1636,7 @@ function renderNote() {
     <div class="note-head"><b>${a.slide_count}</b> slides checked against
       <b>${a.rules_run.length}</b> rule${a.rules_run.length === 1 ? "" : "s"}${
       a.suppressed ? `, <b>${a.suppressed}</b> previously accepted` : ""}.</div>
+    ${excusedBlock(a.excused || [])}
     ${deltaBlock()}
     ${reviewBanner(a.review)}`;
 
@@ -1761,7 +1782,7 @@ function actionButtons(a, index) {
   // finding someone has looked at and decided about should stop competing for
   // attention with the ones they have not. Session-only, deliberately — see the
   // note on Deck.rejected.
-  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>`;
+  const aside = `<button data-reject="${esc(a.key)}">Set aside</button>${intendButton(a)}`;
   if (a.fixable) {
     return `<div class="acts">
       <button class="go" data-fix="${esc(a.key)}">Fix it</button>${aside}</div>`;
@@ -1908,6 +1929,15 @@ function wireNote() {
         "Correcting the deck");
     };
   });
+  $("pane").querySelectorAll("[data-intend]").forEach((el) => {
+    el.onclick = async (event) => {
+      event.stopPropagation();
+      await correct("/api/intended",
+        { deck_id: S.deck.deck_id, client: S.client, key: el.dataset.intend }, "");
+      const said = S.audit && S.audit.intended;
+      if (said && said.signatures) intendedFlash(said);
+    };
+  });
   $("pane").querySelectorAll("[data-reject],[data-unreject]").forEach((el) => {
     el.onclick = (event) => {
       event.stopPropagation();
@@ -2017,8 +2047,22 @@ function actionForFinding(id) {
 function actionButtonsForInstance(match) {
   const { action: a, index } = match;
   if (a.rejected || a.fixable || a.count === 1) return actionButtons(a, index);
-  return `<div class="acts"><button data-reject="${esc(a.key)}">Set aside</button>
+  return `<div class="acts"><button data-reject="${esc(a.key)}">Set aside</button>${
+    intendButton(a)}
     <span class="manual">${esc(whyManual(a))}</span></div>`;
+}
+
+// "Set aside" is for this deck and this session. "This is intentional" is for
+// the house style: it is written to the client's profile, by what the finding
+// is about rather than which slide it is on, and it is not reported again on
+// any deck checked against that profile. PLAN.md §0 — a false positive that
+// can be dismissed for good in one click is a nuisance; one that comes back
+// every run is why tools get switched off. Semantic findings come from the
+// content review, not from a rule a profile can remember, so they do not get it.
+function intendButton(a) {
+  if (!S.client || a.category === "semantic") return "";
+  return `<button data-intend="${esc(a.key)}" title="Never report this again for ${
+    esc(S.client)}'s house style. Written to the profile; Undo is offered.">This is intentional</button>`;
 }
 
 function item(n, slide, f) {
@@ -3478,6 +3522,32 @@ function renderIntro() {
 // left two copies of the same error stacked above the content -- the "it
 // repeats itself if you press it twice" defect. Writing to a dedicated node
 // makes that impossible rather than merely unlikely.
+// PLAN.md §0: what was not reported because the deck — or a person — says it
+// was meant. Listed, with the evidence, because a silence on the strength of
+// evidence is only as good as the evidence, and a reader who cannot see it
+// cannot check it.
+function excusedBlock(excused) {
+  if (!excused.length) return "";
+  return `<details class="excused"><summary>${excused.length} not reported because the deck says ${
+    excused.length === 1 ? "it was" : "they were"} meant</summary>${excused.map((e) =>
+    `<div class="inst" data-goto="${e.slide}"><span class="at">Slide ${e.slide} · ${
+      esc(e.rule_id)}</span> — ${esc(e.reason)}</div>`).join("")}</details>`;
+}
+
+// Said once, with the undo beside it, because this one outlives the session:
+// a click here changes what every later check against this profile reports.
+function intendedFlash(said) {
+  const n = said.count;
+  $("flash").innerHTML = `<div class="msg good">${esc(
+    `Marked intentional for ${said.client}'s house style: ${n} finding${n === 1 ? "" : "s"} `
+    + `will not be reported again on any deck checked against it. It is listed under `
+    + `House style, where it can be withdrawn.`)}
+    <div class="acts" style="margin-top:8px"><button id="unintend">Undo</button></div></div>`;
+  $("unintend").onclick = () => correct("/api/intended", {
+    deck_id: S.deck.deck_id, client: S.client, withdraw: true,
+    rule_id: said.rule_id, signatures: said.signatures }, "");
+}
+
 function paneMessage(kind, text) {
   $("flash").innerHTML = `<div class="msg ${kind}">${esc(text)}</div>`;
 }

@@ -11,6 +11,7 @@ distinction that decides whether the report can be trusted as a pre-send gate.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Final
 
 from rich.box import SIMPLE_HEAD
@@ -19,7 +20,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from tieout.rules.base import SEVERITY_GLYPHS, SEVERITY_ORDER, AuditResult, Finding
+from tieout.rules.base import (
+    SEVERITY_GLYPHS,
+    SEVERITY_ORDER,
+    AuditResult,
+    Excused,
+    Finding,
+    Unchecked,
+)
 
 _SEVERITY_STYLES: Final[dict[str, str]] = {
     "blocker": "bold red",
@@ -249,18 +257,29 @@ def _footer(result: AuditResult, console: Console) -> None:
         console.print(
             f"[bold]not checked[/bold] [dim]({len(result.unchecked)} shape(s))[/dim]"
         )
-        for line in _condense_unchecked(result):
+        for line in _condense_unchecked(result.unchecked):
+            console.print(Text(f"  {line}", style="dim"))
+
+    if result.excused:
+        # PLAN.md §0: a silence on the strength of evidence, or of a person's
+        # declaration, is still a silence, and is listed like one.
+        console.print()
+        console.print(
+            f"[bold]read as intended[/bold] [dim]({len(result.excused)} "
+            f"place(s) not reported, and why)[/dim]"
+        )
+        for line in _condense_unchecked(result.excused):
             console.print(Text(f"  {line}", style="dim"))
 
 
-def _condense_unchecked(result: AuditResult) -> list[str]:
+def _condense_unchecked(entries: Sequence[Unchecked | Excused]) -> list[str]:
     """One line per rule and reason, with a count.
 
     A deck with a font TieOut cannot resolve produces one unchecked entry per
     shape, and printing two hundred of them buries the summary that matters.
     """
     grouped: dict[tuple[str, str], list[int]] = {}
-    for entry in result.unchecked:
+    for entry in entries:
         grouped.setdefault((entry.rule_id, entry.reason), []).append(entry.slide_index)
     lines: list[str] = []
     for (rule_id, reason), slides in sorted(grouped.items()):

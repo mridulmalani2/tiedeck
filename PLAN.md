@@ -194,6 +194,37 @@ the takeaway: one placement, repeated. It is read as meant, and says so on
 every slide. Repetition cannot tell a copied mistake from a choice, and nothing
 in the file can; that is what §0's item 4 is for, in the other direction.
 
+### 0.4 "This is intentional" — dismissed once, for the house style
+
+Every finding carries a `signature`: what it is about, never which slide. The
+rules §0 is about state their own — LO-001 and LO-002 the shape's kind, whether
+it carries text and its box to the point; LO-003 each edge and the line it
+missed ("left 493pt against 490pt"); CO-001 and CO-002 the fact and both values
+as written. Everything else gets the measurement, the expectation and the box,
+with slide references stripped. A clustered finding carries one line per
+instance and is covered only when all of them are.
+
+`Profile.intended` holds the declarations. `run_rules` moves a covered finding
+to `excused`, naming the declaration and its note, so a wrong declaration is
+findable in every report. They survive `learn` (carried across the overwrite),
+`learn --add` (the union) and the UI's learn. Three ways in: **This is
+intentional** beside Set aside in the note, with Undo; the House style tab's
+"Declared intentional" list, where any one is withdrawn; and
+`tieout check --intended RULE@slideN[:Shape] --intended-note TEXT`.
+
+Measured by construction rather than by the corpus, because the corpus scores
+one deck at a time and this is about the second one: a box declared intended on
+slide 3 of one deck is not reported on slide 6 of another deck in the house
+style, while a box 6pt away from it still is (`tests/test_intended.py`).
+
+**What it does not do.** It cannot help a miss — the copied callout in §0.3 is
+excused by evidence, and no button un-excuses it; that would need a "this is
+*not* intentional", which nothing asks for yet. And a declaration is only as
+narrow as its signature: LO-003's is the edge and the line, so declaring one
+inset box intended excuses every shape with that edge at that position in the
+house style. That is the point for a takeaway column and the wrong answer for a
+one-off, and the House style list is where to see which it was.
+
 ---
 
 ## 1. The one-sentence version

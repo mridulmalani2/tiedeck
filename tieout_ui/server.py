@@ -53,6 +53,7 @@ from tieout.model.loader import DeckLoadError, load_deck
 from tieout.model.units import pt_to_emu
 from tieout.profile.loader import (
     ProfileError,
+    keep_declarations,
     load_for_client,
     load_suppressions,
     profile_dir,
@@ -64,6 +65,7 @@ from tieout.rules.base import AuditResult, clear_caches, run_rules
 from tieout_fix import (
     Delta,
     Fix,
+    action_key,
     apply_fix,
     delta,
     move_fix,
@@ -265,6 +267,26 @@ class UndoRequest(BaseModel):
     client: str
 
 
+class IntendedRequest(BaseModel):
+    """Declare an action's findings intentional for this house style, or undo it.
+
+    PLAN.md §0. Set aside is for this deck and this session; this is for the
+    house style, and is written to the client's profile.
+    """
+
+    #: Empty only for a withdrawal made from the House style tab with no deck
+    #: open, which has nothing to re-audit.
+    deck_id: str = ""
+    client: str
+    #: The action, as the note names it.
+    key: str = ""
+    note: str = ""
+    #: Undo: the rule and signatures a declaration returned, echoed back.
+    withdraw: bool = False
+    rule_id: str = ""
+    signatures: list[str] = Field(default_factory=list)
+
+
 class RejectRequest(BaseModel):
     deck_id: str
     client: str
@@ -447,6 +469,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         deck = _require(store, request.deck_id)
         result = deck.draft if deck.draft is not None else _derive(deck.model)
         result.profile.client = request.client
+        keep_declarations(result.profile, profile_path(request.client))
         write_profile(
             result.profile,
             profile_path(request.client),
@@ -810,6 +833,65 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         else:
             deck.rejected.discard(request.key)
         return JSONResponse(_recheck(store, deck, profile))
+
+    @app.post("/api/intended")
+    def intended(store: Guard, request: IntendedRequest) -> JSONResponse:
+        """"This is intentional": remembered in the profile, by what it is about.
+
+        The findings are those of the action the page names, as the deck stands
+        now; their signatures are what is stored, so the declaration holds on
+        the next turn of this deck and on every other deck in the house style.
+        The reply carries the rule and signatures back, which is all an undo
+        needs and all it is allowed to remove.
+        """
+        profile = _load(request.client)
+        if request.withdraw:
+            removed = profile.withdraw_intended(
+                request.rule_id, "\n".join(request.signatures)
+            )
+            write_profile(profile, profile_path(request.client))
+            if not request.deck_id:
+                return JSONResponse(
+                    {"profile": profile_view(profile), "intended": {"withdrawn": removed}}
+                )
+            payload = _recheck(store, _require(store, request.deck_id), profile)
+            payload["intended"] = {"withdrawn": removed}
+            return JSONResponse(payload)
+
+        deck = _require(store, request.deck_id)
+        clear_caches()
+        current = run_rules(
+            deck.model, profile, suppressions=load_suppressions(profile.client)
+        )
+        matching = [
+            finding
+            for finding in current.findings
+            if action_key(finding.rule_id, finding.remedy, finding.expected, finding.message)
+            == request.key
+        ]
+        if not matching:
+            raise HTTPException(
+                status_code=409,
+                detail="that finding is no longer reported. Re-run the check and try again.",
+            )
+        signatures: list[str] = []
+        for finding in matching:
+            profile.declare_intended(
+                finding.rule_id,
+                finding.signature,
+                note=request.note,
+                example=finding.message,
+            )
+            signatures.extend(line for line in finding.signature.split("\n") if line)
+        write_profile(profile, profile_path(request.client))
+        payload = _recheck(store, deck, profile)
+        payload["intended"] = {
+            "rule_id": matching[0].rule_id,
+            "signatures": list(dict.fromkeys(signatures)),
+            "count": len(matching),
+            "client": profile.client,
+        }
+        return JSONResponse(payload)
 
     @app.get("/api/export/{deck_id}")
     def export(store: Guard, deck_id: str) -> Response:

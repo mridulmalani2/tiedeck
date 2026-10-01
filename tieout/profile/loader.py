@@ -90,6 +90,30 @@ def load_for_client(client: str, explicit: str | Path | None = None) -> Profile:
     )
 
 
+def keep_declarations(profile: Profile, path: str | Path) -> int:
+    """Carry what a person declared intentional across a re-learn.
+
+    A re-learn derives a profile from the reference deck alone, and nothing in
+    a reference deck can re-derive "this was meant" -- so writing the fresh
+    profile over the old one silently brought every dismissed false positive
+    back. Returns how many declarations were carried. A profile that cannot be
+    read carries none, which is the direction that reports rather than hides.
+    """
+    target = Path(path)
+    if not target.is_file():
+        return 0
+    try:
+        previous = load(target)
+    except ProfileError:
+        return 0
+    carried = 0
+    for entry in previous.intended:
+        carried += profile.declare_intended(
+            entry.rule_id, entry.signature, note=entry.note, example=entry.example
+        )
+    return carried
+
+
 def load_suppressions(client: str, path: str | Path | None = None) -> SuppressionFile:
     """Load accepted findings. A missing file is not an error."""
     target = Path(path) if path is not None else suppression_path(client)

@@ -349,6 +349,20 @@
     </details>
     {%- endif %}
 
+    {%- if excused %}
+    <details class="block">
+      <summary>Read as intended ({{ result.excused | length }})</summary>
+      <div class="inner">
+        {%- for entry in excused %}
+        <div class="row">
+          <div class="k mono">{{ entry.rule_id }}</div>
+          <div class="v">{{ entry.reason }} <em>({{ entry.where }})</em></div>
+        </div>
+        {%- endfor %}
+      </div>
+    </details>
+    {%- endif %}
+
     {%- if result.rules_skipped %}
     <details class="block">
       <summary>Rules not run ({{ result.rules_skipped | length }})</summary>

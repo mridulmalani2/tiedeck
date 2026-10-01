@@ -250,6 +250,15 @@ def profile_view(profile: Profile) -> dict[str, Any]:
             for question in profile.questions
         ],
         "disabled_rules": profile.rules.disabled,
+        "intended": [
+            {
+                "rule_id": entry.rule_id,
+                "signature": entry.signature,
+                "note": entry.note,
+                "example": entry.example,
+            }
+            for entry in profile.intended
+        ],
     }
 
 
@@ -486,6 +495,12 @@ def audit_view(result: AuditResult, deck: DeckModel) -> dict[str, Any]:
             for entry in result.rules_skipped
         ],
         "suppressed": len(result.suppressed),
+        # PLAN.md §0: what was not reported because the deck, or a person,
+        # says it was meant. Counted on the page so a silence is visible.
+        "excused": [
+            {"rule_id": entry.rule_id, "slide": entry.slide_index, "reason": entry.reason}
+            for entry in result.excused
+        ],
     }
 
 

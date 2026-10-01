@@ -19,6 +19,7 @@ stylistic:
 from __future__ import annotations
 
 import fnmatch
+import re
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
@@ -175,6 +176,10 @@ class Finding:
     #: LO-004 reports one shape overlapping another, and ``where`` can only
     #: ever be the one the rule leads with. ``None`` everywhere else.
     also: ShapeRef | None = None
+    #: What this finding is about, in words that do not name a slide: the key
+    #: "this is intentional" is remembered by (PLAN.md §0). One line per
+    #: instance once findings are clustered. See :func:`default_signature`.
+    signature: str = ""
 
     @property
     def slide_index(self) -> int:
@@ -317,6 +322,7 @@ class Rule(ABC):
         remedy: str | None = None,
         correction: Correction | None = None,
         also: ShapeRef | None = None,
+        signature: str | None = None,
     ) -> Finding:
         """Build a finding, pulling severity, confidence and provenance from the
         profile so a rule cannot forget to.
@@ -349,6 +355,11 @@ class Rule(ABC):
             bbox_pt=bbox_pt,
             remedy=remedy,
             also=also,
+            signature=(
+                signature
+                if signature is not None
+                else default_signature(measured, expected, bbox_pt, message)
+            ),
         )
 
     def note_unchecked(self, where: ShapeRef | int, reason: str) -> None:
@@ -370,6 +381,35 @@ class Rule(ABC):
 
 #: Highest confidence first, like :data:`SEVERITY_ORDER`.
 CONFIDENCE_ORDER: Final[dict[str, int]] = {"high": 0, "medium": 1, "low": 2}
+
+
+#: A slide reference inside a measurement or an expectation: "1,935 (slide 3)",
+#: "on slides 4 and 9". Removed from a signature, which must not name a slide.
+_SLIDE_REFERENCE: Final[re.Pattern[str]] = re.compile(
+    r"\s*\(?\bslides?\s+\d+(?:\s*(?:,|and)\s*\d+)*\)?", re.IGNORECASE
+)
+
+
+def default_signature(
+    measured: str | None,
+    expected: str | None,
+    bbox_pt: tuple[float, float, float, float] | None,
+    message: str,
+) -> str:
+    """What a finding is about, without saying which slide it is on.
+
+    The measurement, the expectation and where on the slide the shape sits, to
+    the half point. Every rule gets this unless it states its own, and the
+    rules PLAN.md §0 is about do: a figure's identity is its metric and kind,
+    not the box its table happens to be in. The message stands in only where a
+    rule gives none of the three, with slide references taken out.
+    """
+    parts = [measured or "", expected or ""]
+    if bbox_pt is not None:
+        parts.append(",".join(f"{round(value * 2) / 2:g}" for value in bbox_pt))
+    if not any(parts):
+        parts = [message]
+    return _SLIDE_REFERENCE.sub("", "|".join(parts)).strip()
 
 
 def weakest(*confidences: Confidence) -> Confidence:
@@ -660,6 +700,20 @@ def run_rules(
         result.excused.extend(rule.excused)
 
         for finding in findings:
+            declared = profile.intends(finding.rule_id, finding.signature)
+            if declared is not None:
+                # Declared intentional for this house style. Not dropped: an
+                # excuse with its reason, beside the evidence-based ones, so a
+                # declaration that turns out wrong is findable.
+                result.excused.append(
+                    Excused(
+                        rule_id=finding.rule_id,
+                        where=finding.where,
+                        reason="declared intentional for this house style"
+                        + (f": {declared.note}" if declared.note else ""),
+                    )
+                )
+                continue
             shape_name = (
                 finding.where.name if isinstance(finding.where, ShapeRef) else None
             )
@@ -787,6 +841,17 @@ def cluster_findings(
                     key=lambda s: SEVERITY_ORDER.get(s, 9),
                 ),
                 message=f"{first.message} (and {others} more on this slide)",
+                # Every instance's signature, so declaring the cluster
+                # intentional declares each shape in it, and a cluster is only
+                # excused when all of them are. See Profile.intends.
+                signature="\n".join(
+                    dict.fromkeys(
+                        line
+                        for finding in group
+                        for line in finding.signature.split("\n")
+                        if line
+                    )
+                ),
             )
         )
     return sorted(out, key=lambda f: f.sort_key)

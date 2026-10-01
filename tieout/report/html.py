@@ -26,7 +26,7 @@ from typing import Any, Final
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tieout.model.deck import DeckModel
-from tieout.rules.base import SEVERITY_ORDER, AuditResult, Finding
+from tieout.rules.base import SEVERITY_ORDER, AuditResult, Excused, Finding, Unchecked
 
 _TEMPLATE_DIR: Final[Path] = Path(__file__).parent / "templates"
 _TEMPLATE_NAME: Final[str] = "report.html.j2"
@@ -77,7 +77,8 @@ def render(
         severities=sorted(SEVERITY_ORDER, key=lambda name: SEVERITY_ORDER[name]),
         slides=slides,
         slides_with_findings=[slide for slide in slides if slide["findings"]],
-        unchecked=_unchecked(result),
+        unchecked=_unchecked(result.unchecked),
+        excused=_unchecked(result.excused),
     )
 
 
@@ -149,10 +150,10 @@ def _counts(findings: list[Finding]) -> list[tuple[str, int]]:
     ]
 
 
-def _unchecked(result: AuditResult) -> list[dict[str, str]]:
-    """Unchecked entries condensed to one row per rule and reason."""
+def _unchecked(entries: Sequence[Unchecked | Excused]) -> list[dict[str, str]]:
+    """Unchecked or excused entries condensed to one row per rule and reason."""
     grouped: dict[tuple[str, str], list[int]] = {}
-    for entry in result.unchecked:
+    for entry in entries:
         grouped.setdefault((entry.rule_id, entry.reason), []).append(entry.slide_index)
     rows: list[dict[str, str]] = []
     for (rule_id, reason), slides in sorted(grouped.items()):

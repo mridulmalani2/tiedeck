@@ -242,6 +242,24 @@ def placement_intent(deck: DeckModel, profile: Profile) -> dict[tuple[int, int],
     return out
 
 
+def _shape_signature(shape: ShapeModel, *more: str) -> str:
+    """What a finding about where a whole shape sits is about, without the slide.
+
+    The shape's kind, whether it carries text, and its box to the point -- so a
+    cover device declared intentional is recognised at the same place on the
+    next deck, and a text box that merely shares its size is not.
+    """
+    left, top, width, height = shape.visual_bbox_pt
+    return "|".join(
+        (
+            shape.kind,
+            "text" if shape.has_text else "untexted",
+            f"{left:.0f},{top:.0f},{width:.0f}x{height:.0f}",
+            *more,
+        )
+    )
+
+
 def _placement(
     intent: dict[tuple[int, int], Placement], slide: SlideModel, shape: ShapeModel
 ) -> Placement:
@@ -340,6 +358,7 @@ class ShapeOffCanvas(Rule):
                         expected=f"{edge} edge within {limit:g}pt",
                         remedy=_overhang_remedy(severity),
                         bbox_pt=shape.visual_bbox_pt,
+                        signature=_shape_signature(shape),
                     )
                 )
         # Clustered within severity: the backstop takes the worst severity in a
@@ -603,6 +622,7 @@ class MarginIntrusion(Rule):
                             else f"Move the {edge} edge to {limit:g}pt or further in"
                         ),
                         bbox_pt=shape.visual_bbox_pt,
+                        signature=_shape_signature(shape, f"{edge} margin"),
                     )
                 )
         return cluster_findings(findings, key="severity")
@@ -802,6 +822,15 @@ class NearMissAlignment(Rule):
             # not five. The line each one wants is in `expected`.
             remedy="Snap the edge to the grid line it is nearly on",
             bbox_pt=first.bbox,
+            # One line per edge: "a left edge at 493.5pt against the 490pt
+            # column" is what a person declares intended -- a position this
+            # house style uses -- whichever shape sits there next time.
+            signature="\n".join(
+                dict.fromkeys(
+                    f"{miss.label} {round(miss.value * 2) / 2:g}pt against {miss.line:g}pt"
+                    for miss in group
+                )
+            ),
         )
 
 
